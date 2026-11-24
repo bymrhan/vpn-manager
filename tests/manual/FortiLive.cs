@@ -12,7 +12,8 @@ using Accessibility;
 //   fill                      writes dummy text into Username/Password, reads it back; no Connect
 //   clear   [username]        empties the password and sets the username (restore after "fill")
 //   connect <tunnel>          REAL CONNECTION: FortiGui.TryConnect with press = true
-//   disconnect                REAL DISCONNECT: presses Disconnect
+//   probe-disconnect          whether Disconnect would be pressed; never presses
+//   disconnect                REAL DISCONNECT: FortiGui.TryDisconnect with press = true
 static class FortiLive
 {
     [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IAccessible o);
@@ -37,12 +38,24 @@ static class FortiLive
                 var combo = WaitFor(46, "VPN Name", 25);
                 Console.WriteLine("seçili: " + (combo == null ? "(form yok)" : Val(combo)));
                 return 0;
-            case "disconnect":
-                var b = WaitFor(43, "Disconnect", 10);
-                if (b == null) { Console.WriteLine("Disconnect düğmesi yok"); return 1; }
-                b.accDoDefaultAction(0);
-                Console.WriteLine("Disconnect basıldı");
+            case "probe-disconnect":
+                Console.WriteLine(FortiGui.TryDisconnect(false, out detail) + " (" + detail + ")");
                 return 0;
+            case "disconnect":
+            {
+                // Same steps as SearchForm.DisconnectForti: show the window, then wait for Disconnect.
+                Console.WriteLine("ShowGui: " + (FortiStore.ShowGui() ?? "ok"));
+                var outcome = FortiGui.Outcome.NotReady; detail = "";
+                var end = DateTime.UtcNow.AddSeconds(20);
+                while (DateTime.UtcNow < end)
+                {
+                    outcome = FortiGui.TryDisconnect(true, out detail);
+                    if (outcome == FortiGui.Outcome.Pressed) break;
+                    Thread.Sleep(500);
+                }
+                Console.WriteLine(outcome + " (" + detail + ")");
+                return outcome == FortiGui.Outcome.Pressed ? 0 : 1;
+            }
             case "fill":
             case "clear":
                 var u = WaitFor(42, "Username", 10); var pw = WaitFor(42, "Password", 10);

@@ -32,6 +32,7 @@ static class Tests
         Run("ConnectionMonitor: açık tutulan log", OpenLogIsReRead);
         Run("FortiGui.ShowsTunnel", ShowsTunnel);
         Run("FortiCredentialStore", CredentialStore);
+        Run("Forti son bağlanma zamanı", FortiLastConnected);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -78,6 +79,33 @@ static class Tests
         Check(!FortiGui.ShowsTunnel("Personal VPNs ESKI-SANBOR-YENİ", "SANBOR-YENİ"), "ad parçası eşleşmez");
         Check(!FortiGui.ShowsTunnel("Personal VPNs SANBOR", "SANBOR-YENİ"), "farklı tünel eşleşmez");
         Check(!FortiGui.ShowsTunnel("", "X"), "boş değer eşleşmez");
+    }
+
+    // FortiClient keeps no last-connected time: Forti profiles get it from the history, so that
+    // they show under "Son bağlanılanlar" after a connect and disconnect.
+    static void FortiLastConnected()
+    {
+        var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var t1 = new DateTime(2026, 11, 24, 8, 0, 0, DateTimeKind.Utc);
+        var t2 = new DateTime(2026, 11, 24, 9, 0, 0, DateTimeKind.Utc);
+        var history = new List<HistoryEntry>
+        {
+            new HistoryEntry { ProfileId = "forti-ssl:SANBOR", StartUtc = t1, EndUtc = t1.AddMinutes(5) },
+            new HistoryEntry { ProfileId = "forti-ssl:SANBOR", StartUtc = t2, EndUtc = t2.AddMinutes(5) },
+            new HistoryEntry { ProfileId = "ovpn-1", StartUtc = t2, EndUtc = t2.AddMinutes(1) },
+            new HistoryEntry { ProfileId = "", StartUtc = t2, EndUtc = t2 },
+        };
+        var starts = ConnectionHistory.LastStarts(history);
+        Check(starts["forti-ssl:SANBOR"] == (long)(t2 - epoch).TotalMilliseconds, "profil başına en son başlangıç");
+        Check(!starts.ContainsKey(""), "kimliksiz kayıt yok sayılır");
+
+        var forti = new VpnProfile { Id = "forti-ssl:SANBOR", Name = "SANBOR", LastConnected = 0 };
+        var other = new VpnProfile { Id = "forti-ssl:TOPAZ", Name = "TOPAZ", LastConnected = 0 };
+        var ovpn = new VpnProfile { Id = "ovpn-1", Name = "x", LastConnected = 5 };
+        FortiStore.ApplyLastConnected(new[] { forti, other, ovpn }, starts);
+        Check(forti.LastConnected == starts["forti-ssl:SANBOR"], "bağlanılmış Forti profili zaman alır");
+        Check(other.LastConnected == 0, "hiç bağlanılmamış Forti profili 0 kalır");
+        Check(ovpn.LastConnected == 5, "OpenVPN profiline dokunulmaz (kendi zamanı config.json'dan)");
     }
 
     static void CredentialStore()

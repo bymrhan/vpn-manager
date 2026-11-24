@@ -1676,6 +1676,8 @@ internal sealed class SearchForm : Form
         trayMenu.Items.Add(StatusCard());
         var connected = ConnectedProfile();
         if (connected != null) trayMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { Disconnect(); }));
+        var fortiLive = FortiConnectedProfile();
+        if (fortiLive != null) trayMenu.Items.Add(Danger("FortiClient bağlantısını kes", Glyph.Disconnect, delegate { DisconnectForti(fortiLive); }));
         trayMenu.Items.Add(Item("Paneli aç", Glyph.Open, delegate { manualOverride = true; ShowAndFocus(true); }, settings.Hotkey));
         var quick = profiles.Where(p => pins.Contains(p.Id)).OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)
             .Concat(profiles.Where(p => !pins.Contains(p.Id) && p.LastConnected > 0).OrderByDescending(p => p.LastConnected).Take(5))
@@ -1704,6 +1706,8 @@ internal sealed class SearchForm : Form
         ClearMenu(mainMenu);
         mainMenu.Items.Add(StatusCard());
         if (ConnectedProfile() != null) mainMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { Disconnect(); }));
+        var fortiOn = FortiConnectedProfile();
+        if (fortiOn != null) mainMenu.Items.Add(Danger("FortiClient bağlantısını kes", Glyph.Disconnect, delegate { DisconnectForti(fortiOn); }));
 
         mainMenu.Items.Add(Caption("YEDEKLEME"));
         mainMenu.Items.Add(new MenuEntry("Şimdi yedekle", Glyph.Backup, delegate { BackupNow(false); }) { Badge = profiles.Count + " profil" });
@@ -1735,6 +1739,7 @@ internal sealed class SearchForm : Form
         { Initials = p.Initials, AvatarColor = Ui.AvatarColor(p.Name) };
         rowMenu.Items.Add(head);
         if (p.Id == connectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { Disconnect(); }));
+        else if (p.Id == fortiConnectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { DisconnectForti(p); }));
         else rowMenu.Items.Add(Item("Bağlan", Glyph.Connect, delegate { Connect(p); }, "Enter"));
         rowMenu.Items.Add(Item(pins.Contains(p.Id) ? "Sabitlemeyi kaldır" : "Sabitle", Glyph.Star, delegate { TogglePin(p); }, "Ctrl+P"));
         rowMenu.Items.Add(Caption("KOPYALA"));
@@ -1756,6 +1761,12 @@ internal sealed class SearchForm : Form
     }
 
     // ---------- Connection status ----------
+
+    VpnProfile FortiConnectedProfile()
+    {
+        if (fortiConnectedId == null) return null;
+        return profiles.FirstOrDefault(p => p.Id == fortiConnectedId);
+    }
 
     VpnProfile ConnectedProfile()
     {
@@ -1782,7 +1793,55 @@ internal sealed class SearchForm : Form
 
     // ---------- FortiClient ----------
 
-    string fortiConnectedId, fortiConnectingId; DateTime fortiSince, fortiConnectStart; bool fortiPolling, fortiOpening;
+    // Forti sessions started since this app started: profile id -> start (Unix ms).
+    readonly Dictionary<string, long> fortiSeen = new Dictionary<string, long>(StringComparer.Ordinal);
+
+    // Writes a finished FortiClient session to the connection history (same file as OpenVPN).
+    void RecordFortiSession(string id, DateTime startUtc, DateTime endUtc)
+    {
+        var p = profiles.FirstOrDefault(x => x.Id == id);
+        try
+        {
+            ConnectionHistory.Append(new HistoryEntry { ProfileId = id, ProfileName = p != null ? p.Name : FortiStore.TunnelName(new VpnProfile { Id = id, Name = id }), StartUtc = startUtc, EndUtc = endUtc });
+        }
+        catch { }
+    }
+
+    string fortiConnectedId, fortiConnectingId, fortiDisconnectingId; DateTime fortiSince, fortiConnectStart, fortiDisconnectStart; bool fortiPolling, fortiOpening;
+
+    // Shows FortiClient's window (it may be closed to the tray) and presses its Disconnect button.
+    // OnFortiState finishes the animation when the Fortinet adapter goes down.
+    void DisconnectForti(VpnProfile p)
+    {
+        if (p == null || fortiDisconnectingId != null) return;
+        fortiDisconnectingId = p.Id; fortiDisconnectStart = DateTime.UtcNow;
+        list.BeginDisconnect(p.Id);
+        SetStatus("FortiClient \"" + p.Name + "\" kesiliyor…");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            string err = null;
+            var outcome = FortiGui.Outcome.NotReady;
+            try
+            {
+                err = FortiStore.ShowGui();
+                var deadline = DateTime.UtcNow.AddSeconds(20);
+                while (err == null && DateTime.UtcNow < deadline)
+                {
+                    string detail;
+                    outcome = FortiGui.TryDisconnect(true, out detail);
+                    if (outcome == FortiGui.Outcome.Pressed) break;
+                    Thread.Sleep(500);
+                }
+            }
+            catch (Exception ex) { err = ex.Message; }
+            UiInvoke(delegate
+            {
+                if (outcome == FortiGui.Outcome.Pressed) return;
+                fortiDisconnectingId = null; list.EndDisconnect();
+                SetStatus(err ?? "FortiClient'ta Disconnect bulunamadı — bağlantıyı FortiClient'tan kesin");
+            });
+        });
+    }
 
     void ConnectForti(VpnProfile p)
     {
@@ -1908,9 +1967,27 @@ internal sealed class SearchForm : Form
         {
             list.CancelConnect(fortiConnectingId); fortiConnectingId = null;
         }
+        if (fortiDisconnectingId != null && (id == null || (DateTime.UtcNow - fortiDisconnectStart).TotalSeconds > 60))
+        {
+            if (id == null)
+            {
+                var gone = profiles.FirstOrDefault(p => p.Id == fortiDisconnectingId);
+                if (gone != null) SetStatus("\"" + gone.Name + "\" (FortiClient) bağlantısı kesildi");
+            }
+            fortiDisconnectingId = null; list.EndDisconnect();
+        }
         if (id == fortiConnectedId) return;
+        var now = DateTime.UtcNow;
+        if (fortiConnectedId != null) RecordFortiSession(fortiConnectedId, fortiSince, now);
         fortiConnectedId = id;
-        if (id != null) fortiSince = DateTime.UtcNow;
+        if (id != null)
+        {
+            fortiSince = now;
+            var ms = (long)(now - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            fortiSeen[id] = ms;
+            var live = profiles.FirstOrDefault(p => p.Id == id);
+            if (live != null) live.LastConnected = ms;
+        }
         var sel = list.SelectedProfile;
         ApplyFilter(sel != null ? sel.Id : null);
         if (id != null && id == fortiConnectingId) { fortiConnectingId = null; list.ConnectSucceeded(id); }
@@ -2371,7 +2448,19 @@ internal sealed class SearchForm : Form
         DateTime stamp;
         try { stamp = File.GetLastWriteTimeUtc(ProfileStore.ConfigPath); } catch { stamp = DateTime.MinValue; }
         List<VpnProfile> loaded;
-        try { loaded = ProfileStore.Load(); if (settings.ShowForti) loaded.AddRange(FortiStore.Load()); }
+        try
+        {
+            loaded = ProfileStore.Load();
+            if (settings.ShowForti)
+            {
+                var forti = FortiStore.Load();
+                Dictionary<string, long> starts;
+                try { starts = ConnectionHistory.LastStarts(ConnectionHistory.Load()); } catch { starts = new Dictionary<string, long>(); }
+                foreach (var kv in fortiSeen) { long old; if (!starts.TryGetValue(kv.Key, out old) || kv.Value > old) starts[kv.Key] = kv.Value; }
+                FortiStore.ApplyLastConnected(forti, starts);
+                loaded.AddRange(forti);
+            }
+        }
         catch (Exception ex)
         {
             // Keep the old list; configStamp is not updated, so the next check retries.
@@ -2577,7 +2666,7 @@ internal sealed class SearchForm : Form
         if (tick % 120 == 20) CheckAutoBackup();
         if (settings.ReachabilityCheck && tick % 1200 == 0) Reachability.CheckAll(profiles, true);
         if (!Visible && tick % 600 == 300) NativeMethods.TrimMemory(); // every 5 min while hidden
-        if (settings.ShowForti && (fortiConnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (Visible || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
+        if (settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (Visible || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
 
         // The process scan (~8 ms, allocates) only runs when the tracked window is gone, and at most every 2 s.
         // Otherwise the cached handle is checked (microseconds); WinEvent hooks cover moves in between.

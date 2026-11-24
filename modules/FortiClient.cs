@@ -103,6 +103,19 @@ internal static class FortiStore
         catch { return null; }
     }
 
+    // FortiClient keeps no "last connected" time, so Forti profiles take it from this app's own
+    // connection history (and from sessions seen since start-up). Without it they never appear
+    // under "Son bağlanılanlar".
+    public static void ApplyLastConnected(IEnumerable<VpnProfile> profiles, IDictionary<string, long> lastStartMs)
+    {
+        if (lastStartMs == null) return;
+        foreach (var p in profiles)
+        {
+            long ms;
+            if (IsForti(p) && lastStartMs.TryGetValue(p.Id, out ms) && ms > p.LastConnected) p.LastConnected = ms;
+        }
+    }
+
     public static string TunnelName(VpnProfile p)
     {
         if (p.Id.StartsWith(IdPrefixSsl, StringComparison.Ordinal)) return p.Id.Substring(IdPrefixSsl.Length);
@@ -210,6 +223,21 @@ internal static class FortiStore
         return true;
     }
 
+    // Shows FortiClient's window without changing the selected tunnel (starts the GUI when it is
+    // not running). Returns an error or null.
+    public static string ShowGui()
+    {
+        if (!IsInstalled) return "FortiClient bulunamadı.";
+        try
+        {
+            var pids = GuiProcessIds();
+            if (pids.Count > 0) return ShowExistingWindow(pids) ? null : "FortiClient penceresi bulunamadı.";
+            using (Process.Start(new ProcessStartInfo { FileName = GuiPath, WorkingDirectory = Path.GetDirectoryName(GuiPath), UseShellExecute = true })) { }
+            return null;
+        }
+        catch (Exception ex) { return "FortiClient açılamadı: " + ex.Message; }
+    }
+
     // FortiClient's main Chromium window, or IntPtr.Zero.
     internal static IntPtr FindMainWindow() { return FindMainWindow(GuiProcessIds()); }
 
@@ -270,6 +298,7 @@ internal static class FortiGui
     const int RoleCheckButton = 44, RoleComboBox = 46, RolePushButton = 43, RoleText = 42;
     const int StateUnavailable = 0x1, StateChecked = 0x10;
     static readonly string[] ConnectNames = { "Connect", "Bağlan" };
+    static readonly string[] DisconnectNames = { "Disconnect", "Bağlantıyı Kes", "Bağlantıyı kes" };
     static readonly string[] SavePasswordNames = { "Save Password", "Parolayı Kaydet", "Şifreyi Kaydet" };
     static readonly string[] UsernameNames = { "Username", "Kullanıcı Adı", "Kullanıcı adı" };
     static readonly string[] PasswordNames = { "Password", "Parola", "Şifre" };
@@ -279,7 +308,7 @@ internal static class FortiGui
     [DllImport("oleacc.dll")]
     static extern int AccessibleChildren(Accessibility.IAccessible parent, int start, int count, [Out] object[] children, out int obtained);
 
-    sealed class Form { public Accessibility.IAccessible Combo, SavePassword, Connect, Username, Password; }
+    sealed class Form { public Accessibility.IAccessible Combo, SavePassword, Connect, Username, Password, Disconnect; }
 
     // One attempt. With press=false nothing is changed (Ready means Connect would be pressed).
     public static Outcome TryConnect(string tunnel, bool press, out string detail) { return TryConnect(tunnel, null, press, out detail); }
@@ -288,16 +317,8 @@ internal static class FortiGui
     // the password into the form, then presses Connect.
     public static Outcome TryConnect(string tunnel, FortiCredential cred, bool press, out string detail)
     {
-        detail = "";
-        var hwnd = FortiStore.FindMainWindow();
-        if (hwnd == IntPtr.Zero) { detail = "FortiClient penceresi yok"; return Outcome.NotReady; }
-        Accessibility.IAccessible root;
-        var iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71"); // IID_IAccessible
-        if (AccessibleObjectFromWindow(hwnd, 0xFFFFFFFC, ref iid, out root) != 0 || root == null) { detail = "erişilebilirlik nesnesi alınamadı"; return Outcome.NotReady; }
-
-        var form = new Form();
-        var visited = 0;
-        Walk(root, 0, form, ref visited);
+        Form form; int visited;
+        if (!ReadForm(out form, out visited, out detail)) return Outcome.NotReady;
         if (form.Combo == null || form.Connect == null) { detail = "form henüz yüklenmedi (" + visited + " nesne)"; return Outcome.NotReady; }
 
         var shown = Value(form.Combo);
@@ -328,6 +349,31 @@ internal static class FortiGui
         return Outcome.Pressed;
     }
 
+    // Presses Disconnect in FortiClient's connected view. Pressed, or NotReady while the window or
+    // the button is not there yet.
+    public static Outcome TryDisconnect(bool press, out string detail)
+    {
+        Form form; int visited;
+        if (!ReadForm(out form, out visited, out detail)) return Outcome.NotReady;
+        if (form.Disconnect == null) { detail = "Disconnect düğmesi yok (" + visited + " nesne)"; return Outcome.NotReady; }
+        if ((State(form.Disconnect) & StateUnavailable) != 0) { detail = "Disconnect devre dışı"; return Outcome.NotReady; }
+        if (!press) return Outcome.Ready;
+        form.Disconnect.accDoDefaultAction(0);
+        return Outcome.Pressed;
+    }
+
+    static bool ReadForm(out Form form, out int visited, out string detail)
+    {
+        form = new Form(); visited = 0; detail = "";
+        var hwnd = FortiStore.FindMainWindow();
+        if (hwnd == IntPtr.Zero) { detail = "FortiClient penceresi yok"; return false; }
+        Accessibility.IAccessible root;
+        var iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71"); // IID_IAccessible
+        if (AccessibleObjectFromWindow(hwnd, 0xFFFFFFFC, ref iid, out root) != 0 || root == null) { detail = "erişilebilirlik nesnesi alınamadı"; return false; }
+        Walk(root, 0, form, ref visited);
+        return true;
+    }
+
     // The combo shows "<group> <tunnel>", e.g. "Personal VPNs SANBOR-YENİ".
     internal static bool ShowsTunnel(string shown, string tunnel)
     {
@@ -356,6 +402,7 @@ internal static class FortiGui
             var role = Role(kid);
             if (role == RoleComboBox && form.Combo == null && NameOf(kid) == "VPN Name") form.Combo = kid;
             else if (role == RolePushButton && form.Connect == null && Array.IndexOf(ConnectNames, NameOf(kid)) >= 0) form.Connect = kid;
+            else if (role == RolePushButton && form.Disconnect == null && Array.IndexOf(DisconnectNames, NameOf(kid)) >= 0) form.Disconnect = kid;
             else if (role == RoleCheckButton && form.SavePassword == null && Array.IndexOf(SavePasswordNames, NameOf(kid)) >= 0) form.SavePassword = kid;
             else if (role == RoleText && form.Username == null && Array.IndexOf(UsernameNames, NameOf(kid)) >= 0) form.Username = kid;
             else if (role == RoleText && form.Password == null && Array.IndexOf(PasswordNames, NameOf(kid)) >= 0) form.Password = kid;

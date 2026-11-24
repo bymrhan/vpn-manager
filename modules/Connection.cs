@@ -366,6 +366,20 @@ internal static class ConnectionHistory
         return list;
     }
 
+    // Latest session start per profile id, as Unix milliseconds (the unit of VpnProfile.LastConnected).
+    public static Dictionary<string, long> LastStarts(IEnumerable<HistoryEntry> entries)
+    {
+        var result = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var e in entries)
+        {
+            if (string.IsNullOrEmpty(e.ProfileId)) continue;
+            var ms = (long)(e.StartUtc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            long old;
+            if (!result.TryGetValue(e.ProfileId, out old) || ms > old) result[e.ProfileId] = ms;
+        }
+        return result;
+    }
+
     // Newest first, local time, Turkish headers, minutes as whole numbers (no decimal separator issues in Excel).
     public static void ExportCsv(string path)
     {
