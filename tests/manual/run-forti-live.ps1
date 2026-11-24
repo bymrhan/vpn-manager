@@ -1,5 +1,5 @@
 ﻿# Builds tests\manual\FortiLive.cs and runs one command against the FortiClient window.
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tests\manual\run-forti-live.ps1 probe "SANBOR-YENİ"
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tests\manual\run-forti-live.ps1 probe "TÜNEL-ADI"
 # "connect" and "disconnect" open or close a REAL VPN tunnel. See FortiLive.cs for all commands.
 param([Parameter(Mandatory = $true)][string]$Command, [string]$Tunnel = '')
 $ErrorActionPreference = 'Stop'

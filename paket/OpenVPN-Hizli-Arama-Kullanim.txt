@@ -1,0 +1,153 @@
+﻿OPENVPN HIZLI ARAMA
+===================
+
+FORTICLIENT VPN
+--------------
+- FortiClient VPN'deki SSL VPN ve IPsec tünelleri listenin sonunda "FORTICLIENT VPN"
+  grubunda görünür (kırmızı avatar). Aramaya dahildir; "forti" yazınca hepsi listelenir.
+- Bir SSL VPN tüneline tıklayınca FortiClient'ta o tünel seçilir, FortiClient açılır ve
+  "Connect" düğmesine uygulama basar. Başka bir tünele geçerken FortiClient penceresi
+  birkaç saniye içinde yeniden açılır.
+- Parola: FortiClient parolayı kendisi saklıyorsa ("Save Password" işaretli) doğrudan
+  bağlanır. Saklamıyorsa uygulama ilk seferde kullanıcı adı ve parolayı sorar;
+  "Bu bilgisayarda sakla" işaretliyse bir dahaki sefere sormaz. Vazgeçerseniz parolayı
+  FortiClient'a kendiniz girersiniz.
+- Tünele sağ tık: "Parolayı kaydet…", "Kayıtlı parolayı değiştir…", "Kayıtlı parolayı sil".
+- FortiClient bağlanınca satır yeşil "Bağlı · süre" olarak gösterilir. Kesmek için satıra
+  sağ tık > "Bağlantıyı kes" ya da bildirim alanı / ⋯ menüsünde "FortiClient bağlantısını kes".
+- FortiClient bağlantıları da "Son bağlanılanlar" ve "Bağlantı geçmişi"nde görünür.
+- IPsec tünellerinde FortiClient yalnızca açılır; "Connect"e siz basarsınız.
+- Sınırlar: Otomatik "Connect" FortiClient 7.4'ün İngilizce arayüzüyle denendi. FortiClient
+  güncellenir veya arayüz dili değişirse düğme bulunamayabilir; bu durumda uygulama
+  FortiClient'ı açar ve "Connect'e basın" der.
+- Ayarlar > Genel > "FortiClient profilleri" ile gizlenebilir.
+- Yedekleme, dışa aktarma, silme ve yinelenen profiller yalnızca OpenVPN profilleri içindir.
+
+ANİMASYONLAR VE PERFORMANS
+--------------------------
+- Bağlanırken: fiş düğmesinin etrafında dönen ışık ve yayılan halkalar, karttan geçen
+  parıltı ve alttaki ilerleme çizgisi. Bağlantı doğrulanınca yeşil onay, halka ve parçacık
+  patlaması; 45 saniyede doğrulanamazsa kırmızı sallanma.
+- Bağlı profilin durum noktası nefes alır; başlıktaki ışık çizgisinde bir parıltı dolaşır.
+- Animasyonlar yalnızca panel veya OpenVPN ön plandayken çalışır; boşta işlemci kullanımı
+  yaklaşık %0,2'dir. Panel gizliyken kullanılmayan bellek Windows'a geri verilir.
+
+YENİ ÖZELLİKLER (⋯ menüsü)
+--------------------------
+Yedekleme:
+- Şimdi yedekle: Tüm profilleri tek .zip dosyasına yedekler
+  (Belgeler\OpenVPN Yedekleri\OpenVPN-Yedek-tarih.zip). Zip'te her profil ayrı .ovpn olarak,
+  ayrıca manifest.json (ad, sunucu, kullanıcı, sabitlenenler) ve BENIOKU.txt bulunur.
+  ÖNEMLİ: .ovpn dosyaları özel anahtarları içerir; yedekleri güvenli bir yerde tutun.
+  Kayıtlı parolalar yedeğe dahil DEĞİLDİR (OpenVPN bunları Windows'a bağlı şifreli tutar).
+- Otomatik yedek: Varsayılan olarak günde bir kez alınır; son 10 yedek tutulur.
+  Ayarlar'dan Kapalı / Profil değişince / Günlük / Haftalık seçilebilir.
+- Yedekten geri yükle: Yedek zip'i seçin; OpenVPN'de olmayan profiller eklenir,
+  aynı adda olanlar atlanır, sabitlenenler geri gelir. İlk bağlantıda parola sorulabilir.
+- .ovpn dosyası içe aktar: Birden çok .ovpn seçilebilir. .ovpn veya yedek .zip dosyasını
+  panele sürükleyip bırakmak da aynı işi yapar.
+- Yedek klasörünü aç.
+
+Profiller:
+- Yinelenen profiller: Aynı sunucu + kullanıcıya veya aynı ada ("(1)", "- Kopya" gibi ekler
+  hariç) sahip profilleri gruplar. Her grupta en son kullanılan korunur; diğerleri işaretli
+  gelir. Silmeden önce onay sorulur. Silme kalıcıdır.
+- Profile sağ tık: ".ovpn olarak dışa aktar" ve "Profili sil" (onaylı, kalıcı).
+  Not: OpenVPN Connect komut satırından yeniden adlandırmayı desteklemediği için
+  yeniden adlandırma yoktur.
+- Bağlantı geçmişi: Hangi profile ne zaman, ne kadar süre bağlandığınız; en çok kullanılan
+  5 profil; CSV olarak dışa aktarma. Kayıt: %APPDATA%\OpenVpnQuickSearch\history.csv
+  (geçmiş, bu uygulama çalışırken yapılan bağlantıları kaydeder).
+
+Bağlantı durumu:
+- Bağlı profil listenin en üstünde "BAĞLI" grubunda, yeşil "Bağlı · 18 dk" yazısıyla görünür.
+- Bağlıyken satıra sağ tık veya ⋯ menüsü: "Bağlantıyı kes".
+
+Sunucu erişim testi:
+- Avatarın köşesindeki nokta: yeşil = sunucu erişilebilir, kırmızı = erişilemiyor,
+  nokta yok = bilinmiyor (UDP sunucular ping'e cevap vermeyebilir).
+  10 dakikada bir yenilenir; ⋯ menüsünden "Sunucuları yeniden test et". Ayarlar'dan kapatılabilir.
+
+Bildirim alanı (mavi kalkan simgesi) sağ tık:
+- Bağlıysa "Bağlantıyı kes", sabitlenenler ve son kullanılanlarla "HIZLI BAĞLAN" listesi,
+  Şimdi yedekle, Ayarlar, Çıkış. Paneli açmadan bağlanabilirsiniz.
+
+Ayarlar (⋯ > Ayarlar…):
+- Kısayol tuşu (kutuya tıklayıp yeni kombinasyona basın), Windows açılışında başlat,
+  yedek klasörü / sıklığı / tutulacak sayı, panel tarafı (Otomatik / Sağ / Sol),
+  tema (Koyu / Açık / Sistem), sunucu erişim testi.
+  Ayarlar: %APPDATA%\OpenVpnQuickSearch\settings.json
+
+
+Kullanım:
+1. OpenVPN Connect'i açın; Hızlı Arama, OpenVPN penceresinin sağına yapışık bir yan panel
+   olarak açılır (sağda yer yoksa soluna). Masaüstündeki "OpenVPN Hızlı Arama" kısayolu
+   paneli ve OpenVPN'i birlikte öne getirir.
+2. Firma adı, IP adresi, kullanıcı adı veya .ovpn dosya adının bir kısmını yazın.
+   Birden çok kelime yazabilirsiniz (ör. "firma 10.0"); hepsiyle eşleşen profiller listelenir.
+3. Profil kartına tek tıklayın veya Enter'a basın.
+4. OpenVPN bağlantısı hemen başlar; satırda kısa bir "Bağlanıyor..." animasyonu gösterilir.
+   Panel OpenVPN'e yapışıksa açık kalır; ayrı duruyorsa gizlenir.
+5. OpenVPN kapanınca veya küçültülünce Hızlı Arama arka planda gizlenir.
+
+Liste düzeni:
+- Arama boşken profiller gruplanır: Sabitlenenler, Son bağlanılanlar (son 5),
+  Tüm profiller (A–Z). Her satırda son bağlantı zamanı görünür.
+- Arama yapınca sonuçlar en iyi eşleşmeye göre sıralanır; eşleşen harfler mavi gösterilir.
+- Satırın üzerine gelince sağ altta yıldız çıkar; tıklayınca profil sabitlenir.
+  Sabitlenen profiller %APPDATA%\OpenVpnQuickSearch\pinned.txt dosyasında saklanır.
+- Satıra sağ tık: Bağlan, Sabitle, sunucu adresini / kullanıcı adını / profil adını kopyala.
+
+Kısayollar (pencerenin altında da gösterilir):
+- Ctrl+Alt+V: Hızlı arama penceresini açar / gizler (her yerden çalışır).
+- Ctrl+F: Arama alanına odaklanır.
+- Yukarı / Aşağı ok, PageUp / PageDown: Profil seçer.
+- Enter: Seçili profili OpenVPN Connect ile başlatır.
+- Ctrl+P: Seçili profili sabitler / sabitlemeyi kaldırır.
+- Esc: Arama doluysa temizler, boşsa pencereyi gizler.
+
+Menü ve bildirim alanı:
+- ⋯ düğmesi: Profilleri yenile, OpenVPN'in yanına yapıştır (ayrıysa), Kısayollar, Çıkış.
+- Bildirim alanı simgesi (mavi kalkan): sol tık paneli açar / gizler; sağ tık menüsünde Aç, Profilleri yenile, Çıkış.
+- × düğmesi paneli yalnızca gizler. Uygulamayı tamamen kapatmak için Çıkış'ı seçin.
+
+Pencere davranışı:
+- Esc, X veya bağlantı sonrası gizlenen pencere, OpenVPN açık kaldığı sürece kendiliğinden
+  geri gelmez. Ctrl+Alt+V, bildirim alanı simgesi veya masaüstü kısayolu ile açın.
+- Panel OpenVPN ile aynı yükseklikte, aralıksız yanına yapışır ve renkleri OpenVPN temasıyla
+  aynıdır. OpenVPN taşındığında veya boyutu değiştiğinde anında takip eder.
+- OpenVPN öne geldiğinde panel de onunla birlikte öne gelir; başka bir uygulamaya geçince
+  ikisi birlikte arkada kalır. Panele tıklayınca OpenVPN de hemen arkasına gelir.
+- OpenVPN küçültülünce veya kapanınca panel gizlenir, geri gelince yeniden açılır.
+- Paneli üst şeritten sürükleyerek ayırabilirsiniz; ayrıyken kenarlarından boyutlandırılır.
+  OpenVPN'in kenarına yakın bırakırsanız yeniden yapışır.
+- Yapışıkken dış kenarından genişlik ayarlanabilir.
+- Panel görev çubuğunda ayrı bir düğme olarak görünmez; bildirim alanı simgesi vardır.
+
+Profil listesi:
+- OpenVPN Connect'te profil eklenir, silinir veya adı değişirse liste birkaç saniye
+  içinde kendiliğinden güncellenir. Gerekirse menüden "Profilleri yenile" seçin.
+
+Güvenlik:
+OpenVPN profilleri için araç yalnızca profil adı, sunucu adresi, kullanıcı adı ve kaynak
+dosya adı gibi metadata alanlarını kullanır. Parola, özel anahtar ve sertifika içeriğini
+kullanmaz ve saklamaz. (OpenVPN Connect bu bilgileri aynı config.json dosyasında tuttuğu
+için dosya okunurken bellekte geçici olarak bulunur.)
+FortiClient tünelleri için yalnızca siz "Bu bilgisayarda sakla" veya "Parolayı kaydet"
+seçerseniz kullanıcı adı ve parola Windows Kimlik Bilgileri'nde saklanır
+("OpenVpnQuickSearch:forti:<tünel>"). Windows bunları oturum açan kullanıcıya bağlı
+olarak şifreler; başka kullanıcılar okuyamaz. Silmek için tünele sağ tık > "Kayıtlı
+parolayı sil" veya Denetim Masası > Kimlik Bilgileri Yöneticisi > Windows Kimlik Bilgileri.
+Parolalar uygulamanın ayar, geçmiş veya log dosyalarına yazılmaz.
+FortiClient'ın kendi kayıtlı parolaları okunmaz.
+
+Kurulum paketleri:
+"OpenVPN-Hizli-Arama-Kurulum.zip" bu bilgisayarın OpenVPN profillerini (özel anahtarlarla)
+içerir; yalnızca kendi bilgisayarlarınıza taşımak için kullanın, PAYLAŞMAYIN.
+Başkalarına "OpenVPN-Hizli-Arama-Kurulum-Profilsiz.zip" dağıtın.
+
+Otomatik başlatma:
+Windows başlangıç klasöründeki "OpenVPN Hızlı Arama İzleyici" kısayolu, aracı
+oturum açılışında görünmeden başlatır. Araç yalnızca OpenVPN penceresini izler.
+OpenVPN kurulu değilse veya profil dosyası okunamazsa hata kutusu göstermez;
+durum pencere açıldığında listede yazılır.

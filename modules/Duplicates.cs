@@ -498,7 +498,7 @@ internal sealed class DuplicatesForm : Form
             foreach (var e in g.Entries) if (e.Checked) selected.Add(e);
         if (selected.Count == 0) return;
 
-        var answer = MessageBox.Show(this,
+        var answer = GlassDialog.Show(this,
             selected.Count + " profil OpenVPN Connect'ten kalıcı olarak silinecek. Devam edilsin mi?",
             Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
         if (answer != DialogResult.Yes) return;
@@ -523,12 +523,12 @@ internal sealed class DuplicatesForm : Form
 
         if (errors.Count == 0)
         {
-            MessageBox.Show(this, ok + " profil silindi.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            GlassDialog.Show(this, ok + " profil silindi.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         var shown = errors.Take(8).ToList();
         var text = ok + " profil silindi, " + errors.Count + " profil silinemedi:\n\n" + string.Join("\n", shown);
         if (errors.Count > shown.Count) text += "\n...";
-        MessageBox.Show(this, text, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        GlassDialog.Show(this, text, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 }

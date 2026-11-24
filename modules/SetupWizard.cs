@@ -181,7 +181,6 @@ internal sealed class SetupWizard : Form
     {
         base.OnPaint(e);
         var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-        Ui.DrawWaves(g, new Rectangle(Width / 3, -S(4), Width * 2 / 3, S(58)), true);
         Glyphs.Draw(g, Glyph.ShieldLock, new RectangleF(S(22), S(15), S(32), S(32)), Ui.Accent);
         TextRenderer.DrawText(g, "OpenVPN Hızlı Arama", SFonts.Big, new Point(S(66), S(14)), Ui.Text, Ui.Flags);
         TextRenderer.DrawText(g, "İlk kurulum", SFonts.RowDesc, new Point(S(67), S(36)), Ui.Muted, Ui.Flags);
@@ -261,7 +260,7 @@ internal sealed class SetupWizard : Form
             {
                 running = false;
                 SetProgress("Kurulum tamamlandı.", 1);
-                if (summary.Count > 0) MessageBox.Show(this, string.Join("\n\n", summary.ToArray()), "Kurulum tamamlandı", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (summary.Count > 0) GlassDialog.Show(this, string.Join("\n\n", summary.ToArray()), "Kurulum tamamlandı", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 Close(); // Application.Run: DialogResult alone does not close the window
             }));
         });

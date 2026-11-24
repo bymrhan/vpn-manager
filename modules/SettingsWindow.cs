@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 // =====================================================================
@@ -15,13 +16,13 @@ using System.Windows.Forms;
 
 internal static class SFonts
 {
-    public static readonly Font PageTitle = new Font("Segoe UI Semibold", 14F);
-    public static readonly Font RowTitle = new Font("Segoe UI Semibold", 9.75F);
-    public static readonly Font RowDesc = new Font("Segoe UI", 8.5F);
-    public static readonly Font Nav = new Font("Segoe UI", 9.75F);
-    public static readonly Font NavBold = new Font("Segoe UI Semibold", 9.75F);
-    public static readonly Font Button = new Font("Segoe UI Semibold", 9F);
-    public static readonly Font Big = new Font("Segoe UI Semibold", 11.5F);
+    public static readonly Font PageTitle = new Font(Ui.FamilySemi, 15F);
+    public static readonly Font RowTitle = new Font(Ui.FamilySemi, 9.75F);
+    public static readonly Font RowDesc = new Font(Ui.Family, 8.75F);
+    public static readonly Font Nav = new Font(Ui.Family, 9.75F);
+    public static readonly Font NavBold = new Font(Ui.FamilySemi, 9.75F);
+    public static readonly Font Button = new Font(Ui.FamilySemi, 9F);
+    public static readonly Font Big = new Font(Ui.FamilySemi, 11.5F);
 }
 
 // Base for owner-drawn controls: double-buffered, transparent-feeling (paints parent's bg color).
@@ -33,6 +34,17 @@ internal abstract class SControl : Control
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     }
     protected static int S(float v) { return Ui.S(v); }
+    // Paints what is behind this control: the glass card it sits in (so specular and border line up), else the page color.
+    protected void PaintBase(Graphics g)
+    {
+        int ox = Left, oy = Top; Control c = Parent;
+        while (c != null && !(c is SCard) && !(c is SBackupHero)) { ox += c.Left; oy += c.Top; c = c.Parent; }
+        var card = c as SCard; var heroBase = c as SBackupHero;
+        if (card != null) { g.TranslateTransform(-ox, -oy); card.DrawBase(g); g.ResetTransform(); }
+        else if (heroBase != null) { g.TranslateTransform(-ox, -oy); heroBase.DrawBase(g); g.ResetTransform(); }
+        else g.Clear(Parent != null ? Parent.BackColor : Ui.Bg);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+    }
     protected Color ParentBg { get { return Parent is SCard || Parent is SRow || Parent is SBackupHero ? Ui.Surface : Parent != null ? Parent.BackColor : Ui.Bg; } }
     protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { hover = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
@@ -49,65 +61,85 @@ internal abstract class SControl : Control
 
 internal sealed class SToggle : SControl
 {
-    bool on; float pos; readonly Timer anim = new Timer { Interval = 15 };
+    bool on; readonly Spring pos = new Spring(0, 520, 32); readonly Animator anim = new Animator();
     public event EventHandler CheckedChanged;
     public SToggle()
     {
-        Size = new Size(S(44), S(24)); Cursor = Cursors.Hand; TabStop = true;
-        anim.Tick += delegate { var t = on ? 1F : 0F; pos += (t - pos) * 0.35F; if (Math.Abs(t - pos) < 0.02F) { pos = t; anim.Stop(); } Invalidate(); };
+        Size = new Size(S(46), S(26)); Cursor = Cursors.Hand; TabStop = true;
+        anim.Tick = dt => { var m = pos.Step(dt); Invalidate(); return m; };
     }
+    protected override void Dispose(bool disposing) { if (disposing) anim.Dispose(); base.Dispose(disposing); }
     public bool Checked
     {
         get { return on; }
-        set { if (on == value) return; on = value; anim.Start(); if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty); }
+        set { if (on == value) return; on = value; pos.Target = on ? 1 : 0; anim.Kick(); if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty); }
     }
-    public void SetInstant(bool value) { on = value; pos = value ? 1 : 0; Invalidate(); }
+    public void SetInstant(bool value) { on = value; pos.Snap(value ? 1 : 0); Invalidate(); }
     protected override void OnClick(EventArgs e) { Focus(); Checked = !Checked; base.OnClick(e); }
     protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space) Checked = !Checked; base.OnKeyDown(e); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(ParentBg); g.SmoothingMode = SmoothingMode.AntiAlias;
-        var r = new Rectangle(S(1), S(1), Width - S(3), Height - S(3));
-        var off = Themes.IsLight ? Color.FromArgb(206, 212, 224) : Ui.BorderStrong;
-        Ui.FillRound(g, Ui.Blend(off, Ui.Accent, pos), r, r.Height / 2F);
-        if (hover) Ui.DrawRound(g, Color.FromArgb(60, Color.White), r, r.Height / 2F);
-        var d = r.Height - S(6); var x = r.X + S(3) + (int)((r.Width - d - S(6)) * pos);
-        using (var sh = new SolidBrush(Color.FromArgb(40, 0, 0, 0))) g.FillEllipse(sh, x, r.Y + S(4), d, d);
-        using (var b = new SolidBrush(Color.White)) g.FillEllipse(b, x, r.Y + S(3), d, d);
-        FocusRing(g, r, r.Height / 2F);
+        var g = e.Graphics; PaintBase(g);
+        var r = new RectangleF(S(1), S(1), Width - S(3), Height - S(3));
+        var p = Ease.Clamp01(pos.Value);
+        Glass.Paint(g, r, r.Height / 2F, GlassKind.Secondary, 1.8F);
+        if (p > 0.01F)
+        {
+            using (var path = Ui.Round(r, r.Height / 2F))
+            using (var b = new LinearGradientBrush(RectangleF.Inflate(r, 1, 1), Color.FromArgb((int)(255 * p), Ui.Blend(Ui.Accent, Color.White, 0.16F)), Color.FromArgb((int)(255 * p), Ui.Accent), 90F)) g.FillPath(b, path);
+        }
+        // thumb stretches slightly while pressed, like a glass bead
+        var d = r.Height - S(6); var stretch = pressed ? S(4) : 0;
+        var x = r.X + S(3) + (r.Width - d - S(6) - stretch) * pos.Value;
+        using (var sh = new SolidBrush(Color.FromArgb(46, 0, 0, 0))) g.FillEllipse(sh, x, r.Y + S(4), d + stretch, d);
+        using (var path = Ui.Round(new RectangleF(x, r.Y + S(3), d + stretch, d), d / 2F)) using (var b = new LinearGradientBrush(new RectangleF(x, r.Y + S(2), d, d + 2), Color.White, Color.FromArgb(226, 230, 240), 90F)) g.FillPath(b, path);
+        FocusRing(g, Rectangle.Round(r), r.Height / 2F);
     }
 }
 
 internal sealed class SSegmented : SControl
 {
     string[] items = new string[0]; int sel, hot = -1;
+    readonly Spring thumbX = new Spring(0, 520, 34), thumbW = new Spring(0, 520, 34); readonly Animator anim = new Animator();
     public event EventHandler Changed;
-    public SSegmented(params string[] labels) { items = labels; Height = S(32); Cursor = Cursors.Hand; TabStop = true; AutoWidth(); }
-    public int SelectedIndex { get { return sel; } set { value = Math.Max(0, Math.Min(items.Length - 1, value)); if (sel == value) return; sel = value; Invalidate(); if (Changed != null) Changed(this, EventArgs.Empty); } }
+    public SSegmented(params string[] labels)
+    {
+        items = labels; Height = S(34); Cursor = Cursors.Hand; TabStop = true; AutoWidth();
+        anim.Tick = dt => { var a = thumbX.Step(dt); var b = thumbW.Step(dt); Invalidate(); return a || b; };
+        Snap();
+    }
+    protected override void Dispose(bool disposing) { if (disposing) anim.Dispose(); base.Dispose(disposing); }
+    public int SelectedIndex { get { return sel; } set { value = Math.Max(0, Math.Min(items.Length - 1, value)); if (sel == value) return; sel = value; MoveThumb(); if (Changed != null) Changed(this, EventArgs.Empty); } }
     void AutoWidth()
     {
-        using (var g = CreateGraphics()) { var w = items.Max(t => Ui.Measure(g, t, SFonts.Button).Width) + S(26); Width = w * items.Length + S(6); }
+        using (var g = CreateGraphics()) { var w = items.Max(t => Ui.Measure(g, t, SFonts.Button).Width) + S(28); Width = w * items.Length + S(8); }
     }
-    int SegWidth { get { return (Width - S(6)) / Math.Max(1, items.Length); } }
-    protected override void OnMouseMove(MouseEventArgs e) { var i = Math.Min(items.Length - 1, Math.Max(0, (e.X - S(3)) / SegWidth)); if (i != hot) { hot = i; Invalidate(); } base.OnMouseMove(e); }
+    int SegWidth { get { return (Width - S(8)) / Math.Max(1, items.Length); } }
+    void Snap() { thumbX.Snap(S(4) + sel * SegWidth); thumbW.Snap(SegWidth); }
+    void MoveThumb() { thumbX.Target = S(4) + sel * SegWidth; thumbW.Target = SegWidth; anim.Kick(); }
+    protected override void OnResize(EventArgs e) { base.OnResize(e); Snap(); }
+    protected override void OnMouseMove(MouseEventArgs e) { var i = Math.Min(items.Length - 1, Math.Max(0, (e.X - S(4)) / SegWidth)); if (i != hot) { hot = i; Invalidate(); } base.OnMouseMove(e); }
     protected override void OnMouseLeave(EventArgs e) { hot = -1; base.OnMouseLeave(e); }
-    protected override void OnMouseDown(MouseEventArgs e) { Focus(); SelectedIndex = Math.Min(items.Length - 1, Math.Max(0, (e.X - S(3)) / SegWidth)); base.OnMouseDown(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { Focus(); SelectedIndex = Math.Min(items.Length - 1, Math.Max(0, (e.X - S(4)) / SegWidth)); base.OnMouseDown(e); }
     protected override bool IsInputKey(Keys k) { return k == Keys.Left || k == Keys.Right || base.IsInputKey(k); }
     protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Left) SelectedIndex--; else if (e.KeyCode == Keys.Right) SelectedIndex++; base.OnKeyDown(e); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(ParentBg); g.SmoothingMode = SmoothingMode.AntiAlias;
-        var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        Ui.FillRound(g, Ui.Bg, r, S(8)); Ui.DrawRound(g, Ui.Border, r, S(8));
+        var g = e.Graphics; PaintBase(g);
+        var r = new RectangleF(0, 0, Width, Height);
+        Glass.Paint(g, r, Height / 2F, GlassKind.Secondary, 1.8F);
+        var th = Height - S(8);
+        var thumb = new RectangleF(thumbX.Value, S(4), thumbW.Value, th);
+        Glass.Paint(g, thumb, th / 2F, GlassKind.Selected, 1F, 0.3F);
         for (var i = 0; i < items.Length; i++)
         {
-            var sr = new Rectangle(S(3) + i * SegWidth, S(3), SegWidth, Height - S(7));
-            if (i == sel) { Ui.FillRound(g, Ui.Accent, sr, S(6)); }
-            else if (i == hot) Ui.FillRound(g, Ui.SurfaceHover, sr, S(6));
+            var sr = new Rectangle(S(4) + i * SegWidth, S(4), SegWidth, th);
             var sz = Ui.Measure(g, items[i], SFonts.Button);
-            TextRenderer.DrawText(g, items[i], SFonts.Button, new Point(sr.X + (sr.Width - sz.Width) / 2, sr.Y + (sr.Height - sz.Height) / 2), i == sel ? Color.White : Ui.Muted, Ui.Flags);
+            var cover = 1F - Math.Min(1F, Math.Abs((thumb.X + thumb.Width / 2F) - (sr.X + sr.Width / 2F)) / Math.Max(1F, SegWidth));
+            var col = Ui.Blend(i == hot ? Ui.Text : Ui.Muted, Ui.Text, Ease.Clamp01(cover));
+            TextRenderer.DrawText(g, items[i], SFonts.Button, new Point(sr.X + (sr.Width - sz.Width) / 2, sr.Y + (sr.Height - sz.Height) / 2), col, Ui.Flags);
         }
-        FocusRing(g, r, S(8));
+        FocusRing(g, Rectangle.Round(r), Height / 2F);
     }
 }
 
@@ -121,27 +153,35 @@ internal sealed class SButton : SControl
         Text = text; Kind = kind; Glyph = glyph; Cursor = Cursors.Hand; TabStop = true; Height = S(34);
         using (var g = CreateGraphics()) Width = Ui.Measure(g, text, SFonts.Button).Width + S(32) + (glyph != Glyph.None ? S(22) : 0);
     }
+    public void InvokeClick() { OnClick(EventArgs.Empty); }
     protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) OnClick(EventArgs.Empty); base.OnKeyDown(e); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(ParentBg); g.SmoothingMode = SmoothingMode.AntiAlias;
+        var g = e.Graphics; PaintBase(g);
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        Color fill, border, text;
+        var rf = new RectangleF(0.5F, 0.5F, Width - 1.5F, Height - 1.5F);
+        Color text;
+        var sc = pressed ? 0.97F : 1F; var rr = new RectangleF(rf.X + rf.Width * (1 - sc) / 2, rf.Y + rf.Height * (1 - sc) / 2, rf.Width * sc, rf.Height * sc);
         switch (Kind)
         {
-            case SButtonKind.Primary: fill = pressed ? Ui.Blend(Ui.Accent, Color.Black, 0.15F) : hover ? Ui.Blend(Ui.Accent, Color.White, 0.12F) : Ui.Accent; border = fill; text = Color.White; break;
-            case SButtonKind.Danger: fill = hover ? Color.FromArgb(232, 84, 100) : Color.FromArgb(206, 60, 78); border = fill; text = Color.White; break;
-            case SButtonKind.Ghost: fill = hover ? Ui.SurfaceHover : ParentBg; border = fill; text = hover ? Ui.Text : Ui.Muted; break;
-            default: fill = pressed ? Ui.SurfaceHover : hover ? Ui.Blend(Ui.Surface, Ui.SurfaceHover, 0.6F) : Ui.Surface; border = hover ? Ui.Faint : Ui.BorderStrong; text = Ui.Text; break;
+            case SButtonKind.Primary:
+                using (var path = Ui.Round(rr, rr.Height / 2F)) using (var b = new LinearGradientBrush(RectangleF.Inflate(rr, 1, 1), Ui.Blend(Ui.Accent, Color.White, hover ? 0.28F : 0.18F), pressed ? Ui.Blend(Ui.Accent, Color.Black, 0.12F) : Ui.Accent, 90F)) g.FillPath(b, path);
+                Glass.Paint(g, rr, rr.Height / 2F, GlassKind.Secondary, 0.8F); text = Color.White; break;
+            case SButtonKind.Danger:
+                using (var path = Ui.Round(rr, rr.Height / 2F)) using (var b = new SolidBrush(hover ? Ui.Blend(Ui.Danger, Color.White, 0.12F) : Ui.Danger)) g.FillPath(b, path);
+                Glass.Paint(g, rr, rr.Height / 2F, GlassKind.Secondary, 0.8F); text = Color.White; break;
+            case SButtonKind.Ghost:
+                if (hover) Glass.Paint(g, rr, rr.Height / 2F, GlassKind.Secondary, 1.8F); text = hover ? Ui.Text : Ui.Muted; break;
+            default:
+                Glass.Paint(g, rr, rr.Height / 2F, hover ? GlassKind.Selected : GlassKind.Secondary, hover ? 1F : 2F); text = Ui.Text; break;
         }
-        if (!Enabled) { fill = Ui.Surface; border = Ui.Border; text = Ui.Faint; }
-        Ui.FillRound(g, fill, r, S(8)); Ui.DrawRound(g, border, r, S(8));
+        if (!Enabled) { Glass.Paint(g, rr, rr.Height / 2F, GlassKind.Secondary, 1.5F); text = Ui.Faint; }
         var sz = Ui.Measure(g, Text, SFonts.Button);
         var total = sz.Width + (Glyph != Glyph.None ? S(22) : 0);
         var x = (Width - total) / 2;
         if (Glyph != Glyph.None) { Glyphs.Draw(g, Glyph, new RectangleF(x, (Height - S(16)) / 2F, S(16), S(16)), text); x += S(22); }
         TextRenderer.DrawText(g, Text, SFonts.Button, new Point(x, (Height - sz.Height) / 2), text, Ui.Flags);
-        FocusRing(g, r, S(8));
+        FocusRing(g, r, Height / 2F);
     }
 }
 
@@ -160,14 +200,14 @@ internal sealed class SStepper : SControl
     protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Right || e.KeyCode == Keys.Up) Value++; else if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Down) Value--; base.OnKeyDown(e); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(ParentBg); g.SmoothingMode = SmoothingMode.AntiAlias;
+        var g = e.Graphics; PaintBase(g);
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        Ui.FillRound(g, Ui.Bg, r, S(8)); Ui.DrawRound(g, Ui.Border, r, S(8));
+        Glass.Paint(g, new RectangleF(0, 0, Width, Height), Height / 2F, GlassKind.Secondary, 1.8F);
         for (var i = 0; i < 2; i++)
         {
             var br = i == 0 ? new Rectangle(S(3), S(3), Height - S(7), Height - S(7)) : new Rectangle(Width - Height + S(3), S(3), Height - S(7), Height - S(7));
             var enabled = i == 0 ? value > min : value < max;
-            if (hotPart == (i == 0 ? 0 : 2) && enabled) Ui.FillRound(g, Ui.SurfaceHover, br, S(6));
+            if (hotPart == (i == 0 ? 0 : 2) && enabled) Glass.Paint(g, new RectangleF(br.X, br.Y, br.Width, br.Height), br.Height / 2F, GlassKind.Selected, 1F);
             using (var p = new Pen(enabled ? Ui.Text : Ui.Faint, S(1.6F)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
                 float cx = br.X + br.Width / 2F, cy = br.Y + br.Height / 2F, k = S(4.5F);
@@ -177,7 +217,7 @@ internal sealed class SStepper : SControl
         }
         var t = value.ToString(); var sz = Ui.Measure(g, t, SFonts.RowTitle);
         TextRenderer.DrawText(g, t, SFonts.RowTitle, new Point((Width - sz.Width) / 2, (Height - sz.Height) / 2), Ui.Text, Ui.Flags);
-        FocusRing(g, r, S(8));
+        FocusRing(g, r, Height / 2F);
     }
 }
 
@@ -206,16 +246,16 @@ internal sealed class SHotkey : SControl
     }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(ParentBg); g.SmoothingMode = SmoothingMode.AntiAlias;
+        var g = e.Graphics; PaintBase(g);
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        Ui.FillRound(g, Ui.Bg, r, S(8));
-        Ui.DrawRound(g, Focused ? Ui.Accent : hover ? Ui.Faint : Ui.Border, r, S(8), Focused ? S(1.5F) : 1F);
+        Glass.Paint(g, new RectangleF(0, 0, Width, Height), Height / 2F, GlassKind.Secondary, hover ? 2.4F : 1.8F);
+        if (Focused) Ui.DrawRound(g, Ui.Accent, r, Height / 2F, S(1.5F));
         if (Focused && hint != null)
         {
             TextRenderer.DrawText(g, hint, SFonts.RowDesc, new Rectangle(S(12), 0, Width - S(24), Height), Color.FromArgb(232, 120, 90), Ui.Flags | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             return;
         }
-        var x = S(10); var y = (Height - S(18)) / 2;
+        var x = S(14); var y = (Height - S(18)) / 2;
         foreach (var part in (value ?? "").Split('+')) x += Ui.DrawKeycap(g, part, x, y) + S(4);
         var right = Focused ? "Yeni kısayola basın" : "Değiştir";
         var rs = Ui.Measure(g, right, SFonts.RowDesc);
@@ -239,14 +279,14 @@ internal sealed class SRow : SControl
     }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(Ui.Surface);
+        var g = e.Graphics; PaintBase(g);
         var x = S(18);
         if (Glyph != Glyph.None)
         {
             var ib = new Rectangle(x, (Height - S(32)) / 2, S(32), S(32));
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            Ui.FillRound(g, Color.FromArgb(Themes.IsLight ? 22 : 34, Ui.Accent), ib, S(8));
-            Glyphs.Draw(g, Glyph, new RectangleF(ib.X + S(8), ib.Y + S(8), S(16), S(16)), Ui.Accent);
+            Glass.Paint(g, ib, S(10), GlassKind.Secondary, 1.8F);
+            Glyphs.Draw(g, Glyph, new RectangleF(ib.X + S(8), ib.Y + S(8), S(16), S(16)), Ui.Text);
             x = ib.Right + S(14);
         }
         var w = (Editor != null ? Editor.Left - S(16) : Width - S(18)) - x;
@@ -274,13 +314,20 @@ internal sealed class SCard : SControl
         Invalidate();
     }
     protected override void OnResize(EventArgs e) { base.OnResize(e); if (rows.Count > 0 && rows[0].Width != Width - S(2)) Relayout(); }
+    // Card surface: page color outside, dense glass inside (also drawn behind the rows by their own PaintBase).
+    public void DrawBase(Graphics g)
+    {
+        g.Clear(Parent != null ? Parent.BackColor : Ui.Bg); g.SmoothingMode = SmoothingMode.AntiAlias;
+        var r = new RectangleF(0, 0, Width, Height);
+        Ui.FillRound(g, Ui.Surface, r, S(16));
+        Glass.Paint(g, r, S(16), GlassKind.Primary, 1F);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(Parent != null ? Parent.BackColor : Ui.Bg); g.SmoothingMode = SmoothingMode.AntiAlias;
-        var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        Ui.FillRound(g, Ui.Surface, r, S(12)); Ui.DrawRound(g, Ui.Border, r, S(12));
-        using (var p = new Pen(Ui.Border))
-            for (var i = 0; i < rows.Count - 1; i++) { var y = rows[i].Bottom; g.DrawLine(p, S(18), y, Width - S(18), y); }
+        var g = e.Graphics; DrawBase(g);
+        using (var p = new Pen(Color.FromArgb(Themes.IsLight ? 40 : 30, Themes.IsLight ? Color.Black : Color.White)))
+            for (var i = 0; i < rows.Count - 1; i++) { var y = rows[i].Bottom; g.DrawLine(p, S(58), y, Width - S(18), y); }
     }
 }
 
@@ -321,7 +368,7 @@ internal sealed class SThemeTile : SControl
         var outer = new Rectangle(0, 0, Width - 1, S(92));
         var pr = Rectangle.Inflate(outer, -S(5), -S(5));
         var state = g.Save();
-        using (var clip = Ui.Round(pr, S(7))) g.SetClip(clip);
+        using (var clip = Ui.Round(pr, S(9))) g.SetClip(clip);
         if (Mode == "system")
         {
             Mini(g, pr, false);
@@ -329,13 +376,14 @@ internal sealed class SThemeTile : SControl
         }
         else Mini(g, pr, Mode == "light");
         g.Restore(state);
-        Ui.DrawRound(g, selected ? Ui.Accent : hover ? Ui.Faint : Ui.Border, outer, S(10), selected ? S(2F) : 1F);
+        Glass.Paint(g, outer, S(12), GlassKind.Secondary, 1F); if (selected) Ui.DrawRound(g, Ui.Accent, outer, S(12), S(2F));
         // radio + label
         var cy = outer.Bottom + S(22); var d = S(16); var rc = new Rectangle(S(4), cy - d / 2, d, d);
         using (var p = new Pen(selected ? Ui.Accent : Ui.Faint, S(1.5F))) g.DrawEllipse(p, rc);
         if (selected) using (var b = new SolidBrush(Ui.Accent)) g.FillEllipse(b, Rectangle.Inflate(rc, -S(4), -S(4)));
         var ls = Ui.Measure(g, Label, SFonts.RowTitle);
-        TextRenderer.DrawText(g, Label, SFonts.RowTitle, new Point(rc.Right + S(8), cy - ls.Height / 2), Ui.Text, Ui.Flags);
+        Assets.Draw(g, Mode == "dark" ? "theme-dark" : Mode == "light" ? "theme-light" : "theme-system", new RectangleF(rc.Right + S(6), cy - S(8), S(16), S(16)), selected ? Ui.Highlight : Ui.Muted);
+        TextRenderer.DrawText(g, Label, SFonts.RowTitle, new Point(rc.Right + S(28), cy - ls.Height / 2), Ui.Text, Ui.Flags);
         FocusRing(g, outer, S(10));
     }
 }
@@ -353,15 +401,22 @@ internal sealed class SBackupHero : SControl
         Backup.Location = new Point(S(84), Height - S(16) - Backup.Height);
         Folder.Location = new Point(Backup.Right + S(8), Backup.Top);
     }
+    public void DrawBase(Graphics g)
+    {
+        g.Clear(Parent != null ? Parent.BackColor : Ui.Bg); g.SmoothingMode = SmoothingMode.AntiAlias;
+        var r = new Rectangle(0, 0, Width - 1, Height - 1);
+        using (var b = new LinearGradientBrush(r, Ui.Blend(Ui.Surface, Ui.Accent, Themes.IsLight ? 0.08F : 0.16F), Ui.Surface, 0F))
+        using (var path = Ui.Round(r, S(16))) g.FillPath(b, path);
+        Glass.Paint(g, r, S(16), GlassKind.Primary, 1F);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(Parent != null ? Parent.BackColor : Ui.Bg); g.SmoothingMode = SmoothingMode.AntiAlias;
+        var g = e.Graphics; DrawBase(g);
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        using (var b = new LinearGradientBrush(r, Ui.Blend(Ui.Surface, Ui.Accent, Themes.IsLight ? 0.06F : 0.10F), Ui.Surface, 0F))
-        using (var path = Ui.Round(r, S(12))) g.FillPath(b, path);
-        Ui.DrawRound(g, Ui.Border, r, S(12));
         var ib = new Rectangle(S(20), S(18), S(48), S(48));
-        using (var b = new LinearGradientBrush(ib, Color.FromArgb(70, 132, 255), Ui.Brand, 60F)) using (var path = Ui.Round(ib, S(12))) g.FillPath(b, path);
+        using (var b = new LinearGradientBrush(ib, Ui.Blend(Ui.Accent, Color.White, 0.2F), Ui.Accent, 90F)) using (var path = Ui.Round(ib, S(15))) g.FillPath(b, path);
+        Glass.Paint(g, ib, S(15), GlassKind.Secondary, 0.9F);
         Glyphs.Draw(g, Glyph.Backup, new RectangleF(ib.X + S(12), ib.Y + S(12), S(24), S(24)), Color.White);
         TextRenderer.DrawText(g, Title, SFonts.Big, new Rectangle(S(84), S(17), Width - S(100), S(24)), Ui.Text, Ui.Flags | TextFormatFlags.EndEllipsis);
         TextRenderer.DrawText(g, Subtitle, SFonts.RowDesc, new Rectangle(S(84), S(42), Width - S(100), S(18)), Ui.Muted, Ui.Flags | TextFormatFlags.EndEllipsis);
@@ -377,9 +432,10 @@ internal sealed class SNote : SControl
     {
         var g = e.Graphics; g.Clear(Parent != null ? Parent.BackColor : Ui.Bg); g.SmoothingMode = SmoothingMode.AntiAlias;
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        var tint = Color.FromArgb(230, 160, 60);
-        Ui.FillRound(g, Color.FromArgb(Themes.IsLight ? 22 : 26, tint), r, S(10));
-        Ui.DrawRound(g, Color.FromArgb(Themes.IsLight ? 70 : 60, tint), r, S(10));
+        var tint = Ui.Warning;
+        Ui.FillRound(g, Ui.Surface, r, S(14));
+        Ui.FillRound(g, Color.FromArgb(Themes.IsLight ? 22 : 30, tint), r, S(14));
+        Glass.Paint(g, new RectangleF(0, 0, Width, Height), S(14), GlassKind.Secondary, 1.2F);
         Glyphs.Draw(g, Glyph, new RectangleF(S(14), (Height - S(18)) / 2F, S(18), S(18)), tint);
         TextRenderer.DrawText(g, Text2, SFonts.RowDesc, new Rectangle(S(44), S(6), Width - S(56), Height - S(12)), Ui.Text, TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak | TextFormatFlags.VerticalCenter);
     }
@@ -391,7 +447,7 @@ internal sealed class SKeys : SControl
     public SKeys(string keys) { Text = keys; Height = S(22); using (var g = CreateGraphics()) Width = Text.Split('+').Sum(k => Ui.Measure(g, k, Ui.KeyFont).Width + S(14)) + S(2); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g = e.Graphics; g.Clear(Ui.Surface); g.SmoothingMode = SmoothingMode.AntiAlias;
+        var g = e.Graphics; PaintBase(g);
         var x = 0; foreach (var k in Text.Split('+')) x += Ui.DrawKeycap(g, k, x, (Height - S(18)) / 2) + S(4);
     }
 }
@@ -399,10 +455,13 @@ internal sealed class SKeys : SControl
 // Scrollable page body.
 internal sealed class SPage : Panel
 {
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] static extern int SetWindowTheme(IntPtr hwnd, string app, string idlist);
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); try { SetWindowTheme(Handle, Themes.IsLight ? "Explorer" : "DarkMode_Explorer", null); } catch { } }
+
     public string Title, Subtitle;
     public SPage(string title, string subtitle)
     {
-        Title = title; Subtitle = subtitle; AutoScroll = true; DoubleBuffered = true;
+        Title = title; Subtitle = subtitle; AutoScroll = true; DoubleBuffered = true; ClientSizeChanged += delegate { PerformLayout(); };
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
     }
     int Gutter { get { return Ui.S(30); } }
@@ -492,7 +551,7 @@ internal sealed class SettingsForm : Form
         BuildGeneral(); BuildBackup(); BuildAppearance(); BuildAbout();
         foreach (var p in pages) { p.Dock = DockStyle.Fill; content.Controls.Add(p); }
 
-        close.Location = new Point(Width - close.Width - S(6), S(6)); Controls.Add(close); close.BringToFront();
+        close.Solid = true; close.Location = new Point(Width - close.Width - S(14), S(12)); Controls.Add(close); close.BringToFront();
         close.Click += delegate { DialogResult = DialogResult.Cancel; };
         cancel.Click += delegate { DialogResult = DialogResult.Cancel; };
         save.Click += delegate { Save(); };
@@ -511,7 +570,7 @@ internal sealed class SettingsForm : Form
         ApplyColors();
     }
 
-    protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ClassStyle |= CS_DROPSHADOW; return cp; } }
+    protected override CreateParams CreateParams { get { var cp = base.CreateParams; return cp; } }
 
     protected override void OnHandleCreated(EventArgs e)
     {
@@ -523,9 +582,8 @@ internal sealed class SettingsForm : Form
     {
         try
         {
-            var corner = 2; NativeMethods.DwmSetWindowAttribute(Handle, 33, ref corner, 4);
-            var border = Ui.BorderStrong.R | (Ui.BorderStrong.G << 8) | (Ui.BorderStrong.B << 16);
-            NativeMethods.DwmSetWindowAttribute(Handle, 34, ref border, 4);
+            var d = Themes.IsLight ? 0 : 1; NativeMethods.DwmSetWindowAttribute(Handle, 20, ref d, 4);
+            Backdrop.SetCorner(Handle, 2);
         }
         catch { }
     }
@@ -600,7 +658,7 @@ internal sealed class SettingsForm : Form
         var page = NewPage("Görünüm", "Tema anında önizlenir; kaydetmezseniz geri alınır");
         var holder = page.Add(new Panel { Height = S(140) }, caption: "TEMA");
         holder.BackColor = Ui.Bg;
-        var modes = new[] { "dark", "light", "system" }; var labels = new[] { "Koyu", "Açık", "Sistem" };
+        var modes = new[] { "dark", "light", "system" }; var labels = new[] { "Glass Dark", "Glass Light", "Sistem" };
         for (var i = 0; i < 3; i++)
         {
             var t = new SThemeTile(modes[i], labels[i]) { Location = new Point(i * S(160), 0), Selected = work.Theme == modes[i] };
@@ -681,6 +739,8 @@ internal sealed class SettingsForm : Form
 
     // ---------- Chrome ----------
 
+    protected override void OnShown(EventArgs e) { base.OnShown(e); if (Demo.On && Demo.SettingsPage > 0 && Demo.SettingsPage < pages.Count) ShowPage(Demo.SettingsPage); }
+
     void ShowPage(int i)
     {
         nav = i;
@@ -688,9 +748,9 @@ internal sealed class SettingsForm : Form
         Invalidate(new Rectangle(0, 0, NavWidth, Height));
     }
 
-    Rectangle NavRect(int i) { return new Rectangle(S(12), S(84) + i * S(40), NavWidth - S(24), S(36)); }
+    Rectangle NavRect(int i) { return new Rectangle(S(18), S(84) + i * S(42), NavWidth - S(36), S(36)); }
 
-    protected override void OnMouseMove(MouseEventArgs e)
+        protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
         var h = -1; for (var i = 0; i < navTitles.Length; i++) if (NavRect(i).Contains(e.Location)) h = i;
@@ -734,9 +794,9 @@ internal sealed class SettingsForm : Form
     void Save()
     {
         uint m, vk;
-        if (!HotkeyText.TryParse(work.Hotkey, out m, out vk)) { ShowPage(0); MessageBox.Show(this, "Kısayol geçersiz.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        if (!HotkeyText.TryParse(work.Hotkey, out m, out vk)) { ShowPage(0); GlassDialog.Show(this, "Kısayol geçersiz.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         try { Directory.CreateDirectory(work.BackupFolder); }
-        catch (Exception ex) { ShowPage(1); MessageBox.Show(this, "Yedek klasörü kullanılamıyor:\n" + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        catch (Exception ex) { ShowPage(1); GlassDialog.Show(this, "Yedek klasörü kullanılamıyor:\n" + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         work.Normalize();
         Result = work.Clone();
         DialogResult = DialogResult.OK;
@@ -747,19 +807,20 @@ internal sealed class SettingsForm : Form
         base.OnPaint(e);
         var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        // navigation rail
-        using (var b = new SolidBrush(Ui.Surface)) g.FillRectangle(b, 0, 0, NavWidth, Height);
-        using (var p = new Pen(Ui.Border)) g.DrawLine(p, NavWidth - 1, 0, NavWidth - 1, Height);
-        IconArt.DrawMark(g, new RectangleF(S(20), S(22), S(30), S(30)));
+        // navigation rail: a floating glass panel on the window background
+        var rail = new RectangleF(S(8), S(8), NavWidth - S(14), Height - S(16));
+        Ui.FillRound(g, Ui.Surface, rail, S(18));
+        Glass.Paint(g, rail, S(18), GlassKind.Primary, 1F);
+        IconArt.DrawMark(g, new RectangleF(S(24), S(24), S(30), S(30)));
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        TextRenderer.DrawText(g, "Ayarlar", SFonts.Big, new Point(S(60), S(21)), Ui.Text, Ui.Flags);
-        TextRenderer.DrawText(g, "Hızlı Arama", SFonts.RowDesc, new Point(S(61), S(41)), Ui.Muted, Ui.Flags);
+        TextRenderer.DrawText(g, "Ayarlar", SFonts.Big, new Point(S(64), S(23)), Ui.Text, Ui.Flags);
+        TextRenderer.DrawText(g, "Hızlı Arama", SFonts.RowDesc, new Point(S(65), S(43)), Ui.Muted, Ui.Flags);
         for (var i = 0; i < navTitles.Length; i++)
         {
             var r = NavRect(i); var sel = i == nav;
-            if (sel) { Ui.FillRound(g, Ui.SelectedFill, r, S(8)); Ui.FillRound(g, Ui.Accent, new RectangleF(r.X, r.Y + S(9), S(3), r.Height - S(18)), S(1.5F)); }
-            else if (i == navHover) Ui.FillRound(g, Ui.SurfaceHover, r, S(8));
-            Glyphs.Draw(g, navGlyphs[i], new RectangleF(r.X + S(14), r.Y + (r.Height - S(17)) / 2F, S(17), S(17)), sel ? Ui.Accent : Ui.Muted);
+            if (sel) Glass.Paint(g, r, r.Height / 2F, GlassKind.Selected, 1F, 0.3F);
+            else if (i == navHover) Glass.Paint(g, r, r.Height / 2F, GlassKind.Secondary, 2F);
+            Glyphs.Draw(g, navGlyphs[i], new RectangleF(r.X + S(14), r.Y + (r.Height - S(17)) / 2F, S(17), S(17)), sel ? Ui.Text : Ui.Muted);
             var ts = Ui.Measure(g, navTitles[i], sel ? SFonts.NavBold : SFonts.Nav);
             TextRenderer.DrawText(g, navTitles[i], sel ? SFonts.NavBold : SFonts.Nav, new Point(r.X + S(42), r.Y + (r.Height - ts.Height) / 2), sel ? Ui.Text : Ui.Muted, Ui.Flags);
         }
@@ -768,13 +829,14 @@ internal sealed class SettingsForm : Form
         // footer
         var fy = Height - FooterHeight;
         using (var b = new SolidBrush(Ui.Bg)) g.FillRectangle(b, NavWidth, fy, Width - NavWidth, FooterHeight);
-        using (var p = new Pen(Ui.Border)) g.DrawLine(p, NavWidth, fy, Width, fy);
+        using (var p = new Pen(Color.FromArgb(Themes.IsLight ? 40 : 30, Themes.IsLight ? Color.Black : Color.White))) g.DrawLine(p, NavWidth + S(10), fy, Width - S(22), fy);
         if (IsDirty)
         {
             var dy = fy + FooterHeight / 2;
             using (var b = new SolidBrush(Ui.Accent)) g.FillEllipse(b, NavWidth + S(28), dy - S(4), S(8), S(8));
             TextRenderer.DrawText(g, "Kaydedilmemiş değişiklikler", SFonts.RowDesc, new Point(NavWidth + S(44), dy - S(8)), Ui.Muted, Ui.Flags);
         }
-        if (!Glyphs.IsWindows11) using (var p = new Pen(Ui.BorderStrong)) g.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
+        Glass.WindowFrame(g, ClientRectangle, S(8));
     }
 }
+

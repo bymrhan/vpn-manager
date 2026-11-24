@@ -8,6 +8,8 @@ $Out = [IO.Path]::GetFullPath((Join-Path $root '..\..\outputs'))
 $stage = Join-Path $env:TEMP ('ovpnqs-build-' + [guid]::NewGuid().ToString('N'))
 $appDir = Join-Path $stage 'uygulama'; $packDir = Join-Path $stage 'profiller'
 New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+# The staging folder holds this PC's profiles (private keys): it is removed even when a step fails.
+try {
 
 # 0) automated tests (tests\run-tests.ps1): no package from a failing build
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\run-tests.ps1')
@@ -16,12 +18,13 @@ if ($LASTEXITCODE -ne 0) { throw 'testler başarısız; paket üretilmedi' }
 # 1) compile
 $exe = Join-Path $appDir 'OpenVPN-Hizli-Arama.exe'
 $mods = Get-ChildItem (Join-Path $root 'modules\*.cs') | ForEach-Object FullName
-& "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ "/out:$exe" "/win32icon:$root\app.ico" "/resource:$root\app.ico,app.ico" `
+$svgRes = Get-ChildItem (Join-Path $root 'assets\*.svg') | ForEach-Object { "/resource:$($_.FullName),$($_.Name)" }
+& "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ "/out:$exe" "/win32icon:$root\app.ico" "/resource:$root\app.ico,app.ico" $svgRes `
   /r:System.Web.Extensions.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:Accessibility.dll `
   (Join-Path $root 'OpenVpnQuickSearch.cs') @mods | Where-Object { $_ -notmatch 'warning CS0(649|169|219|168)' }
 if ($LASTEXITCODE -ne 0) { throw 'derleme başarısız' }
-Copy-Item (Join-Path $Out 'OpenVPN-Hizli-Arama.exe.config') $appDir
-Copy-Item (Join-Path $Out 'OpenVPN-Hizli-Arama-Kullanim.txt') $appDir
+Copy-Item (Join-Path $root 'paket/OpenVPN-Hizli-Arama.exe.config') $appDir
+Copy-Item (Join-Path $root 'paket/OpenVPN-Hizli-Arama-Kullanim.txt') $appDir
 
 # 2) profile pack from this PC
 if (-not $NoProfiles) {
@@ -30,7 +33,7 @@ if (-not $NoProfiles) {
 using System; using System.Reflection; using System.Collections.Generic;
 public static class PackBuilder {
   public static string Backup(string exe, string folder) {
-    var a = Assembly.LoadFrom(exe);
+    var a = Assembly.Load(System.IO.File.ReadAllBytes(exe)); // from bytes: no file lock, no temp copy
     var pins = a.GetType("PinStore").GetMethod("Load").Invoke(null, null);
     var args = new object[] { folder, pins, 0 };
     var zip = (string)a.GetType("BackupService").GetMethod("CreateBackup").Invoke(null, args);
@@ -38,8 +41,7 @@ public static class PackBuilder {
   }
 }
 "@
-    $probe = Join-Path $env:TEMP ('ovpnqs-probe-' + [guid]::NewGuid().ToString('N') + '.exe'); Copy-Item $exe $probe  # load a copy so the staged exe stays unlocked
-    $r = [PackBuilder]::Backup($probe, $packDir).Split('|')
+    $r = [PackBuilder]::Backup($exe, $packDir).Split('|')
     Move-Item $r[0] (Join-Path $packDir 'OpenVPN-Profilleri.zip')
     Write-Host "  OpenVPN profilleri: $($r[1])"
 
@@ -67,7 +69,9 @@ foreach ($n in 'Kur.cmd', 'Kaldir.cmd', 'BENIOKU.txt') { Copy-Item (Join-Path $r
 # 4) zip
 $zip = Join-Path $Out $(if ($NoProfiles) { 'OpenVPN-Hizli-Arama-Kurulum-Profilsiz.zip' } else { 'OpenVPN-Hizli-Arama-Kurulum.zip' })
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+# Both assemblies: ZipArchive lives in System.IO.Compression. Without -NoProfiles it happened to
+# be loaded already by the profile-pack step, so -NoProfiles failed with "Unable to find type".
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 # entry names with "/" separators (ZipFile.CreateFromDirectory on .NET Framework writes "\")
 $fs = [IO.File]::Open($zip, 'CreateNew'); $archive = New-Object IO.Compression.ZipArchive($fs, [IO.Compression.ZipArchiveMode]::Create)
 foreach ($file in Get-ChildItem $stage -Recurse -File) {
@@ -75,7 +79,12 @@ foreach ($file in Get-ChildItem $stage -Recurse -File) {
     [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $rel, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
 }
 $archive.Dispose(); $fs.Dispose()
-Copy-Item $exe (Join-Path $Out 'OpenVPN-Hizli-Arama.exe') -Force -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $stage 'profiller') -Recurse -Force -ErrorAction SilentlyContinue  # contains profile secrets
-Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+try { Copy-Item $exe (Join-Path $Out 'OpenVPN-Hizli-Arama.exe') -Force }
+catch { Write-Warning "outputs\OpenVPN-Hizli-Arama.exe güncellenmedi (uygulama çalışıyor olabilir). Paket yine de üretildi." }
 Write-Host "  Paket: $zip"
+
+}
+finally {
+    Remove-Item (Join-Path $stage 'profiller') -Recurse -Force -ErrorAction SilentlyContinue  # contains profile secrets
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+}

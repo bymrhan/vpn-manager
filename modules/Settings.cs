@@ -190,23 +190,27 @@ internal static class Themes
         var light = theme == "light" || (theme == "system" && SystemPrefersLight());
         if (light)
         {
-            // Background, surface, hover, selection, border, strong border
-            Set(Color.FromArgb(244, 246, 250), Color.FromArgb(255, 255, 255), Color.FromArgb(238, 241, 247),
-                Color.FromArgb(255, 236, 218), Color.FromArgb(222, 227, 236), Color.FromArgb(198, 205, 218),
-                // Brand, accent, accent2
-                Color.FromArgb(22, 82, 184), Color.FromArgb(226, 112, 18), Color.FromArgb(200, 90, 10),
-                // Text, muted, faint, gold, success
-                Color.FromArgb(17, 24, 39), Color.FromArgb(92, 102, 122), Color.FromArgb(118, 127, 146),
-                Color.FromArgb(180, 120, 0), Color.FromArgb(20, 138, 78));
+            // Liquid Glass Light: pale slate glass, same sapphire accent family
+            Set(Color.FromArgb(230, 235, 242), Color.FromArgb(250, 252, 255), Color.FromArgb(238, 242, 248),
+                Color.FromArgb(214, 226, 241), Color.FromArgb(206, 214, 225), Color.FromArgb(176, 188, 204),
+                Color.FromArgb(60, 98, 146), Color.FromArgb(66, 104, 152), Color.FromArgb(83, 123, 169),
+                Color.FromArgb(28, 34, 44), Color.FromArgb(78, 91, 108), Color.FromArgb(112, 125, 142),
+                Color.FromArgb(160, 120, 56), Color.FromArgb(52, 142, 104));
+            Ui.Danger = Color.FromArgb(176, 80, 80); Ui.Warning = Color.FromArgb(160, 120, 56); Ui.Field = Color.FromArgb(255, 255, 255);
+            Ui.Highlight = Color.FromArgb(66, 104, 152);
+            Ui.GlassPrimary = Color.FromArgb(250, 252, 255); Ui.GlassSecondary = Color.FromArgb(238, 242, 248); Ui.WindowBg = Color.FromArgb(230, 235, 242);
         }
         else
         {
-            // Deep navy + warm orange (same values as the Ui defaults).
-            Set(Color.FromArgb(14, 18, 29), Color.FromArgb(23, 29, 43), Color.FromArgb(29, 36, 53),
-                Color.FromArgb(52, 38, 32), Color.FromArgb(36, 44, 62), Color.FromArgb(55, 65, 88),
-                Color.FromArgb(22, 82, 184), Color.FromArgb(247, 146, 50), Color.FromArgb(232, 108, 28),
-                Color.FromArgb(240, 243, 248), Color.FromArgb(152, 162, 183), Color.FromArgb(102, 112, 134),
-                Color.FromArgb(255, 194, 76), Color.FromArgb(70, 205, 130));
+            // Liquid Glass Dark (default): graphite / slate. Values are the approved palette.
+            Set(Color.FromArgb(0x1C, 0x22, 0x2C), Color.FromArgb(0x30, 0x39, 0x45), Color.FromArgb(0x3A, 0x45, 0x53),
+                Color.FromArgb(0x2C, 0x40, 0x58), Color.FromArgb(0x3C, 0x48, 0x57), Color.FromArgb(0x58, 0x66, 0x77),
+                Color.FromArgb(0x53, 0x7B, 0xA9), Color.FromArgb(0x53, 0x7B, 0xA9), Color.FromArgb(0x8B, 0xAE, 0xD9),
+                Color.FromArgb(0xE5, 0xEA, 0xF1), Color.FromArgb(0xA1, 0xAF, 0xBF), Color.FromArgb(0x7E, 0x8C, 0x9D),
+                Color.FromArgb(0xC4, 0xA1, 0x6E), Color.FromArgb(0x64, 0xBD, 0x96));
+            Ui.Danger = Color.FromArgb(0xC4, 0x78, 0x78); Ui.Warning = Color.FromArgb(0xC4, 0xA1, 0x6E); Ui.Field = Color.FromArgb(0x26, 0x30, 0x3C);
+            Ui.Highlight = Color.FromArgb(0x8B, 0xAE, 0xD9);
+            Ui.GlassPrimary = Color.FromArgb(0x30, 0x39, 0x45); Ui.GlassSecondary = Color.FromArgb(0x26, 0x30, 0x3C); Ui.WindowBg = Color.FromArgb(0x1C, 0x22, 0x2C);
         }
         IsLight = light;
     }

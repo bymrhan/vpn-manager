@@ -14,3 +14,6 @@ FortiClient-Tunelleri.json
 # Hand-made copies from before version control
 *.v3-backup.cs
 *.old.exe
+
+# scratch folders
+tmp-ico/

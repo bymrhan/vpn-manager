@@ -1,7 +1,7 @@
 OPENVPN HIZLI ARAMA — KURULUM
 =============================
 
-!!! GÜVENLİK UYARISI !!!
+!!! GÜVENLİK UYARISI (yalnızca "profiller" klasörü olan paket için) !!!
 Bu paketteki "profiller" klasörü VPN profillerini ŞİFRESİZ olarak içerir
 (.ovpn dosyalarındaki özel anahtarlar ve sertifikalar dahil). Bu zip'i yalnızca
 kendi cihazlarınıza veya güvendiğiniz kişilere verin; e-posta / paylaşımlı

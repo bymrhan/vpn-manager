@@ -21,10 +21,22 @@ internal static class Glyphs
 {
     static float S(float v) { return v * Ui.Scale; }
 
+    // Glyphs that exist in the SVG asset library are drawn from it.
+    static readonly Dictionary<Glyph, string> Map = new Dictionary<Glyph, string>
+    {
+        { Glyph.Backup, "backup" }, { Glyph.Restore, "restore" }, { Glyph.Import, "import" }, { Glyph.Folder, "folder" },
+        { Glyph.Copy, "action-copy" }, { Glyph.Delete, "action-delete" }, { Glyph.Connect, "action-connect" }, { Glyph.Plug, "action-connect" },
+        { Glyph.Disconnect, "action-disconnect" }, { Glyph.Power, "action-disconnect" }, { Glyph.Star, "action-pin" },
+        { Glyph.Settings, "nav-general" }, { Glyph.Palette, "nav-appearance" }, { Glyph.Info, "nav-about" },
+        { Glyph.Search, "search" }, { Glyph.ShieldLock, "app-logo" }
+    };
+
     // Draws a 16-unit line icon centered in r.
     public static void Draw(Graphics g, Glyph glyph, RectangleF r, Color c)
     {
         if (glyph == Glyph.None) return;
+        string an;
+        if (Map.TryGetValue(glyph, out an) && Assets.Has(an)) { Assets.Draw(g, an, r, c); return; }
         var oldMode = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
         var k = Math.Min(r.Width, r.Height) / 16F;
         float ox = r.X + (r.Width - 16 * k) / 2, oy = r.Y + (r.Height - 16 * k) / 2;
@@ -198,7 +210,7 @@ internal sealed class MenuEntry : ToolStripMenuItem
         // A blank image reserves the icon column; the renderer draws the vector glyph there.
         if (placeholder == null) placeholder = new Bitmap(1, 1);
         Image = placeholder;
-        Padding = new Padding(Ui.S(2), Ui.S(6), Ui.S(2), Ui.S(6));
+        Padding = new Padding(Ui.S(2), Ui.S(8), Ui.S(2), Ui.S(8));
     }
 
     // Wide enough for text + badge + keycaps, never narrower than the menu's design width.
@@ -206,12 +218,9 @@ internal sealed class MenuEntry : ToolStripMenuItem
     {
         var s = base.GetPreferredSize(constrainingSize);
         var extra = 0;
-        using (var g = Graphics.FromHwnd(IntPtr.Zero))
-        {
-            if (!string.IsNullOrEmpty(Badge)) extra += Ui.Measure(g, Badge, Ui.KeyFont).Width + Ui.S(28);
-            if (!string.IsNullOrEmpty(ShortcutKeyDisplayString)) foreach (var part in ShortcutKeyDisplayString.Split('+')) extra += Ui.Measure(g, part, Ui.KeyFont).Width + Ui.S(14);
-        }
-        return new Size(Math.Max(Ui.S(280), s.Width + extra + Ui.S(16)), s.Height);
+        if (!string.IsNullOrEmpty(Badge)) extra += GText.Measure(Badge, Ui.KeyFont).Width + Ui.S(28);
+        if (!string.IsNullOrEmpty(ShortcutKeyDisplayString)) foreach (var part in ShortcutKeyDisplayString.Split('+')) extra += GText.Measure(part, Ui.KeyFont).Width + Ui.S(16);
+        return new Size(Math.Max(Ui.S(290), s.Width + extra + Ui.S(40)), Math.Max(s.Height, Ui.S(38)));
     }
 }
 
@@ -219,14 +228,15 @@ internal sealed class MenuEntry : ToolStripMenuItem
 internal sealed class MenuCaption : ToolStripMenuItem
 {
     public MenuCaption(string text) : base(text) { Font = Ui.HeaderFont; Enabled = false; Padding = new Padding(0, Ui.S(4), 0, 0); }
-    public override Size GetPreferredSize(Size constrainingSize) { var s = base.GetPreferredSize(constrainingSize); return new Size(s.Width, Ui.S(26)); }
+    public override Size GetPreferredSize(Size constrainingSize) { var s = base.GetPreferredSize(constrainingSize); return new Size(s.Width, Ui.S(30)); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        TextRenderer.DrawText(e.Graphics, Text, Ui.HeaderFont, new Point(Ui.S(14), Height - Ui.S(17)), Ui.Faint, Ui.Flags);
+        var p = MenuMotion.Progress(Owner, Owner != null ? Owner.Items.IndexOf(this) : 0);
+        GText.Draw(e.Graphics, Text, Ui.SectionFont, new Point(Ui.S(18), Height - Ui.S(20) + (int)(Ui.S(6) * (1 - p))), GlassPaint.A(Ui.Faint, p));
     }
 }
 
-// Status card shown at the top of a menu: colored dot (or avatar), title, subtitle.
+// Status tile at the top of a menu: colored dot (or provider chip), title, subtitle.
 internal sealed class MenuStatusItem : ToolStripMenuItem
 {
     public string Title, Subtitle; public Color Dot; public string Initials; public Color AvatarColor;
@@ -234,57 +244,97 @@ internal sealed class MenuStatusItem : ToolStripMenuItem
 
     public override Size GetPreferredSize(Size constrainingSize)
     {
-        using (var g = Graphics.FromHwnd(IntPtr.Zero))
-        {
-            var w = Math.Max(Ui.Measure(g, Title ?? "", Ui.NameFont).Width, Ui.Measure(g, Subtitle ?? "", Ui.SmallFont).Width) + Ui.S(Initials != null ? 76 : 54);
-            return new Size(Math.Min(Ui.S(380), Math.Max(Ui.S(270), w)), Ui.S(64));
-        }
+        var w = Math.Max(GText.Measure(Title ?? "", Ui.NameFont).Width, GText.Measure(Subtitle ?? "", Ui.SmallFont).Width) + Ui.S(Initials != null ? 84 : 62);
+        return new Size(Math.Min(Ui.S(380), Math.Max(Ui.S(290), w)), Ui.S(68));
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+        var idx = Owner != null ? Owner.Items.IndexOf(this) : 0; var p = MenuMotion.Progress(Owner, idx);
+        g.TranslateTransform(0, (1 - p) * Ui.S(8));
         var full = Owner != null ? Owner.Width - Bounds.Left - Ui.S(2) : Width;
-        var r = new Rectangle(Ui.S(6), Ui.S(3), full - Ui.S(12), Height - Ui.S(8));
-        Ui.FillRound(g, Ui.Bg, r, Ui.S(9));
-        Ui.DrawRound(g, Ui.Border, r, Ui.S(9));
+        var r = new RectangleF(Ui.S(8), Ui.S(4), full - Ui.S(16), Height - Ui.S(10));
+        Glass.Paint(g, r, Ui.S(14), GlassKind.Secondary, 1.6F * p);
         var x = r.X + Ui.S(14);
-        if (Initials != null)
-        {
-            var d = Ui.S(32); var av = new Rectangle(x, r.Y + (r.Height - d) / 2, d, d);
-            Ui.FillRound(g, Ui.Blend(Ui.Bg, AvatarColor, 0.22F), av, Ui.S(9));
-            var isz = Ui.Measure(g, Initials, Ui.InitialsFont);
-            TextRenderer.DrawText(g, Initials, Ui.InitialsFont, new Point(av.X + (d - isz.Width) / 2, av.Y + (d - isz.Height) / 2), Themes.IsLight ? Ui.Blend(AvatarColor, Color.Black, 0.45F) : Ui.Blend(AvatarColor, Color.White, 0.25F), Ui.Flags);
-            x = av.Right + Ui.S(12);
-        }
+        var chip = new RectangleF(x, r.Y + (r.Height - Ui.S(34)) / 2F, Ui.S(34), Ui.S(34));
+        Glass.Paint(g, chip, Ui.S(11), GlassKind.Secondary, 1.8F * p);
+        if (Initials != null) GText.Draw(g, Initials, Ui.InitialsFont, Rectangle.Round(chip), GlassPaint.A(Ui.Text, p), true);
         else
         {
-            var ds = Ui.S(10); var dr = new Rectangle(x, r.Y + Ui.S(15), ds, ds);
-            using (var halo = new SolidBrush(Color.FromArgb(50, Dot))) g.FillEllipse(halo, Rectangle.Inflate(dr, Ui.S(3), Ui.S(3)));
-            using (var b = new SolidBrush(Dot)) g.FillEllipse(b, dr);
-            x = dr.Right + Ui.S(12);
+            var ds = Ui.S(10); var dr = new RectangleF(chip.X + (chip.Width - ds) / 2, chip.Y + (chip.Height - ds) / 2, ds, ds);
+            using (var halo = new SolidBrush(Color.FromArgb((int)(60 * p), Dot))) g.FillEllipse(halo, RectangleF.Inflate(dr, Ui.S(4), Ui.S(4)));
+            using (var b = new SolidBrush(GlassPaint.A(Dot, p))) g.FillEllipse(b, dr);
         }
-        var w = r.Right - x - Ui.S(10);
-        TextRenderer.DrawText(g, Title ?? "", Ui.NameFont, new Rectangle(x, r.Y + Ui.S(9), w, Ui.S(20)), Ui.Text, Ui.Flags | TextFormatFlags.EndEllipsis);
-        TextRenderer.DrawText(g, Subtitle ?? "", Ui.SmallFont, new Rectangle(x, r.Y + Ui.S(30), w, Ui.S(18)), Ui.Muted, Ui.Flags | TextFormatFlags.EndEllipsis);
+        x = chip.Right + Ui.S(12);
+        var w = (int)(r.Right - x - Ui.S(12));
+        GText.Draw(g, Title ?? "", Ui.NameFont, new Rectangle((int)x, (int)r.Y + Ui.S(10), w, Ui.S(20)), GlassPaint.A(Ui.Text, p));
+        GText.Draw(g, Subtitle ?? "", Ui.SmallFont, new Rectangle((int)x, (int)r.Y + Ui.S(31), w, Ui.S(18)), GlassPaint.A(Ui.Muted, p));
+    }
+}
+
+// Opening animation for the floating menus: items fade and rise in with a short stagger.
+internal static class MenuMotion
+{
+    static readonly Dictionary<ToolStrip, long> started = new Dictionary<ToolStrip, long>();
+    static readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+    static readonly System.Windows.Forms.Timer timer = MakeTimer();
+
+    static System.Windows.Forms.Timer MakeTimer()
+    {
+        var t = new System.Windows.Forms.Timer { Interval = 15 };
+        t.Tick += delegate
+        {
+            var done = new List<ToolStrip>();
+            foreach (var kv in started)
+            {
+                if (kv.Key.IsDisposed || !kv.Key.Visible || clock.ElapsedMilliseconds - kv.Value > 700) { done.Add(kv.Key); continue; }
+                kv.Key.Invalidate();
+            }
+            foreach (var d in done) { started.Remove(d); if (!d.IsDisposed) d.Invalidate(); }
+            if (started.Count == 0) t.Stop();
+        };
+        return t;
+    }
+
+    public static void Begin(ToolStrip m)
+    {
+        if (Motion.Reduced) return;
+        started[m] = clock.ElapsedMilliseconds; timer.Start();
+    }
+
+    public static float Progress(ToolStrip m, int index)
+    {
+        long t0;
+        if (m == null || Motion.Reduced || !started.TryGetValue(m, out t0)) return 1F;
+        var t = (clock.ElapsedMilliseconds - t0 - Math.Min(index, 12) * 16) / 220F;
+        return Ease.OutCubic(t);
     }
 }
 
 internal sealed class MenuRenderer : ToolStripRenderer
 {
     static int S(float v) { return Ui.S(v); }
-    static readonly Color DangerColor = Color.FromArgb(232, 84, 100);
     readonly bool win11 = Glyphs.IsWindows11;
 
-    protected override void Initialize(ToolStrip toolStrip) { base.Initialize(toolStrip); }
+    // Floating glass panel: dense tint over the compositor blur (opaque when there is no blur).
+    static Color PanelTint { get { return Backdrop.Active ? (Themes.IsLight ? Color.FromArgb(214, 248, 249, 253) : Color.FromArgb(200, 22, 25, 36)) : (Themes.IsLight ? Color.FromArgb(250, 251, 254) : Color.FromArgb(30, 33, 46)); } }
 
-    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) { e.Graphics.Clear(Ui.Surface); }
+    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+    {
+        var g = e.Graphics;
+        g.CompositingMode = CompositingMode.SourceCopy; g.Clear(PanelTint); g.CompositingMode = CompositingMode.SourceOver;
+        // a faint top light so the panel reads as glass, not as a flat sheet
+        using (var b = new LinearGradientBrush(new Rectangle(0, -1, e.ToolStrip.Width, S(60)), Color.FromArgb(Themes.IsLight ? 120 : 20, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90F))
+            g.FillRectangle(b, 0, 0, e.ToolStrip.Width, S(60));
+    }
 
     protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
     {
-        // Windows 11 draws a rounded DWM border (see MenuKit.Style); older Windows gets a flat 1px border.
-        if (win11) return;
-        using (var p = new Pen(Ui.BorderStrong)) e.Graphics.DrawRectangle(p, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
+        var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var path = Ui.Round(new RectangleF(0.5F, 0.5F, e.ToolStrip.Width - 1.5F, e.ToolStrip.Height - 1.5F), win11 ? S(8) : 1))
+        using (var lb = new LinearGradientBrush(new Rectangle(0, -1, e.ToolStrip.Width, e.ToolStrip.Height + 2), Color.FromArgb(Themes.IsLight ? 230 : 90, 255, 255, 255), Color.FromArgb(Themes.IsLight ? 60 : 24, Themes.IsLight ? 0 : 255, Themes.IsLight ? 0 : 255, Themes.IsLight ? 0 : 255), 90F))
+        using (var pen = new Pen(lb, 1F)) g.DrawPath(pen, path);
     }
 
     protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
@@ -292,68 +342,74 @@ internal sealed class MenuRenderer : ToolStripRenderer
     // Items can be narrower than the dropdown; use the dropdown's width for right-aligned parts.
     static int FullWidth(ToolStripItem item) { return item.Owner != null ? item.Owner.Width - item.Bounds.Left - S(2) : item.Width; }
 
+    static float P(ToolStripItem item) { return item.Owner == null ? 1F : MenuMotion.Progress(item.Owner, item.Owner.Items.IndexOf(item)); }
+
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
     {
         if (!e.Item.Selected || !e.Item.Enabled || e.Item is MenuStatusItem || e.Item is MenuCaption) return;
         var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
         var entry = e.Item as MenuEntry;
-        var r = new Rectangle(S(5), 1, FullWidth(e.Item) - S(10), e.Item.Height - 2);
-        var fill = entry != null && entry.Danger ? Color.FromArgb(Themes.IsLight ? 30 : 46, DangerColor) : Ui.SurfaceHover;
-        Ui.FillRound(g, fill, r, S(7));
+        var r = new RectangleF(S(6), 1, FullWidth(e.Item) - S(12), e.Item.Height - 2);
+        if (entry != null && entry.Danger)
+            using (var path = Ui.Round(r, S(11))) using (var b = new SolidBrush(Color.FromArgb(Themes.IsLight ? 36 : 70, Ui.Danger))) g.FillPath(b, path);
+        else Glass.Paint(g, r, S(11), GlassKind.Selected, 1F, 0.3F);
     }
 
     protected override void OnRenderItemImage(ToolStripItemImageRenderEventArgs e)
     {
         var entry = e.Item as MenuEntry;
         if (entry == null) return;
-        var c = !entry.Enabled ? Ui.Faint : entry.Danger ? DangerColor : entry.Selected ? Ui.Text : Ui.Muted;
-        var size = S(16);
-        var ir = e.ImageRectangle;
-        var r = new RectangleF(ir.X + (ir.Width - size) / 2F + S(4), e.Item.ContentRectangle.Y + (e.Item.ContentRectangle.Height - size) / 2F, size, size);
-        Glyphs.Draw(e.Graphics, entry.Glyph, r, c);
+        var g = e.Graphics; var p = P(e.Item); g.SmoothingMode = SmoothingMode.AntiAlias;
+        var c = !entry.Enabled ? Ui.Faint : entry.Danger ? Ui.Danger : entry.Selected ? Ui.Text : Ui.Muted;
+        var chipD = S(26); var cy = e.Item.ContentRectangle.Y + e.Item.ContentRectangle.Height / 2F;
+        var chip = new RectangleF(S(14), cy - chipD / 2F + (1 - p) * S(8), chipD, chipD);
+        Glass.Paint(g, chip, S(8), GlassKind.Secondary, (entry.Selected ? 1.8F : 1.3F) * p);
+        Glyphs.Draw(g, entry.Glyph, RectangleF.Inflate(chip, -S(5.5F), -S(5.5F)), GlassPaint.A(c, p));
     }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
         var g = e.Graphics;
-        if (e.Item is MenuStatusItem) return;
-        if (e.Item is MenuCaption)
-        {
-            TextRenderer.DrawText(g, e.Text, Ui.HeaderFont, new Point(S(16), e.TextRectangle.Y + S(2)), Ui.Faint, Ui.Flags);
-            return;
-        }
+        if (e.Item is MenuStatusItem || e.Item is MenuCaption) return;
+        var p = P(e.Item); var dy = (int)((1 - p) * S(8));
         var entry = e.Item as MenuEntry;
         var mi = e.Item as ToolStripMenuItem;
         var isShortcut = mi != null && !string.IsNullOrEmpty(mi.ShortcutKeyDisplayString) && e.Text == mi.ShortcutKeyDisplayString;
+        var h = e.Item.ContentRectangle.Height; var top = e.Item.ContentRectangle.Y + dy;
         if (isShortcut)
         {
-            // Shortcut as keycaps, right aligned.
+            // shortcut as small glass keycaps, right aligned
             var parts = e.Text.Split('+');
             var widths = new List<int>(); var total = 0;
-            foreach (var part in parts) { var w = Ui.Measure(g, part, Ui.KeyFont).Width + S(10); widths.Add(w); total += w + S(3); }
-            var x = FullWidth(e.Item) - S(14) - total + S(3);
-            var y = e.Item.ContentRectangle.Y + (e.Item.ContentRectangle.Height - S(18)) / 2;
-            for (var i = 0; i < parts.Length; i++) { Ui.DrawKeycap(g, parts[i], x, y); x += widths[i] + S(3); }
+            foreach (var part in parts) { var w = GText.Measure(part, Ui.KeyFont).Width + S(12); widths.Add(w); total += w + S(4); }
+            var x = FullWidth(e.Item) - S(16) - total + S(4);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            for (var i = 0; i < parts.Length; i++)
+            {
+                var kr = new RectangleF(x, top + (h - S(20)) / 2F, widths[i], S(20));
+                Glass.Paint(g, kr, S(6), GlassKind.Secondary, 1.6F * p);
+                GText.Draw(g, parts[i], Ui.KeyFont, Rectangle.Round(kr), GlassPaint.A(Ui.Muted, p), true);
+                x += widths[i] + S(4);
+            }
             return;
         }
-        var color = !e.Item.Enabled ? Ui.Faint : entry != null && entry.Danger ? DangerColor : Ui.Text;
-        var tr = e.TextRectangle; tr.X += S(6);
-        TextRenderer.DrawText(g, e.Text, Ui.MenuFont, tr, color, Ui.Flags | TextFormatFlags.VerticalCenter);
+        var color = !e.Item.Enabled ? Ui.Faint : entry != null && entry.Danger ? Ui.Danger : Ui.Text;
+        var tr = new Rectangle(S(52), top, FullWidth(e.Item) - S(52) - S(14), h);
+        GText.Draw(g, e.Text, Ui.MenuFont, tr, GlassPaint.A(color, p));
         if (entry != null && !string.IsNullOrEmpty(entry.Badge))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            var bw = Ui.Measure(g, entry.Badge, Ui.KeyFont).Width + S(12);
-            var br = new Rectangle(FullWidth(e.Item) - S(14) - bw, e.Item.ContentRectangle.Y + (e.Item.ContentRectangle.Height - S(18)) / 2, bw, S(18));
-            Ui.FillRound(g, Color.FromArgb(Themes.IsLight ? 30 : 60, Ui.Accent), br, S(9));
-            var bs = Ui.Measure(g, entry.Badge, Ui.KeyFont);
-            TextRenderer.DrawText(g, entry.Badge, Ui.KeyFont, new Point(br.X + (bw - bs.Width) / 2, br.Y + (br.Height - bs.Height) / 2), Ui.Accent, Ui.Flags);
+            var bw = GText.Measure(entry.Badge, Ui.KeyFont).Width + S(16);
+            var br = new RectangleF(FullWidth(e.Item) - S(16) - bw, top + (h - S(20)) / 2F, bw, S(20));
+            Glass.Paint(g, br, S(10), GlassKind.Secondary, 1.8F * p);
+            GText.Draw(g, entry.Badge, Ui.KeyFont, Rectangle.Round(br), GlassPaint.A(Ui.Text, p), true);
         }
     }
 
     protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
     {
         var y = e.Item.Height / 2;
-        using (var p = new Pen(Ui.Border)) e.Graphics.DrawLine(p, S(12), y, e.Item.Width - S(12), y);
+        using (var p = new Pen(Color.FromArgb(Themes.IsLight ? 36 : 30, Themes.IsLight ? Color.Black : Color.White))) e.Graphics.DrawLine(p, S(18), y, e.Item.Width - S(18), y);
     }
 
     protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e) { e.ArrowColor = Ui.Muted; base.OnRenderArrow(e); }
@@ -367,18 +423,18 @@ internal static class MenuKit
         m.ShowImageMargin = true; m.ShowCheckMargin = false;
         m.ImageScalingSize = new Size(Ui.S(18), Ui.S(18));
         m.Font = Ui.MenuFont;
-        m.Padding = new Padding(0, Ui.S(5), 0, Ui.S(5));
-        m.DropShadowEnabled = true;
+        m.Padding = new Padding(0, Ui.S(6), 0, Ui.S(6));
+        m.DropShadowEnabled = !Backdrop.Supported;   // Windows 11 draws its own shadow around the backdrop panel
         m.HandleCreated += delegate { ApplyFrame(m); };
-        m.Opening += delegate { ApplyFrame(m); };
+        m.Opening += delegate { ApplyFrame(m); MenuMotion.Begin(m); };
         return m;
     }
 
-    // Gives every item the same explicit width (the widest preferred width, min 290 px) so
-    // full-width parts (status card, hover pill, badges, keycaps) are never clipped.
+    // Gives every item the same explicit width (the widest preferred width, min 300 px) so
+    // full-width parts (status tile, hover plate, badges, keycaps) are never clipped.
     public static void Fit(ToolStrip m)
     {
-        var w = Ui.S(290);
+        var w = Ui.S(300);
         foreach (ToolStripItem it in m.Items) if (!(it is ToolStripSeparator)) w = Math.Max(w, it.GetPreferredSize(Size.Empty).Width);
         w = Math.Min(w, Ui.S(420));
         // WinForms needs both: MinimumSize widens the dropdown, explicit item sizes widen the items.
@@ -395,9 +451,9 @@ internal static class MenuKit
         if (!m.IsHandleCreated) return;
         try
         {
+            Backdrop.Apply(m.Handle, !Themes.IsLight);     // same compositor acrylic as the main window
             var corner = 2; NativeMethods.DwmSetWindowAttribute(m.Handle, 33, ref corner, 4);
-            var border = Ui.BorderStrong.R | (Ui.BorderStrong.G << 8) | (Ui.BorderStrong.B << 16);
-            NativeMethods.DwmSetWindowAttribute(m.Handle, 34, ref border, 4);
+            var border = Themes.IsLight ? 0x00D8D2CC : 0x00504C46; NativeMethods.DwmSetWindowAttribute(m.Handle, 34, ref border, 4);
         }
         catch { }
     }

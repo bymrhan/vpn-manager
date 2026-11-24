@@ -152,11 +152,13 @@ internal static class PinStore
     static string FilePath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenVpnQuickSearch", "pinned.txt"); } }
     public static HashSet<string> Load()
     {
+        if (Demo.On) return Demo.Pins();
         try { if (File.Exists(FilePath)) return new HashSet<string>(File.ReadAllLines(FilePath, Encoding.UTF8).Where(l => l.Trim().Length > 0)); } catch { }
         return new HashSet<string>();
     }
     public static void Save(HashSet<string> ids)
     {
+        if (Demo.On) return;
         try { Directory.CreateDirectory(Path.GetDirectoryName(FilePath)); File.WriteAllLines(FilePath, ids.ToArray(), Encoding.UTF8); } catch { }
     }
 }
@@ -212,24 +214,39 @@ internal static class NativeMethods
 // App mark and .ico generation share one drawing so the icon matches the header.
 internal static class IconArt
 {
-    public static void DrawMark(Graphics g, RectangleF r)
+    // App mark: sapphire glass tile with the shield-lock logo from the asset library.
+    public static void DrawMark(Graphics g, RectangleF r) { DrawMark(g, r, null); }
+
+    // badge: null, "connected", "connecting", "error" (tray icon states)
+    public static void DrawMark(Graphics g, RectangleF r, string badge)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var path = Ui.Round(r, r.Width * 0.28F))
-        using (var b = new LinearGradientBrush(new RectangleF(r.X, r.Y, r.Width, r.Height + 1), Color.FromArgb(70, 132, 255), Ui.Brand, 60F)) g.FillPath(b, path);
-        float k = r.Width / 34F, ox = r.X, oy = r.Y;
-        Func<float, float, PointF> P = (px, py) => new PointF(ox + px * k, oy + py * k);
-        using (var path = new GraphicsPath())
+        using (var path = Ui.Round(r, r.Width * 0.26F))
+        using (var b = new LinearGradientBrush(new RectangleF(r.X, r.Y, r.Width, r.Height + 1), Color.FromArgb(0x7F, 0xA3, 0xCF), Color.FromArgb(0x3C, 0x5C, 0x86), 90F)) g.FillPath(b, path);
+        using (var path = Ui.Round(new RectangleF(r.X + 0.5F, r.Y + 0.5F, r.Width - 1, r.Height - 1), r.Width * 0.26F))
+        using (var pen = new Pen(Color.FromArgb(120, 0xBF, 0xD4, 0xEE), Math.Max(1F, r.Width / 32F))) g.DrawPath(pen, path);
+        var inset = r.Width * 0.2F;
+        Assets.Draw(g, "app-logo", RectangleF.Inflate(r, -inset, -inset), Color.FromArgb(246, 249, 253), r.Width < 24 ? 1.5F : 1.2F);
+        if (badge == null) return;
+        var d = r.Width * 0.46F; var br = new RectangleF(r.Right - d, r.Bottom - d, d, d);
+        var tone = badge == "connected" ? Color.FromArgb(0x64, 0xBD, 0x96) : badge == "error" ? Color.FromArgb(0xC4, 0x78, 0x78) : Color.FromArgb(0xC4, 0xA1, 0x6E);
+        using (var b = new SolidBrush(Color.FromArgb(0x1C, 0x22, 0x2C))) g.FillEllipse(b, RectangleF.Inflate(br, d * 0.1F, d * 0.1F));
+        using (var b = new SolidBrush(tone)) g.FillEllipse(b, br);
+        var ic = RectangleF.Inflate(br, -d * 0.2F, -d * 0.2F);
+        Assets.Draw(g, badge == "connected" ? "state-connected" : badge == "error" ? "state-error" : "state-connecting", ic, Color.FromArgb(0x1C, 0x22, 0x2C), 1.6F);
+    }
+
+    // Tray icon for a connection state (disposes nothing: caller owns the returned Icon and must DestroyIcon it).
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
+    public static void Release(Icon icon) { try { if (icon != null) { DestroyIcon(icon.Handle); icon.Dispose(); } } catch { } }
+    public static Icon TrayIcon(string badge)
+    {
+        var size = SystemInformation.SmallIconSize.Width <= 16 ? 32 : 48;
+        using (var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
         {
-            path.AddLine(P(17, 6.5F), P(26.5F, 9.8F));
-            path.AddLine(P(26.5F, 9.8F), P(26.5F, 16.5F));
-            path.AddBezier(P(26.5F, 16.5F), P(26.5F, 22.5F), P(22F, 26.2F), P(17, 28.3F));
-            path.AddBezier(P(17, 28.3F), P(12F, 26.2F), P(7.5F, 22.5F), P(7.5F, 16.5F));
-            path.AddLine(P(7.5F, 16.5F), P(7.5F, 9.8F));
-            path.CloseFigure();
-            using (var b = new SolidBrush(Color.White)) g.FillPath(b, path);
+            using (var g = Graphics.FromImage(bmp)) { g.Clear(Color.Transparent); DrawMark(g, new RectangleF(1, 1, size - 2, size - 2), badge); }
+            return Icon.FromHandle(bmp.GetHicon());
         }
-        Ui.DrawMagnifier(g, Ui.Brand, ox + 12.3F * k, oy + 11.5F * k, 9.5F * k);
     }
 
     public static Bitmap Render(int size)
@@ -239,7 +256,7 @@ internal static class IconArt
         {
             g.Clear(Color.Transparent); g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             var pad = size <= 16 ? 0F : size * 0.04F;
-            DrawMark(g, new RectangleF(pad, pad, size - 2 * pad - 0.5F, size - 2 * pad - 0.5F));
+            DrawMark(g, new RectangleF(pad, pad, size - 2 * pad - 0.5F, size - 2 * pad - 0.5F), null);
         }
         return bmp;
     }
@@ -293,39 +310,62 @@ internal static class Ui
     public static float Scale = 1f;
     public static int S(float v) { return (int)Math.Round(v * Scale); }
 
-    // Deep navy with a warm orange accent (see Themes.Apply for the light palette).
-    public static Color Bg = Color.FromArgb(14, 18, 29);
-    public static Color Surface = Color.FromArgb(23, 29, 43);
-    public static Color SurfaceHover = Color.FromArgb(29, 36, 53);
-    public static Color SelectedFill = Color.FromArgb(52, 38, 32);
-    public static Color Border = Color.FromArgb(36, 44, 62);
-    public static Color BorderStrong = Color.FromArgb(55, 65, 88);
-    public static Color Brand = Color.FromArgb(22, 82, 184);
-    public static Color Accent = Color.FromArgb(247, 146, 50);
-    public static Color Accent2 = Color.FromArgb(232, 108, 28);
-    public static Color Text = Color.FromArgb(240, 243, 248);
-    public static Color Muted = Color.FromArgb(152, 162, 183);
-    public static Color Faint = Color.FromArgb(102, 112, 134);
-    public static Color Gold = Color.FromArgb(255, 194, 76);
-    public static Color Success = Color.FromArgb(70, 205, 130);
+    // Liquid Glass palette (set by Themes.Apply). Neutral surfaces, one system-blue accent.
+    public static Color Bg = Color.FromArgb(24, 26, 34);
+    public static Color Surface = Color.FromArgb(34, 37, 48);
+    public static Color SurfaceHover = Color.FromArgb(44, 48, 62);
+    public static Color SelectedFill = Color.FromArgb(38, 60, 100);
+    public static Color Border = Color.FromArgb(58, 62, 78);
+    public static Color BorderStrong = Color.FromArgb(84, 90, 110);
+    public static Color Brand = Color.FromArgb(10, 100, 220);
+    public static Color Accent = Color.FromArgb(10, 132, 255);
+    public static Color Accent2 = Color.FromArgb(64, 156, 255);
+    public static Color Text = Color.FromArgb(245, 246, 250);
+    public static Color Muted = Color.FromArgb(166, 171, 186);
+    public static Color Faint = Color.FromArgb(118, 124, 142);
+    public static Color Gold = Color.FromArgb(255, 204, 0);
+    public static Color Success = Color.FromArgb(48, 209, 88);
+    public static Color Danger = Color.FromArgb(255, 69, 58);
+    public static Color Warning = Color.FromArgb(255, 159, 10);
+    public static Color Field = Color.FromArgb(0x26, 0x30, 0x3C);
+    public static Color Highlight = Color.FromArgb(0x8B, 0xAE, 0xD9);
+    public static Color GlassPrimary = Color.FromArgb(0x30, 0x39, 0x45), GlassSecondary = Color.FromArgb(0x26, 0x30, 0x3C), WindowBg = Color.FromArgb(0x1C, 0x22, 0x2C);
 
-    public static readonly Font TitleFont = new Font("Segoe UI Semibold", 12.5F);
-    public static readonly Font NameFont = new Font("Segoe UI Semibold", 10.25F);
-    public static readonly Font SubFont = new Font("Segoe UI", 9F);
-    public static readonly Font SmallFont = new Font("Segoe UI", 8.25F);
-    public static readonly Font HeaderFont = new Font("Segoe UI Semibold", 7.75F);
-    public static readonly Font InitialsFont = new Font("Segoe UI Semibold", 9.25F);
-    public static readonly Font InputFont = new Font("Segoe UI", 11F);
-    public static readonly Font KeyFont = new Font("Segoe UI Semibold", 7.5F);
-    public static readonly Font KeyFontLarge = new Font("Segoe UI Semibold", 9F);
-    public static readonly Font MenuFont = new Font("Segoe UI", 9.5F);
+    // Segoe UI Variable (Windows 11) first, then Inter if installed, then Segoe UI.
+    static string Pick(params string[] names)
+    {
+        try { var have = new HashSet<string>(new System.Drawing.Text.InstalledFontCollection().Families.Select(f => f.Name), StringComparer.OrdinalIgnoreCase); foreach (var n in names) if (have.Contains(n)) return n; } catch { }
+        return names[names.Length - 1];
+    }
+    public static readonly string Family = Pick("Segoe UI Variable Text", "Inter", "Segoe UI");
+    public static readonly string FamilySemi = Pick("Segoe UI Variable Text Semibold", "Inter SemiBold", "Segoe UI Semibold");
+    public static readonly string FamilyMono = Pick("Segoe UI Variable Text", "Segoe UI");
+
+    public static readonly Font TitleFont = new Font(FamilySemi, 12.5F);
+    public static readonly Font NameFont = new Font(FamilySemi, 10.25F);
+    public static readonly Font SubFont = new Font(Family, 9F);
+    public static readonly Font SmallFont = new Font(Family, 8.25F);
+    public static readonly Font HeaderFont = new Font(FamilySemi, 7.75F);
+    public static readonly Font InitialsFont = new Font(FamilySemi, 9.25F);
+    public static readonly Font AvatarFont = new Font(FamilySemi, 11F);
+    public static readonly Font InputFont = new Font(Family, 11.5F);
+    public static readonly Font KeyFont = new Font(FamilySemi, 7.5F);
+    public static readonly Font KeyFontLarge = new Font(FamilySemi, 8.5F);
+    public static readonly Font MenuFont = new Font(Family, 9.5F);
+    public static readonly Font RowNameFont = new Font(FamilySemi, 10.5F);
+    public static readonly Font SectionFont = new Font(FamilySemi, 7.75F);
+    public static readonly Font SegFont = new Font(Family, 9F);
+    public static readonly Font SegSelFont = new Font(FamilySemi, 9F);
+    public static readonly Font IslandName = new Font(FamilySemi, 9.5F);
+    public static readonly Font IslandMono = new Font(FamilyMono, 9F);
 
     public const TextFormatFlags Flags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
 
+    // Low-saturation slate hues; the same name always gets the same one.
     static readonly Color[] AvatarColors =
     {
-        Color.FromArgb(96, 150, 255), Color.FromArgb(160, 120, 250), Color.FromArgb(56, 196, 166), Color.FromArgb(244, 154, 82),
-        Color.FromArgb(236, 104, 136), Color.FromArgb(80, 188, 236), Color.FromArgb(160, 196, 80), Color.FromArgb(222, 132, 222)
+        Color.FromArgb(104, 136, 178), Color.FromArgb(128, 118, 172), Color.FromArgb(112, 104, 150), Color.FromArgb(96, 142, 160),
+        Color.FromArgb(124, 150, 112), Color.FromArgb(166, 132, 108), Color.FromArgb(150, 110, 130), Color.FromArgb(104, 138, 136)
     };
 
     public static Color AvatarColor(string key)
@@ -363,98 +403,14 @@ internal static class Ui
         return s;
     }
 
-    // Keycap such as "Esc" or "Ctrl+Alt+V". Returns its width.
+    // Keycap such as "Esc" or "Ctrl+Alt+V": a small glass chip. Returns its width.
     public static int DrawKeycap(Graphics g, string text, int x, int y)
     {
         var sz = Measure(g, text, KeyFont);
         var r = new Rectangle(x, y, sz.Width + S(10), S(18));
-        var old = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
-        FillRound(g, Blend(Bg, Accent, 0.06F), r, S(4));
-        DrawRound(g, Blend(Accent, Bg, 0.4F), r, S(4));
-        g.SmoothingMode = old;
-        TextRenderer.DrawText(g, text, KeyFont, new Point(x + S(5), y + (r.Height - sz.Height) / 2), Text, Flags);
+        Glass.Paint(g, r, S(5), GlassKind.Secondary, 1.6F);
+        GText.Draw(g, text, KeyFont, r, Muted, true);
         return r.Width;
-    }
-
-    // Decorative glowing curves are expensive (wide gradient strokes, ~20 ms), so they are
-    // rendered once per size/theme into a bitmap and blitted afterwards (~0.1 ms).
-    static readonly Dictionary<string, Bitmap> waveCache = new Dictionary<string, Bitmap>();
-
-    public static void DrawWaves(Graphics g, Rectangle r, bool top)
-    {
-        if (r.Width <= 0 || r.Height <= 0) return;
-        var key = r.Width + "x" + r.Height + (top ? "t" : "b") + Accent.ToArgb() + (Themes.IsLight ? "L" : "D");
-        Bitmap bmp;
-        if (!waveCache.TryGetValue(key, out bmp))
-        {
-            if (waveCache.Count >= 6) { foreach (var b in waveCache.Values) b.Dispose(); waveCache.Clear(); }
-            bmp = new Bitmap(r.Width, r.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-            using (var bg = Graphics.FromImage(bmp)) RenderWaves(bg, new Rectangle(0, 0, r.Width, r.Height), top);
-            waveCache[key] = bmp;
-        }
-        g.DrawImageUnscaled(bmp, r.X, r.Y);
-    }
-
-    // Points along the main top wave (same geometry as RenderWaves), for the moving shimmer.
-    public static PointF[] WavePoints(Rectangle r)
-    {
-        using (var path = new GraphicsPath())
-        {
-            float y0 = r.Y + r.Height * 0.95F, y1 = r.Y - r.Height * 0.05F;
-            path.AddBezier(r.X + r.Width * 0.35F, y0, r.X + r.Width * 0.62F, y0, r.X + r.Width * 0.72F, y1 + r.Height * 0.25F, r.Right + 4, y1);
-            path.Flatten(null, 0.5F);
-            return path.PathPoints;
-        }
-    }
-
-    static Bitmap glowSprite; static int glowKey;
-    // Soft round glow (pre-rendered) used for moving highlights.
-    public static Bitmap GlowSprite
-    {
-        get
-        {
-            var key = Accent.ToArgb() ^ S(28);
-            if (glowSprite != null && glowKey == key) return glowSprite;
-            if (glowSprite != null) glowSprite.Dispose();
-            var d = S(28); glowSprite = new Bitmap(d, d, System.Drawing.Imaging.PixelFormat.Format32bppPArgb); glowKey = key;
-            using (var g = Graphics.FromImage(glowSprite)) using (var path = new GraphicsPath())
-            {
-                path.AddEllipse(0, 0, d, d);
-                using (var b = new PathGradientBrush(path) { CenterColor = Color.FromArgb(230, Blend(Accent, Color.White, 0.5F)), SurroundColors = new[] { Color.FromArgb(0, Accent) } }) g.FillPath(b, path);
-            }
-            return glowSprite;
-        }
-    }
-
-    static void RenderWaves(Graphics g, Rectangle r, bool top)
-    {
-        var old = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
-        var strength = Themes.IsLight ? 0.55F : 1F;
-        for (var n = 0; n < 2; n++)
-        {
-            using (var path = new GraphicsPath())
-            {
-                if (top)
-                {
-                    float y0 = r.Y + r.Height * (0.95F - n * 0.18F), y1 = r.Y - r.Height * 0.05F;
-                    path.AddBezier(r.X + r.Width * (0.35F + n * 0.1F), y0, r.X + r.Width * 0.62F, y0, r.X + r.Width * 0.72F, y1 + r.Height * 0.25F, r.Right + 4, y1);
-                }
-                else
-                {
-                    float y0 = r.Bottom - r.Height * (0.08F + n * 0.12F);
-                    path.AddBezier(r.X - 4, y0, r.X + r.Width * 0.35F, y0 + r.Height * 0.05F, r.X + r.Width * 0.62F, r.Y + r.Height * (0.55F - n * 0.2F), r.Right + 4, r.Y + r.Height * (0.18F - n * 0.1F));
-                }
-                var a0 = top ? 0 : 0; var bounds = path.GetBounds();
-                for (var w = 3; w >= 0; w--)
-                {
-                    var alpha = (int)(strength * (w == 0 ? 150 - n * 50 : (26 - w * 5) * (1 - n * 0.4F)));
-                    using (var br = new LinearGradientBrush(new RectangleF(bounds.X - 1, bounds.Y - 1, bounds.Width + 2, bounds.Height + 2), Color.FromArgb(a0, Accent), Color.FromArgb(Math.Max(0, alpha), Accent), LinearGradientMode.Horizontal))
-                    using (var pen = new Pen(br, w == 0 ? S(1.3F) : S(1.3F + w * 2.4F)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                        g.DrawPath(pen, path);
-                }
-            }
-        }
-        g.SmoothingMode = old;
     }
 
     public static PointF[] Star(float cx, float cy, float r)
@@ -522,160 +478,6 @@ internal sealed class DarkRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e) { e.ArrowColor = Ui.Muted; base.OnRenderArrow(e); }
 }
 
-// =====================================================================
-// Controls
-// =====================================================================
-
-internal enum HeaderGlyph { More, Close, Minimize }
-
-internal sealed class HeaderButton : Control
-{
-    bool hover;
-    public HeaderGlyph Glyph { get; set; }
-    public HeaderButton(HeaderGlyph glyph)
-    {
-        Glyph = glyph; Size = new Size(Ui.S(36), Ui.S(32)); Cursor = Cursors.Hand; TabStop = false; BackColor = Ui.Bg;
-        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true); SetStyle(ControlStyles.Selectable, false);
-        MouseEnter += delegate { hover = true; Invalidate(); }; MouseLeave += delegate { hover = false; Invalidate(); };
-    }
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; if (BackColor.A == 255) g.Clear(BackColor);
-        if (hover) Ui.FillRound(g, Glyph == HeaderGlyph.Close ? Color.FromArgb(196, 43, 28) : Ui.SurfaceHover, new RectangleF(0, 0, Width - 1, Height - 1), Ui.S(8));
-        var c = hover ? (Glyph == HeaderGlyph.Close ? Color.White : Ui.Text) : Ui.Muted;
-        float cx = Width / 2F, cy = Height / 2F;
-        if (Glyph == HeaderGlyph.More)
-            using (var b = new SolidBrush(c)) { float r = Ui.S(1.8F), gap = Ui.S(6F); for (var i = -1; i <= 1; i++) g.FillEllipse(b, cx + i * gap - r, cy - r, r * 2, r * 2); }
-        else
-            using (var p = new Pen(c, Ui.S(1.5F)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-            {
-                var k = Ui.S(6F);
-                if (Glyph == HeaderGlyph.Minimize) g.DrawLine(p, cx - k, cy, cx + k, cy);
-                else { k = Ui.S(5.5F); g.DrawLine(p, cx - k, cy - k, cx + k, cy + k); g.DrawLine(p, cx - k, cy + k, cx + k, cy - k); }
-            }
-    }
-}
-
-internal sealed class SearchBox : Control
-{
-    public readonly TextBox Input = new TextBox();
-    readonly Label placeholder = new Label();
-    bool focused, hoverClear, hover;
-    string hotkey = "Ctrl+Alt+V";
-    float glowAmt, hoverAmt; // animated focus / hover glow
-    readonly System.Windows.Forms.Timer fade = new System.Windows.Forms.Timer { Interval = 16 };
-
-    void AnimateGlow()
-    {
-        if (!fade.Enabled) fade.Start();
-    }
-
-    void FadeTick()
-    {
-        float tg = focused ? 1 : 0, th = hover ? 1 : 0;
-        glowAmt += (tg - glowAmt) * 0.2F; hoverAmt += (th - hoverAmt) * 0.2F;
-        if (Math.Abs(tg - glowAmt) < 0.01F && Math.Abs(th - hoverAmt) < 0.01F) { glowAmt = tg; hoverAmt = th; fade.Stop(); }
-        Invalidate(false);
-    }
-
-    protected override void Dispose(bool disposing) { if (disposing) fade.Dispose(); base.Dispose(disposing); }
-
-    public SearchBox()
-    {
-        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-        SetStyle(ControlStyles.Selectable, false);
-        BackColor = Ui.Bg; Cursor = Cursors.IBeam; TabStop = false;
-        Input.BorderStyle = BorderStyle.None; Input.Font = Ui.InputFont;
-        placeholder.Text = "Firma, IP veya kullanıcı adı ara…"; placeholder.AutoSize = true; placeholder.Font = Ui.InputFont; placeholder.Cursor = Cursors.IBeam; placeholder.UseMnemonic = false;
-        placeholder.Click += delegate { Input.Focus(); };
-        fade.Tick += delegate { FadeTick(); };
-        Input.GotFocus += delegate { focused = true; AnimateGlow(); };
-        Input.LostFocus += delegate { focused = false; AnimateGlow(); };
-        Input.TextChanged += delegate { placeholder.Visible = Input.TextLength == 0; Invalidate(); };
-        MouseEnter += delegate { hover = true; AnimateGlow(); };
-        Controls.Add(Input); Controls.Add(placeholder); placeholder.BringToFront();
-        RefreshTheme();
-    }
-
-    public string Hotkey { get { return hotkey; } set { hotkey = value ?? ""; Invalidate(); } }
-
-    public void RefreshTheme()
-    {
-        BackColor = Ui.Bg; Input.BackColor = FieldColor; Input.ForeColor = Ui.Text;
-        placeholder.BackColor = FieldColor; placeholder.ForeColor = Ui.Faint; Invalidate(true);
-    }
-
-    static Color FieldColor { get { return Ui.Blend(Ui.Bg, Ui.Surface, 0.55F); } }
-
-    Rectangle Box { get { var m = Ui.S(5); return new Rectangle(m, m, Width - 2 * m - 1, Height - 2 * m - 1); } }
-    Rectangle ClearRect { get { var b = Box; var d = Ui.S(24); return new Rectangle(b.Right - Ui.S(14) - d, b.Y + (b.Height - d) / 2, d, d); } }
-
-    protected override void OnLayout(LayoutEventArgs e)
-    {
-        base.OnLayout(e);
-        var b = Box; var x = b.X + Ui.S(48);
-        Input.Location = new Point(x, b.Y + (b.Height - Input.Height) / 2);
-        Input.Width = Math.Max(Ui.S(60), b.Right - x - Ui.S(130));
-        placeholder.Location = new Point(x - Ui.S(1), b.Y + (b.Height - placeholder.Height) / 2);
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.Clear(BackColor);
-        var b = Box; var radius = Ui.S(14);
-        // soft orange glow; stronger while typing
-        var glow = 0.35F + 0.2F * hoverAmt + 0.45F * glowAmt;
-        for (var i = 3; i >= 1; i--)
-        {
-            var grow = Ui.S(i * 1.4F);
-            using (var path = Ui.Round(new RectangleF(b.X - grow, b.Y - grow, b.Width + 2 * grow, b.Height + 2 * grow), radius + grow))
-            using (var p = new Pen(Color.FromArgb((int)(glow * (34 - i * 8)), Ui.Accent), Ui.S(1.6F))) g.DrawPath(p, path);
-        }
-        using (var path = Ui.Round(b, radius))
-        using (var br = new LinearGradientBrush(b, Ui.Blend(Ui.Bg, Ui.Surface, 0.75F), FieldColor, 90F)) g.FillPath(br, path);
-        Ui.DrawRound(g, focused ? Ui.Accent : Ui.Blend(Ui.Accent, Ui.Bg, 0.45F), b, radius, focused ? 1.6F : 1.2F);
-        // bright edge along the bottom, like a lit rim
-        using (var lb = new LinearGradientBrush(new Rectangle(b.X, b.Bottom - 2, b.Width, 2), Color.FromArgb(0, Ui.Accent), Color.FromArgb((int)(140 + 90 * glowAmt), Ui.Accent), LinearGradientMode.Horizontal))
-        using (var p = new Pen(lb, Ui.S(1.4F)))
-            g.DrawLine(p, b.X + radius, b.Bottom, b.Right - radius, b.Bottom);
-        Ui.DrawMagnifier(g, Ui.Accent, b.X + Ui.S(18), b.Y + (b.Height - Ui.S(18)) / 2F, Ui.S(18));
-
-        if (Input.TextLength > 0)
-        {
-            var c = ClearRect;
-            using (var br = new SolidBrush(hoverClear ? Ui.BorderStrong : Ui.Border)) g.FillEllipse(br, c);
-            using (var p = new Pen(hoverClear ? Ui.Text : Ui.Muted, Ui.S(1.6F)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-            {
-                var k = Ui.S(4.5F); float cx = c.X + c.Width / 2F, cy = c.Y + c.Height / 2F;
-                g.DrawLine(p, cx - k, cy - k, cx + k, cy + k); g.DrawLine(p, cx - k, cy + k, cx + k, cy - k);
-            }
-        }
-        else if (hotkey.Length > 0)
-        {
-            var label = hotkey.Replace("+", " + ");
-            var w = Ui.Measure(g, label, Ui.KeyFontLarge).Width + Ui.S(20);
-            var kr = new Rectangle(b.Right - Ui.S(14) - w, b.Y + (b.Height - Ui.S(28)) / 2, w, Ui.S(28));
-            Ui.FillRound(g, Ui.Blend(Ui.Bg, Ui.Accent, 0.06F), kr, Ui.S(7));
-            Ui.DrawRound(g, Ui.Blend(Ui.Accent, Ui.Bg, 0.35F), kr, Ui.S(7));
-            var sz = Ui.Measure(g, label, Ui.KeyFontLarge);
-            TextRenderer.DrawText(g, label, Ui.KeyFontLarge, new Point(kr.X + (kr.Width - sz.Width) / 2, kr.Y + (kr.Height - sz.Height) / 2), Ui.Text, Ui.Flags);
-        }
-    }
-
-    protected override void OnMouseMove(MouseEventArgs e)
-    {
-        var h = Input.TextLength > 0 && ClearRect.Contains(e.Location);
-        if (h != hoverClear) { hoverClear = h; Cursor = h ? Cursors.Hand : Cursors.IBeam; Invalidate(); }
-        base.OnMouseMove(e);
-    }
-    protected override void OnMouseLeave(EventArgs e) { hover = false; hoverClear = false; AnimateGlow(); base.OnMouseLeave(e); }
-    protected override void OnMouseDown(MouseEventArgs e)
-    {
-        if (Input.TextLength > 0 && ClearRect.Contains(e.Location)) Input.Clear();
-        Input.Focus();
-        base.OnMouseDown(e);
-    }
-}
 
 internal sealed class ListRow
 {
@@ -689,665 +491,6 @@ internal static class Ease
     public static float OutCubic(float t) { t = Clamp01(t); var u = 1 - t; return 1 - u * u * u; }
     public static float OutBack(float t) { t = Clamp01(t); const float c1 = 1.70158F, c3 = c1 + 1; var u = t - 1; return 1 + c3 * u * u * u + c1 * u * u; }
     public static float Frac(float v) { return v - (float)Math.Floor(v); }
-}
-
-// Custom-drawn, smooth-scrolling profile list: card rows, section headers with icons,
-// time pills, per-row connect button, orange accent, and an animation layer
-// (row entrance, hover/selection fades, connect / success / failure / disconnect effects).
-// Performance: a single 60 fps timer runs only while something animates, and it repaints
-// only the rows that change; idle cost is zero.
-internal sealed class ProfileList : Control
-{
-    static readonly Font RowName = new Font("Segoe UI Semibold", 10.75F);
-    static readonly Font RowSub = new Font("Segoe UI", 9F);
-    static readonly Font Pill = new Font("Segoe UI", 8.5F);
-    static readonly Font Section = new Font("Segoe UI Semibold", 9.25F);
-    static readonly Font AvatarFont = new Font("Segoe UI Semibold", 10.5F);
-    static readonly Color Danger = Color.FromArgb(232, 72, 96);
-    const float SuccessDuration = 1.7F, FailDuration = 0.75F, AppearDuration = 0.34F;
-
-    List<ListRow> rows = new List<ListRow>();
-    readonly Dictionary<string, int> indexById = new Dictionary<string, int>();
-    string[] terms = new string[0];
-    string emptyTitle = "", emptyHint = "";
-    int contentHeight, hoverIndex = -1, selectedIndex = -1, downIndex = -1, targetScroll, dragStartY;
-    float scroll, dragStartScroll, lastLivePaint;
-    bool hoverStar, hoverPlug, downOnStar, dragThumb, hoverBar, scrolling;
-
-    // animation state
-    readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
-    readonly System.Windows.Forms.Timer frame = new System.Windows.Forms.Timer { Interval = 16 };
-    readonly Dictionary<string, float> hoverAmt = new Dictionary<string, float>(), selAmt = new Dictionary<string, float>(), appearAt = new Dictionary<string, float>();
-    string connectingId, successId, failId, disconnectingId;
-    float connectT0, successT0, failT0, disconnectT0;
-    public bool AnimateNext; // set before a filter change to play the entrance animation
-    public Func<bool> AllowAmbient = delegate { return true; }; // breathing effects only while the user is looking
-    public void Wake() { Kick(); }
-
-    public Func<VpnProfile, bool> IsPinned = delegate { return false; };
-    public Func<VpnProfile, ReachState> ReachOf = delegate { return ReachState.Unknown; };
-    public Func<VpnProfile, string> LiveText = delegate { return null; }; // e.g. "Bağlı · 12 dk" for the connected profile
-    public event Action<VpnProfile> Activated, PinToggled;
-    public event Action<VpnProfile, Point> MenuRequested;
-
-    public ProfileList()
-    {
-        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-        SetStyle(ControlStyles.Selectable, false);
-        TabStop = false; BackColor = Ui.Bg;
-        frame.Tick += delegate { OnFrame(); };
-    }
-
-    static int S(float v) { return Ui.S(v); }
-    float Now { get { return (float)clock.Elapsed.TotalSeconds; } }
-    int MaxScroll { get { return Math.Max(0, contentHeight - Height); } }
-
-    protected override void Dispose(bool disposing) { if (disposing) frame.Dispose(); base.Dispose(disposing); }
-
-    // Let the borderless parent window receive resize hit-tests at its left/right edges.
-    protected override void WndProc(ref Message m)
-    {
-        if (m.Msg == 0x0084 && Parent != null)
-        {
-            var v = m.LParam.ToInt64();
-            var p = Parent.PointToClient(new Point((short)(v & 0xffff), (short)((v >> 16) & 0xffff)));
-            if (p.X < S(5) || p.X >= Parent.ClientSize.Width - S(5)) { m.Result = (IntPtr)(-1); return; }
-        }
-        base.WndProc(ref m);
-    }
-
-    protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); if (Visible) Kick(); else frame.Stop(); }
-
-    // ---------- public animation API ----------
-
-    public void BeginConnect(string id) { connectingId = id; connectT0 = Now; failId = null; successId = null; Kick(); }
-    public void ConnectSucceeded(string id) { if (connectingId == id) connectingId = null; successId = id; successT0 = Now; Kick(); }
-    public void ConnectFailed(string id) { if (connectingId == id) connectingId = null; failId = id; failT0 = Now; Kick(); }
-    public void CancelConnect(string id) { if (connectingId == id) connectingId = null; Kick(); Invalidate(); }
-    public void BeginDisconnect(string id) { disconnectingId = id; disconnectT0 = Now; Kick(); }
-    public void EndDisconnect() { disconnectingId = null; Kick(); Invalidate(); }
-    public bool IsConnecting { get { return connectingId != null; } }
-
-    public VpnProfile SelectedProfile { get { return selectedIndex >= 0 && selectedIndex < rows.Count ? rows[selectedIndex].Profile : null; } }
-
-    public void SetRows(List<ListRow> newRows, string[] newTerms, string title, string hint, string keepId)
-    {
-        rows = newRows; terms = newTerms; emptyTitle = title; emptyHint = hint;
-        indexById.Clear();
-        var y = S(2);
-        for (var i = 0; i < rows.Count; i++)
-        {
-            var r = rows[i];
-            if (r.IsHeader) { r.Top = y + (y > S(2) ? S(10) : 0); r.Height = S(42); y = r.Top + r.Height; }
-            else { r.Top = y; r.Height = S(70); y += r.Height + S(8); indexById[r.Profile.Id] = i; }
-        }
-        contentHeight = y + S(14);
-        hoverIndex = -1; selectedIndex = -1;
-        if (keepId != null) selectedIndex = rows.FindIndex(r => !r.IsHeader && r.Profile.Id == keepId);
-        if (selectedIndex < 0)
-        {
-            selectedIndex = rows.FindIndex(r => !r.IsHeader);
-            scroll = targetScroll = 0; scrolling = false;
-        }
-        else { targetScroll = Math.Min(targetScroll, MaxScroll); scroll = targetScroll; EnsureVisible(selectedIndex, false); }
-
-        // forget animation state for rows that are gone (keeps the dictionaries small)
-        Prune(hoverAmt); Prune(selAmt); Prune(appearAt);
-        var sel = SelectedProfile; if (sel != null) selAmt[sel.Id] = 1;
-        if (AnimateNext)
-        {
-            AnimateNext = false;
-            var t = Now; var k = 0;
-            foreach (var r in rows)
-            {
-                if (r.IsHeader) continue;
-                if (r.Top - scroll > Height) break;
-                appearAt[r.Profile.Id] = t + Math.Min(k++, 10) * 0.035F;
-            }
-        }
-        Kick();
-        Invalidate();
-    }
-
-    void Prune(Dictionary<string, float> d)
-    {
-        if (d.Count == 0) return;
-        var dead = d.Keys.Where(id => !indexById.ContainsKey(id)).ToList();
-        foreach (var id in dead) d.Remove(id);
-    }
-
-    public void MoveSelection(int delta)
-    {
-        if (rows.Count == 0) return;
-        var profileRows = new List<int>();
-        for (var i = 0; i < rows.Count; i++) if (!rows[i].IsHeader) profileRows.Add(i);
-        if (profileRows.Count == 0) return;
-        var pos = profileRows.IndexOf(selectedIndex);
-        pos = pos < 0 ? 0 : Math.Max(0, Math.Min(profileRows.Count - 1, pos + delta));
-        selectedIndex = profileRows[pos];
-        EnsureVisible(selectedIndex, true);
-        Kick();
-    }
-
-    void EnsureVisible(int index, bool animate)
-    {
-        if (index < 0) return;
-        var r = rows[index];
-        var top = r.Top - S(6);
-        if (index > 0 && rows[index - 1].IsHeader) top = rows[index - 1].Top - S(2);
-        var bottom = r.Top + r.Height + S(10);
-        var t = targetScroll;
-        if (top < t) t = top; else if (bottom > t + Height) t = bottom - Height;
-        ScrollTo(t, animate);
-    }
-
-    void ScrollTo(int t, bool animate)
-    {
-        targetScroll = Math.Max(0, Math.Min(MaxScroll, t));
-        if (!animate) { scroll = targetScroll; scrolling = false; Invalidate(); }
-        else { scrolling = true; Kick(); }
-    }
-
-    protected override void OnResize(EventArgs e) { base.OnResize(e); targetScroll = Math.Min(targetScroll, MaxScroll); scroll = Math.Min(scroll, MaxScroll); }
-
-    // ---------- animation loop ----------
-
-    void Kick() { if (Visible && IsHandleCreated && !frame.Enabled) { frame.Interval = 16; frame.Start(); } }
-
-    void InvalidateRow(string id, int pad)
-    {
-        int i; if (id == null || !indexById.TryGetValue(id, out i)) return;
-        var rr = RowRect(rows[i]); rr.Inflate(S(pad), S(pad));
-        if (rr.Bottom >= 0 && rr.Top <= Height) Invalidate(rr);
-    }
-
-    static bool Step(Dictionary<string, float> d, string id, float target, float speed)
-    {
-        float v; d.TryGetValue(id, out v);
-        if (Math.Abs(v - target) < 0.01F) { if (v != target) { d[id] = target; return true; } return false; }
-        d[id] = v + (target - v) * speed;
-        return true;
-    }
-
-    void OnFrame()
-    {
-        if (!Visible) { frame.Stop(); return; }
-        var now = Now; var fast = false;
-
-        if (scrolling)
-        {
-            var diff = targetScroll - scroll;
-            if (Math.Abs(diff) < 0.6F) { scroll = targetScroll; scrolling = false; } else scroll += diff * 0.28F;
-            Invalidate(); fast = true;
-        }
-
-        // hover / selection fades for the rows that have (or had) them
-        var hovId = hoverIndex >= 0 && hoverIndex < rows.Count && !rows[hoverIndex].IsHeader ? rows[hoverIndex].Profile.Id : null;
-        var selId = SelectedProfile != null ? SelectedProfile.Id : null;
-        if (hovId != null && !hoverAmt.ContainsKey(hovId)) hoverAmt[hovId] = 0;
-        if (selId != null && !selAmt.ContainsKey(selId)) selAmt[selId] = 0;
-        foreach (var id in hoverAmt.Keys.ToList()) if (Step(hoverAmt, id, id == hovId ? 1 : 0, 0.3F)) { InvalidateRow(id, 4); fast = true; }
-        foreach (var id in selAmt.Keys.ToList()) if (Step(selAmt, id, id == selId ? 1 : 0, 0.25F)) { InvalidateRow(id, 4); fast = true; }
-
-        // entrance
-        if (appearAt.Count > 0)
-            foreach (var kv in appearAt.ToList())
-            {
-                if (now - kv.Value > AppearDuration + 0.05F) { appearAt.Remove(kv.Key); InvalidateRow(kv.Key, 20); }
-                else { InvalidateRow(kv.Key, 20); fast = true; }
-            }
-
-        if (connectingId != null) { InvalidateRow(connectingId, 30); fast = true; }
-        if (disconnectingId != null) { InvalidateRow(disconnectingId, 6); fast = true; }
-        if (successId != null) { InvalidateRow(successId, 40); if (now - successT0 > SuccessDuration) successId = null; fast = true; }
-        if (failId != null) { InvalidateRow(failId, 14); if (now - failT0 > FailDuration) failId = null; fast = true; }
-
-        // gentle "breathing" of the connected row's status dot (20 fps is plenty)
-        var live = false;
-        if (AllowAmbient())
-        foreach (var r in rows)
-            if (!r.IsHeader && LiveText(r.Profile) != null)
-            {
-                live = true;
-                if (now - lastLivePaint > 0.08F) InvalidateRow(r.Profile.Id, 4);
-            }
-        if (live && now - lastLivePaint > 0.08F) lastLivePaint = now;
-
-        if (!fast && !live) frame.Stop();
-        else frame.Interval = fast ? 16 : 80;
-    }
-
-    // ---------- Geometry ----------
-
-    Rectangle RowRect(ListRow r) { return new Rectangle(S(12), r.Top - (int)Math.Round(scroll), Width - S(12) - S(18), r.Height); }
-    Rectangle PlugRect(Rectangle rr) { var d = S(38); return new Rectangle(rr.Right - S(14) - d, rr.Y + (rr.Height - d) / 2, d, d); }
-    Rectangle StarRect(Rectangle rr) { var p = PlugRect(rr); var d = S(24); return new Rectangle(p.X - S(6) - d, rr.Y + S(6), d, d); }
-
-    Rectangle ThumbRect()
-    {
-        if (contentHeight <= Height || Height <= 0) return Rectangle.Empty;
-        var h = Math.Max(S(40), (int)(Height * (Height / (float)contentHeight)));
-        var y = MaxScroll == 0 ? 0 : (int)((Height - h) * (scroll / MaxScroll));
-        var w = hoverBar || dragThumb ? S(5) : S(3);
-        return new Rectangle(Width - S(8) - w / 2, y, w, h);
-    }
-
-    int HitRow(Point p)
-    {
-        var y = p.Y + (int)Math.Round(scroll);
-        for (var i = 0; i < rows.Count; i++)
-        {
-            var r = rows[i];
-            if (!r.IsHeader && y >= r.Top && y < r.Top + r.Height && p.X >= S(12) && p.X < Width - S(18)) return i;
-        }
-        return -1;
-    }
-
-    // ---------- Mouse ----------
-
-    protected override void OnMouseMove(MouseEventArgs e)
-    {
-        base.OnMouseMove(e);
-        if (dragThumb)
-        {
-            var th = ThumbRect().Height; var range = Height - th;
-            if (range > 0) { scroll = Math.Max(0, Math.Min(MaxScroll, dragStartScroll + (e.Y - dragStartY) * (MaxScroll / (float)range))); targetScroll = (int)scroll; Invalidate(); }
-            return;
-        }
-        var bar = contentHeight > Height && e.X >= Width - S(16);
-        var i = bar ? -1 : HitRow(e.Location);
-        var star = i >= 0 && StarRect(RowRect(rows[i])).Contains(e.Location);
-        var plug = i >= 0 && PlugRect(RowRect(rows[i])).Contains(e.Location);
-        if (i != hoverIndex || star != hoverStar || plug != hoverPlug)
-        {
-            // repaint only the rows involved, not the whole list
-            if (hoverIndex >= 0 && hoverIndex < rows.Count && !rows[hoverIndex].IsHeader) InvalidateRow(rows[hoverIndex].Profile.Id, 4);
-            if (i >= 0) InvalidateRow(rows[i].Profile.Id, 4);
-            hoverIndex = i; hoverStar = star; hoverPlug = plug; Kick();
-        }
-        if (bar != hoverBar) { hoverBar = bar; Invalidate(new Rectangle(Width - S(16), 0, S(16), Height)); }
-        Cursor = i >= 0 ? Cursors.Hand : Cursors.Default;
-    }
-
-    protected override void OnMouseLeave(EventArgs e)
-    {
-        base.OnMouseLeave(e);
-        if (dragThumb) return;
-        if (hoverIndex >= 0 && hoverIndex < rows.Count && !rows[hoverIndex].IsHeader) InvalidateRow(rows[hoverIndex].Profile.Id, 4);
-        hoverIndex = -1; hoverStar = false; hoverPlug = false;
-        if (hoverBar) { hoverBar = false; Invalidate(new Rectangle(Width - S(16), 0, S(16), Height)); }
-        Kick();
-    }
-
-    protected override void OnMouseDown(MouseEventArgs e)
-    {
-        base.OnMouseDown(e);
-        var thumb = ThumbRect();
-        if (e.Button == MouseButtons.Left && contentHeight > Height && e.X >= Width - S(16))
-        {
-            if (!thumb.Contains(e.Location)) { ScrollTo(e.Y < thumb.Y ? targetScroll - Height : targetScroll + Height, true); return; }
-            dragThumb = true; dragStartY = e.Y; dragStartScroll = scroll; scrolling = false; Capture = true; return;
-        }
-        downIndex = HitRow(e.Location);
-        downOnStar = downIndex >= 0 && StarRect(RowRect(rows[downIndex])).Contains(e.Location);
-        if (downIndex >= 0 && e.Button == MouseButtons.Right)
-        {
-            selectedIndex = downIndex; Kick();
-            if (MenuRequested != null) MenuRequested(rows[downIndex].Profile, e.Location);
-        }
-    }
-
-    protected override void OnMouseUp(MouseEventArgs e)
-    {
-        base.OnMouseUp(e);
-        if (dragThumb) { dragThumb = false; Capture = false; Invalidate(); return; }
-        if (e.Button != MouseButtons.Left) return;
-        var i = HitRow(e.Location);
-        if (i < 0 || i != downIndex) return;
-        var p = rows[i].Profile;
-        if (downOnStar && StarRect(RowRect(rows[i])).Contains(e.Location)) { if (PinToggled != null) PinToggled(p); return; }
-        selectedIndex = i; Kick();
-        if (Activated != null) Activated(p);
-    }
-
-    protected override void OnMouseWheel(MouseEventArgs e)
-    {
-        base.OnMouseWheel(e);
-        ScrollTo(targetScroll - e.Delta * S(70) / 120 * 2, true);
-    }
-
-    // ---------- Paint ----------
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        var g = e.Graphics; g.Clear(BackColor); g.SmoothingMode = SmoothingMode.AntiAlias;
-        var clip = e.ClipRectangle;
-        // decorative glow waves behind the bottom of the list (cached bitmap)
-        var waves = new Rectangle(0, Height - S(90), Width, S(90));
-        if (clip.IntersectsWith(waves)) Ui.DrawWaves(g, waves, false);
-        if (rows.Count == 0) { PaintEmpty(g); return; }
-
-        var now = Now;
-        for (var i = 0; i < rows.Count; i++)
-        {
-            var r = rows[i]; var rr = RowRect(r);
-            if (rr.Bottom < 0 || rr.Top > Height) continue;
-            var area = Rectangle.Inflate(rr, S(40), S(40));
-            if (!clip.IntersectsWith(area)) continue;
-            if (r.IsHeader) { PaintHeader(g, r, rr); continue; }
-
-            // entrance: slide up + fade in
-            float appear = 1; float t0;
-            if (appearAt.TryGetValue(r.Profile.Id, out t0)) appear = Ease.OutCubic((now - t0) / AppearDuration);
-            if (appear <= 0) continue;
-            if (appear < 1) rr.Offset(0, (int)(S(16) * (1 - appear)));
-            PaintRow(g, r.Profile, rr, i == selectedIndex, i == hoverIndex, now);
-            if (appear < 1)
-                using (var b = new SolidBrush(Color.FromArgb((int)(255 * (1 - appear)), Ui.Bg))) g.FillRectangle(b, Rectangle.Inflate(rr, S(3), S(3)));
-        }
-
-        // soft fades at the scroll edges
-        if (scroll > 1 && clip.Top < S(18))
-            using (var b = new LinearGradientBrush(new Rectangle(0, 0, Width, S(18)), Ui.Bg, Color.FromArgb(0, Ui.Bg), 90F)) g.FillRectangle(b, 0, 0, Width, S(18) - 1);
-        if (scroll < MaxScroll - 1 && clip.Bottom > Height - S(24))
-            using (var b = new LinearGradientBrush(new Rectangle(0, Height - S(24), Width, S(24)), Color.FromArgb(0, Ui.Bg), Ui.Bg, 90F)) g.FillRectangle(b, 0, Height - S(24) + 1, Width, S(24));
-
-        var thumb = ThumbRect();
-        if (!thumb.IsEmpty && clip.Right > Width - S(16))
-        {
-            using (var p = new Pen(Color.FromArgb(60, Ui.Border), S(1))) g.DrawLine(p, thumb.X + thumb.Width / 2F, S(4), thumb.X + thumb.Width / 2F, Height - S(4));
-            using (var b = new LinearGradientBrush(thumb, Ui.Accent, Ui.Accent2, 90F)) using (var path = Ui.Round(thumb, thumb.Width / 2F)) g.FillPath(b, path);
-        }
-    }
-
-    void PaintHeader(Graphics g, ListRow r, Rectangle rr)
-    {
-        var x = rr.X + S(6); var cy = rr.Y + rr.Height / 2 + S(2);
-        if (r.Icon != Glyph.None) { Glyphs.Draw(g, r.Icon, new RectangleF(x, cy - S(9), S(18), S(18)), Ui.Accent); x += S(28); }
-        var sz = Ui.Measure(g, r.Header, Section);
-        TextRenderer.DrawText(g, r.Header, Section, new Point(x, cy - sz.Height / 2), Ui.Text, Ui.Flags);
-        var lx = x + sz.Width + S(14);
-        if (lx < rr.Right - S(10))
-            using (var b = new LinearGradientBrush(new Rectangle(lx, cy, rr.Right - lx, 1), Ui.BorderStrong, Color.FromArgb(0, Ui.BorderStrong), LinearGradientMode.Horizontal))
-            using (var p = new Pen(b, 1)) g.DrawLine(p, lx, cy, rr.Right, cy);
-    }
-
-    static Color A(Color c, float alpha) { return Color.FromArgb(Math.Max(0, Math.Min(255, (int)(alpha * c.A))), c); }
-
-    void PaintRow(Graphics g, VpnProfile p, Rectangle rr, bool selected, bool hover, float now)
-    {
-        var id = p.Id;
-        var pinned = IsPinned(p);
-        var connecting = id == connectingId;
-        var disconnecting = id == disconnectingId;
-        var success = id == successId ? (now - successT0) : -1F;
-        var fail = id == failId ? (now - failT0) : -1F;
-        var live = LiveText(p);
-        var radius = S(12);
-        float h, s; hoverAmt.TryGetValue(id, out h); if (!hoverAmt.ContainsKey(id) && hover) h = 1;
-        if (!selAmt.TryGetValue(id, out s)) s = selected ? 1 : 0;
-        if (connecting) s = 1;
-
-        // failure: damped horizontal shake
-        if (fail >= 0) rr.Offset((int)(Math.Sin(fail * 46) * S(7) * (1 - fail / FailDuration)), 0);
-
-        // card base (fades between idle and hover)
-        var idle = Ui.Blend(Ui.Bg, Ui.Surface, 0.8F);
-        Ui.FillRound(g, Ui.Blend(idle, Ui.SurfaceHover, h), rr, radius);
-        Ui.DrawRound(g, Ui.Blend(Ui.Border, Ui.BorderStrong, h), rr, radius);
-
-        // selection (fades in/out)
-        if (s > 0.01F)
-        {
-            using (var path = Ui.Round(rr, radius))
-            using (var b = new LinearGradientBrush(rr, A(Ui.Blend(Ui.Surface, Ui.Accent, Themes.IsLight ? 0.14F : 0.26F), s), A(Ui.Blend(Ui.Surface, Ui.Accent, 0.04F), s), LinearGradientMode.Horizontal)) g.FillPath(b, path);
-            using (var path = Ui.Round(new RectangleF(rr.X - S(1.5F), rr.Y - S(1.5F), rr.Width + S(3), rr.Height + S(3)), radius + S(1.5F)))
-            using (var pen = new Pen(Color.FromArgb((int)(50 * s), Ui.Accent), S(2.5F))) g.DrawPath(pen, path);
-            Ui.DrawRound(g, Color.FromArgb((int)(220 * s), Ui.Accent), rr, radius, S(1.3F));
-            var barH = (rr.Height - S(32)) * Ease.OutCubic(s);
-            Ui.FillRound(g, Ui.Accent, new RectangleF(rr.X + S(7), rr.Y + rr.Height / 2F - barH / 2, S(3.5F), barH), S(1.75F));
-        }
-
-        // connecting: light sweep across the card + indeterminate progress line at the bottom
-        if (connecting)
-        {
-            var t = now - connectT0;
-            var state = g.Save();
-            using (var clipPath = Ui.Round(rr, radius)) g.SetClip(clipPath, CombineMode.Intersect);
-            var band = S(110); var bx = rr.X - band + (rr.Width + 2 * band) * Ease.Frac(t / 1.5F);
-            using (var b = new LinearGradientBrush(new RectangleF(bx - 1, rr.Y, band + 2, rr.Height), Color.Transparent, Color.Transparent, LinearGradientMode.Horizontal))
-            {
-                b.InterpolationColors = new ColorBlend { Colors = new[] { Color.FromArgb(0, Ui.Accent), Color.FromArgb(Themes.IsLight ? 34 : 46, Ui.Accent), Color.FromArgb(0, Ui.Accent) }, Positions = new[] { 0F, 0.5F, 1F } };
-                g.FillRectangle(b, bx, rr.Y, band, rr.Height);
-            }
-            var seg = rr.Width * 0.3F; var sx = rr.X - seg + (rr.Width + seg) * Ease.Frac(t / 1.15F);
-            using (var b = new LinearGradientBrush(new RectangleF(sx - 1, 0, seg + 2, 1), Color.FromArgb(0, Ui.Accent), Ui.Accent, LinearGradientMode.Horizontal))
-                g.FillRectangle(b, sx, rr.Bottom - S(3), seg, S(2.5F));
-            g.Restore(state);
-        }
-
-        // success: green flash over the card
-        if (success >= 0)
-        {
-            var k = 1 - success / SuccessDuration;
-            using (var path = Ui.Round(rr, radius)) using (var b = new SolidBrush(Color.FromArgb((int)(60 * k), Ui.Success))) g.FillPath(b, path);
-            Ui.DrawRound(g, Color.FromArgb((int)(230 * k), Ui.Success), rr, radius, S(1.6F));
-        }
-        if (fail >= 0) Ui.DrawRound(g, Color.FromArgb((int)(230 * (1 - fail / FailDuration)), Danger), rr, radius, S(1.6F));
-
-        // avatar: rounded square with a soft gradient in the profile's color
-        var d = S(44); var av = new Rectangle(rr.X + S(20), rr.Y + (rr.Height - d) / 2, d, d);
-        var forti = FortiStore.IsForti(p);
-        var ac = forti ? Color.FromArgb(226, 64, 52) : Ui.AvatarColor(p.Name);
-        using (var path = Ui.Round(av, S(11)))
-        using (var b = new LinearGradientBrush(av, Ui.Blend(Ui.Bg, ac, Themes.IsLight ? 0.35F : 0.55F), Ui.Blend(Ui.Bg, ac, Themes.IsLight ? 0.18F : 0.28F), 45F)) g.FillPath(b, path);
-        Ui.DrawRound(g, Color.FromArgb(Themes.IsLight ? 90 : 70, ac), av, S(11));
-        var isz = Ui.Measure(g, p.Initials, AvatarFont);
-        TextRenderer.DrawText(g, p.Initials, AvatarFont, new Point(av.X + (d - isz.Width) / 2, av.Y + (d - isz.Height) / 2),
-            Themes.IsLight ? Ui.Blend(ac, Color.Black, 0.5F) : Ui.Blend(ac, Color.White, 0.6F), Ui.Flags);
-
-        // status dot (green = connected/reachable, red = unreachable); the connected one breathes
-        var reach = ReachOf(p);
-        if (live != null || reach == ReachState.Up || reach == ReachState.Down)
-        {
-            var dot = live != null || reach == ReachState.Up ? Ui.Success : Danger;
-            var ds = S(13); var dr = new RectangleF(av.Right - ds + S(4), av.Bottom - ds + S(4), ds, ds);
-            if (live != null)
-            {
-                var ph = Ease.Frac(now / 1.8F);
-                var grow = S(10) * Ease.OutCubic(ph);
-                using (var b = new SolidBrush(Color.FromArgb((int)(110 * (1 - ph)), Ui.Success))) g.FillEllipse(b, dr.X - grow / 2, dr.Y - grow / 2, dr.Width + grow, dr.Height + grow);
-            }
-            using (var b = new SolidBrush(Ui.Blend(idle, Ui.SurfaceHover, h))) g.FillEllipse(b, dr);
-            dr.Inflate(-S(2.5F), -S(2.5F));
-            using (var b = new SolidBrush(dot)) g.FillEllipse(b, dr);
-        }
-
-        // connect button
-        var plug = PlugRect(rr);
-        PaintPlug(g, plug, hover && hoverPlug, s, connecting, disconnecting, success, now);
-
-        // time / state pill
-        var dots = new string('.', (int)(now * 3) % 4);
-        var pillText = connecting ? "Bağlanıyor" + dots : disconnecting ? "Kesiliyor" + dots : live ?? Ui.Relative(p.LastConnected);
-        var sizeText = connecting ? "Bağlanıyor..." : disconnecting ? "Kesiliyor..." : pillText;
-        var pillRight = plug.X - S(10);
-        var pillLeft = pillRight;
-        if (pillText.Length > 0)
-        {
-            var ts = Ui.Measure(g, sizeText, Pill);
-            var pw = ts.Width + S(36);
-            var pr = new Rectangle(pillRight - pw, rr.Y + (rr.Height - S(28)) / 2, pw, S(28));
-            pillLeft = pr.X;
-            var tone = connecting ? Ui.Accent : disconnecting ? Danger : live != null ? Ui.Success : Ui.Muted;
-            Ui.FillRound(g, live != null || connecting || disconnecting ? Color.FromArgb(Themes.IsLight ? 26 : 34, tone) : Ui.Blend(Ui.Bg, Ui.Surface, 0.35F), pr, pr.Height / 2F);
-            Ui.DrawRound(g, live != null || connecting || disconnecting ? Color.FromArgb(100, tone) : Ui.Border, pr, pr.Height / 2F);
-            var ir = new RectangleF(pr.X + S(10), pr.Y + (pr.Height - S(14)) / 2F, S(14), S(14));
-            if (connecting || disconnecting)
-                using (var pen = new Pen(tone, S(1.8F)) { StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawArc(pen, ir, now * 420 % 360, 260);
-            else if (live != null)
-                using (var b = new SolidBrush(Color.FromArgb((int)(160 + 95 * Math.Abs(Math.Sin(now * 2.2))), Ui.Success))) g.FillEllipse(b, ir.X + S(3), ir.Y + S(3), ir.Width - S(6), ir.Height - S(6));
-            else Glyphs.Draw(g, Glyph.History, ir, tone);
-            TextRenderer.DrawText(g, pillText, Pill, new Point(pr.X + S(28), pr.Y + (pr.Height - ts.Height) / 2), live != null || connecting || disconnecting ? tone : Ui.Muted, Ui.Flags);
-        }
-
-        var star = StarRect(rr);
-        if (pinned || hover)
-        {
-            var sc = new PointF(star.X + star.Width / 2F, star.Y + star.Height / 2F);
-            var pts = Ui.Star(sc.X, sc.Y, S(6.5F));
-            if (pinned) using (var b = new SolidBrush(Ui.Gold)) g.FillPolygon(b, pts);
-            else using (var pen = new Pen(Color.FromArgb((int)(255 * Math.Max(h, 0.3F)), hoverStar ? Ui.Gold : Ui.Faint), S(1.3F)) { LineJoin = LineJoin.Round }) g.DrawPolygon(pen, pts);
-        }
-
-        // text
-        var x = av.Right + S(16);
-        var textRight = Math.Min(pillLeft, (pinned || hover) ? star.X : pillLeft) - S(10);
-        DrawHighlighted(g, p.Name, RowName, Ui.Text, new Rectangle(x, rr.Y + S(13), textRight - x, S(22)));
-        var sub = forti ? p.Source + (p.Host.Length > 0 ? "  ·  " + p.Host : "") : p.Host.Length > 0 ? p.Host : "Sunucu adresi yok";
-        if (p.Username.Length > 0) sub += "  ·  " + p.Username;
-        DrawHighlighted(g, sub, RowSub, Ui.Muted, new Rectangle(x, rr.Y + S(38), pillLeft - S(10) - x, S(20)));
-    }
-
-    void PaintPlug(Graphics g, Rectangle plug, bool hot, float sel, bool connecting, bool disconnecting, float success, float now)
-    {
-        var icon = new RectangleF(plug.X + S(10), plug.Y + S(10), S(18), S(18));
-        if (success >= 0)
-        {
-            // green button, check mark drawn in, ring burst and particles
-            var c = new PointF(plug.X + plug.Width / 2F, plug.Y + plug.Height / 2F);
-            var pop = Ease.OutBack(success / 0.35F);
-            var grow = (pop - 1) * S(12); // pops slightly larger, then settles
-            var br = RectangleF.Inflate(plug, grow, grow);
-            using (var path = Ui.Round(br, S(9))) using (var b = new LinearGradientBrush(br, Ui.Blend(Ui.Success, Color.White, 0.15F), Ui.Blend(Ui.Success, Color.Black, 0.12F), 90F)) g.FillPath(b, path);
-            var ck = Ease.OutCubic((success - 0.05F) / 0.35F);
-            if (ck > 0) DrawCheck(g, c, S(8), ck);
-            var rt = success / 0.75F;
-            if (rt < 1)
-            {
-                var rad = plug.Width / 2F + S(34) * Ease.OutCubic(rt);
-                using (var pen = new Pen(Color.FromArgb((int)(200 * (1 - rt)), Ui.Success), S(2.5F) * (1 - rt) + 0.8F)) g.DrawEllipse(pen, c.X - rad, c.Y - rad, rad * 2, rad * 2);
-            }
-            var pt = success / 0.9F;
-            if (pt < 1)
-                for (var i = 0; i < 12; i++)
-                {
-                    var a = (i * 30 + 15) * Math.PI / 180;
-                    var dist = plug.Width / 2F + S(30) * Ease.OutCubic(pt) * (i % 2 == 0 ? 1 : 0.75F);
-                    var size = S(4) * (1 - pt);
-                    using (var b = new SolidBrush(Color.FromArgb((int)(230 * (1 - pt)), i % 3 == 0 ? Ui.Accent : Ui.Success)))
-                        g.FillEllipse(b, c.X + (float)Math.Cos(a) * dist - size / 2, c.Y + (float)Math.Sin(a) * dist - size / 2, size, size);
-                }
-            return;
-        }
-
-        if (connecting)
-        {
-            var t = now;
-            var c = new PointF(plug.X + plug.Width / 2F, plug.Y + plug.Height / 2F);
-            // expanding pulse rings
-            for (var k = 0; k < 2; k++)
-            {
-                var ph = Ease.Frac(t / 1.2F + k * 0.5F);
-                var rad = plug.Width / 2F + S(20) * Ease.OutCubic(ph);
-                using (var pen = new Pen(Color.FromArgb((int)(140 * (1 - ph)), Ui.Accent), S(1.6F))) g.DrawEllipse(pen, c.X - rad, c.Y - rad, rad * 2, rad * 2);
-            }
-            using (var path = Ui.Round(plug, S(9))) using (var b = new LinearGradientBrush(plug, Ui.Blend(Ui.Accent, Color.White, 0.12F), Ui.Accent2, 90F)) g.FillPath(b, path);
-            // orbiting comet around the button
-            var orbit = RectangleF.Inflate(plug, S(5), S(5)); var start = t * 330 % 360;
-            for (var k = 0; k < 4; k++)
-                using (var pen = new Pen(Color.FromArgb(230 - k * 55, Ui.Blend(Ui.Accent, Color.White, 0.35F)), S(2.4F) - k * S(0.4F)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                    g.DrawArc(pen, orbit, start - k * 16, 18);
-            // the plug "pushes in" and out
-            var nudge = (float)Math.Sin(t * 9) * S(1.4F);
-            Glyphs.Draw(g, Glyph.Plug, new RectangleF(icon.X + nudge, icon.Y - nudge, icon.Width, icon.Height), Color.White);
-            return;
-        }
-
-        if (disconnecting)
-        {
-            var pulse = (float)(0.5 + 0.5 * Math.Sin(now * 6));
-            Ui.FillRound(g, Color.FromArgb((int)(30 + 30 * pulse), Danger), plug, S(9));
-            Ui.DrawRound(g, Color.FromArgb((int)(140 + 100 * pulse), Danger), plug, S(9), S(1.4F));
-            Glyphs.Draw(g, Glyph.Disconnect, icon, Danger);
-            return;
-        }
-
-        // idle / hover, cross-faded with the selected (filled orange) look
-        Ui.FillRound(g, hot ? Ui.Blend(Ui.Surface, Ui.Accent, 0.15F) : Ui.Blend(Ui.Bg, Ui.Surface, 0.5F), plug, S(9));
-        Ui.DrawRound(g, hot ? Ui.Accent : Ui.BorderStrong, plug, S(9));
-        if (sel > 0.01F)
-            using (var path = Ui.Round(plug, S(9))) using (var b = new LinearGradientBrush(plug, A(Ui.Blend(Ui.Accent, Color.White, 0.12F), sel), A(Ui.Accent2, sel), 90F)) g.FillPath(b, path);
-        Glyphs.Draw(g, Glyph.Plug, icon, sel > 0.5F ? Color.White : hot ? Ui.Accent : Ui.Text);
-    }
-
-    // Check mark drawn progressively (progress 0..1).
-    static void DrawCheck(Graphics g, PointF c, float size, float progress)
-    {
-        var a = new PointF(c.X - size * 0.7F, c.Y + size * 0.05F); var b = new PointF(c.X - size * 0.15F, c.Y + size * 0.6F); var e = new PointF(c.X + size * 0.8F, c.Y - size * 0.55F);
-        var l1 = Dist(a, b); var l2 = Dist(b, e); var len = (l1 + l2) * progress;
-        using (var pen = new Pen(Color.White, Ui.S(2.4F)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-        {
-            if (len <= l1) { g.DrawLine(pen, a, Lerp(a, b, len / l1)); return; }
-            g.DrawLines(pen, new[] { a, b, Lerp(b, e, (len - l1) / l2) });
-        }
-    }
-    static float Dist(PointF a, PointF b) { var dx = a.X - b.X; var dy = a.Y - b.Y; return (float)Math.Sqrt(dx * dx + dy * dy); }
-    static PointF Lerp(PointF a, PointF b, float t) { return new PointF(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t); }
-
-    // Draws text with the parts that match the search terms in the accent color.
-    void DrawHighlighted(Graphics g, string text, Font font, Color color, Rectangle bounds)
-    {
-        if (bounds.Width <= 0) return;
-        var mask = MatchMask(text);
-        var full = Ui.Measure(g, text, font);
-        if (mask == null || full.Width > bounds.Width)
-        {
-            TextRenderer.DrawText(g, text, font, bounds, color, Ui.Flags | TextFormatFlags.EndEllipsis);
-            return;
-        }
-        var x = bounds.X; var start = 0;
-        while (start < text.Length)
-        {
-            var end = start; var on = mask[start];
-            while (end < text.Length && mask[end] == on) end++;
-            var seg = text.Substring(start, end - start);
-            TextRenderer.DrawText(g, seg, font, new Point(x, bounds.Y), on ? Ui.Accent : color, Ui.Flags);
-            x += Ui.Measure(g, seg, font).Width;
-            start = end;
-        }
-    }
-
-    bool[] MatchMask(string text)
-    {
-        if (terms.Length == 0 || string.IsNullOrEmpty(text)) return null;
-        var key = new StringBuilder(); var map = new List<int>();
-        for (var i = 0; i < text.Length; i++) foreach (var c in ProfileStore.CharKey(text[i])) { key.Append(c); map.Add(i); }
-        var k = key.ToString(); var mask = new bool[text.Length]; var any = false;
-        foreach (var t in terms)
-        {
-            var idx = k.IndexOf(t, StringComparison.Ordinal);
-            while (idx >= 0) { for (var j = idx; j < idx + t.Length; j++) mask[map[j]] = true; any = true; idx = k.IndexOf(t, idx + t.Length, StringComparison.Ordinal); }
-        }
-        return any ? mask : null;
-    }
-
-    void PaintEmpty(Graphics g)
-    {
-        var cy = Math.Max(S(40), Height / 4);
-        var d = S(64); var c = new Rectangle((Width - d) / 2, cy, d, d);
-        Ui.FillRound(g, Ui.Surface, c, S(18)); Ui.DrawRound(g, Ui.Border, c, S(18));
-        Ui.DrawMagnifier(g, Ui.Accent, c.X + S(21), c.Y + S(21), S(22));
-        var y = c.Bottom + S(18);
-        foreach (var line in new[] { emptyTitle, emptyHint })
-        {
-            if (string.IsNullOrEmpty(line)) continue;
-            var font = line == emptyTitle ? RowName : RowSub;
-            var rect = new Rectangle(S(24), y, Width - S(48), S(60));
-            TextRenderer.DrawText(g, line, font, rect, line == emptyTitle ? Ui.Text : Ui.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
-            y += TextRenderer.MeasureText(g, line, font, new Size(rect.Width, 1000), TextFormatFlags.WordBreak).Height + S(4);
-        }
-    }
 }
 
 // =====================================================================
@@ -1369,6 +512,9 @@ internal sealed class SearchForm : Form
     readonly bool backgroundMode; readonly string openVpnPath;
     readonly SearchBox search = new SearchBox();
     readonly ProfileList list = new ProfileList();
+    readonly Segmented segmented = new Segmented();
+    readonly ConnectionIsland island = new ConnectionIsland();
+    int providerFilter; string islandError; DateTime islandErrorUntil = DateTime.MinValue; bool fortiAuth;
     readonly HeaderButton moreButton = new HeaderButton(HeaderGlyph.More), minButton = new HeaderButton(HeaderGlyph.Minimize), closeButton = new HeaderButton(HeaderGlyph.Close);
     readonly System.Windows.Forms.Timer watcher = new System.Windows.Forms.Timer(), statusTimer = new System.Windows.Forms.Timer();
     // fadeTimer: window fade-in; ambient: header shimmer + breathing dots (only while visible); trimTimer: one-shot memory trim after hiding
@@ -1396,9 +542,11 @@ internal sealed class SearchForm : Form
 
     static int S(float v) { return Ui.S(v); }
     TextBox Input { get { return search.Input; } }
-    int HeaderHeight { get { return S(66); } }
-    int ListTop { get { return S(136); } }
-    int FooterHeight { get { return S(70); } }
+    int HeaderHeight { get { return S(58); } }
+    int SearchTop { get { return S(58); } }
+    int SegTop { get { return S(118); } }
+    int ListTop { get { return S(160); } }
+    int FooterHeight { get { return S(38); } }
 
     public SearchForm(bool background, EventWaitHandle activation, AppSettings appSettings)
     {
@@ -1406,10 +554,10 @@ internal sealed class SearchForm : Form
         settings = appSettings ?? AppSettings.Defaults();
         var area = Screen.PrimaryScreen.WorkingArea;
         AutoScaleMode = AutoScaleMode.None;
-        Text = "OpenVPN Hızlı Arama"; StartPosition = FormStartPosition.Manual; BackColor = Ui.Bg; ForeColor = Ui.Text; Font = Ui.SubFont;
+        Text = "OpenVPN Hızlı Arama"; StartPosition = FormStartPosition.Manual; BackColor = Color.Black; ForeColor = Ui.Text; Font = Ui.SubFont;
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; MaximizeBox = false; KeyPreview = true; DoubleBuffered = true;
         SetStyle(ControlStyles.ResizeRedraw, true);
-        MinimumSize = new Size(S(360), S(360)); Size = new Size(S(430), Math.Min(S(720), area.Height));
+        MinimumSize = new Size(S(380), S(360)); Size = new Size(S(520), Math.Min(S(720), area.Height));
         floatHeight = Height;
         Icon = IconArt.Load(new Size(32, 32)) ?? Icon;
 
@@ -1422,7 +570,7 @@ internal sealed class SearchForm : Form
         Activated += delegate { KeepOpenVpnBelow(); WakeAmbient(); };
 
         watcher.Interval = 500; watcher.Tick += WatcherTick;
-        fadeTimer.Tick += delegate { fadeStep++; var o = Ease.OutCubic(fadeStep / 12F); if (fadeStep >= 12) { fadeTimer.Stop(); o = 1; } Opacity = o; };
+        // no window fade: Opacity would make the window layered and drop the compositor blur; the list and island animate instead
         ambient.Tick += delegate { AmbientTick(); };
         trimTimer.Tick += delegate { trimTimer.Stop(); if (!Visible) NativeMethods.TrimMemory(); };
         statusTimer.Interval = 2600; statusTimer.Tick += delegate { statusTimer.Stop(); status = null; InvalidateFooter(); };
@@ -1430,7 +578,7 @@ internal sealed class SearchForm : Form
         // modules: server reachability, live connection status, drag & drop import
         Reachability.Init(SynchronizationContext.Current);
         Reachability.Changed += delegate { list.Invalidate(); };
-        list.ReachOf = p => settings.ReachabilityCheck ? Reachability.Get(p.Id) : ReachState.Unknown;
+        list.ReachOf = p => Demo.On ? Demo.Reach(p.Id) : settings.ReachabilityCheck ? Reachability.Get(p.Id) : ReachState.Unknown;
         list.LiveText = LiveTextFor;
         list.AllowAmbient = () => Watched;
         monitor = new ConnectionMonitor(() => profiles);
@@ -1440,8 +588,11 @@ internal sealed class SearchForm : Form
         DragDrop += OnDragDrop; list.DragDrop += OnDragDrop;
 
         ReloadProfiles();
-        monitor.Poll();
+        if (Demo.On) DemoConnect(Demo.ConnectedName); else monitor.Poll();
+        if (Demo.On && Demo.Query != null) Input.Text = Demo.Query;
+        if (Demo.On && Demo.SettingsPage >= 0) Shown += delegate { BeginInvoke(new Action(ShowSettings)); };
 
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += delegate { if (settings.Theme == "system" && IsHandleCreated && !IsDisposed) BeginInvoke(new Action(ApplyTheme)); };
         hookProc = OnWinEvent;
         IntPtr h; lastFound = FindOpenVpnWindow(out h);
         if (lastFound) TrackOpenVpn(h);
@@ -1461,26 +612,42 @@ internal sealed class SearchForm : Form
 
     protected override CreateParams CreateParams
     {
-        get { var cp = base.CreateParams; cp.ClassStyle |= CS_DROPSHADOW; return cp; }
+        get { var cp = base.CreateParams; return cp; }
     }
 
     // ---------- Layout ----------
 
+    static readonly string[] SegmentNames = { "Tümü", "OpenVPN", "FortiClient" };
+
     void BuildLayout()
     {
-        foreach (var b in new[] { closeButton, minButton, moreButton }) { b.BackColor = Color.Transparent; b.Anchor = AnchorStyles.Top | AnchorStyles.Right; Controls.Add(b); }
-        closeButton.Location = new Point(ClientSize.Width - S(10) - closeButton.Width, S(18));
-        minButton.Location = new Point(closeButton.Left - S(4) - minButton.Width, S(18));
-        moreButton.Location = new Point(minButton.Left - S(4) - moreButton.Width, S(18));
+        foreach (var b in new[] { closeButton, minButton, moreButton }) { b.Anchor = AnchorStyles.Top | AnchorStyles.Right; Controls.Add(b); }
+        var by = S(15);
+        closeButton.Location = new Point(ClientSize.Width - S(14) - closeButton.Width, by);
+        minButton.Location = new Point(closeButton.Left - S(6) - minButton.Width, by);
+        moreButton.Location = new Point(minButton.Left - S(6) - moreButton.Width, by);
         closeButton.Click += delegate { HideForLater(); };
         minButton.Click += delegate { HideForLater(); };
         moreButton.Click += delegate { ShowMainMenu(); };
 
-        search.Location = new Point(S(10), HeaderHeight); search.Size = new Size(ClientSize.Width - S(20), S(64));
+        // Dynamic Island: between the app mark and the window buttons
+        island.Location = new Point(TitleRight + S(6), S(11)); island.Size = new Size(moreButton.Left - S(8) - (TitleRight + S(6)), S(36));
+        island.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        island.AllowAmbient = () => Watched;
+        island.DisconnectClicked += delegate { DisconnectCurrent(); };
+        Controls.Add(island);
+
+        search.Location = new Point(S(10), SearchTop); search.Size = new Size(ClientSize.Width - S(20), S(54));
         search.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         search.Hotkey = settings.Hotkey;
         Input.TextChanged += delegate { list.AnimateNext = true; ApplyFilter(null); };
         Controls.Add(search);
+
+        segmented.Location = new Point(S(16), SegTop); segmented.Size = new Size(ClientSize.Width - S(32), S(34));
+        segmented.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        segmented.Changed += delegate(int i) { providerFilter = i; list.AnimateNext = true; var sel = list.SelectedProfile; ApplyFilter(sel != null ? sel.Id : null); };
+        Controls.Add(segmented);
+        RefreshSegments();
 
         list.Location = new Point(0, ListTop); list.Size = new Size(ClientSize.Width, ClientSize.Height - ListTop - FooterHeight);
         list.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
@@ -1488,126 +655,86 @@ internal sealed class SearchForm : Form
         list.Activated += Connect;
         list.PinToggled += TogglePin;
         list.MenuRequested += ShowRowMenu;
+        list.DisconnectRequested += delegate(VpnProfile p) { if (p.Id == connectedId) Disconnect(); else if (p.Id == fortiConnectedId) DisconnectForti(p); };
+        list.ConnectFailedId += delegate(string id) { islandError = "Bağlantı kurulamadı"; islandErrorUntil = DateTime.UtcNow.AddSeconds(5); UpdateIsland(); };
         Controls.Add(list);
+        Controls.Add(toast); toast.BringToFront();
     }
 
-    static readonly Font TitleFont = new Font("Segoe UI Semibold", 15F);
-    static readonly Font PillFont = new Font("Segoe UI", 9F);
-    static readonly Font FooterFont = new Font("Segoe UI", 9F);
+    // FortiClient segment only exists while FortiClient profiles are enabled.
+    void RefreshSegments()
+    {
+        var items = settings.ShowForti ? SegmentNames : new[] { "Tümü", "OpenVPN" };
+        if (providerFilter == 2 && !settings.ShowForti) providerFilter = 0;
+        segmented.Items = items;
+        segmented.Selected = providerFilter;
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        Glass.WindowBase(e.Graphics, ClientRectangle, WindowRadius);
+    }
+
+    float WindowRadius { get { return docked ? S(4) : S(8); } }   // Windows 11 corner radii (DWM rounds and antialiases the window itself)
+
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+    }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
         var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
         var w = ClientSize.Width;
-
-        // Only the regions inside the clip are painted (ambient effects invalidate small areas).
-        var now = (float)clock.Elapsed.TotalSeconds;
-        if (e.ClipRectangle.Top < HeaderHeight) PaintTop(g, e.ClipRectangle, w, now);
+        // app mark: sapphire glass tile with the shield-lock logo, then the product name
+        var mark = new RectangleF(S(14), S(12), S(34), S(34));
+        if (e.ClipRectangle.IntersectsWith(new Rectangle(0, 0, TitleRight, HeaderHeight)))
+        {
+            using (var path = Ui.Round(mark, S(11))) using (var br = new LinearGradientBrush(RectangleF.Inflate(mark, 1, 1), Ui.Blend(Ui.Accent, Ui.Highlight, 0.45F), Ui.Blend(Ui.Accent, Color.Black, 0.2F), 90F)) g.FillPath(br, path);
+            Glass.Paint(g, mark, S(11), GlassKind.Secondary, 0.9F);
+            Assets.Draw(g, "app-logo", RectangleF.Inflate(mark, -S(7), -S(7)), Color.FromArgb(240, 245, 252), 1.15F);
+            GText.Draw(g, "VPN Manager", HeaderTitleFont2, new Point(S(58), S(29) - GText.Measure("VPN Manager", HeaderTitleFont2).Height / 2), Ui.Text);
+        }
         var fyClip = ClientSize.Height - FooterHeight;
         if (e.ClipRectangle.Bottom > fyClip) PaintFooter(g, w);
-
-        // edge: a thin seam toward OpenVPN when docked, a full outline when floating
-        using (var p = new Pen(Ui.Border))
-        {
-            if (docked) { var sx2 = dockSide > 0 ? 0 : ClientSize.Width - 1; g.DrawLine(p, sx2, 0, sx2, ClientSize.Height); }
-            else g.DrawRectangle(p, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
-        }
+        Glass.WindowFrame(g, ClientRectangle, WindowRadius);
     }
 
-    void PaintTop(Graphics g, Rectangle clip, int w, float now)
-    {
-        var e = new { ClipRectangle = clip };
-        // header: light streak, shield mark, divider, title, count pill
-        var waveRect = new Rectangle((int)(w * 0.28F), -S(4), (int)(w * 0.72F), HeaderHeight - S(6));
-        if (e.ClipRectangle.IntersectsWith(waveRect)) Ui.DrawWaves(g, waveRect, true);
-        var mark = new RectangleF(S(16), S(17), S(34), S(34));
-        using (var glow = new GraphicsPath())
-        {
-            glow.AddEllipse(mark.X - S(8), mark.Y - S(8), mark.Width + S(16), mark.Height + S(16));
-            using (var pgb = new PathGradientBrush(glow) { CenterColor = Color.FromArgb(Themes.IsLight ? 30 : 48, Ui.Accent), SurroundColors = new[] { Color.FromArgb(0, Ui.Accent) } }) g.FillPath(pgb, glow);
-        }
-        Glyphs.Draw(g, Glyph.ShieldLock, mark, Ui.Accent);
-        using (var p = new Pen(Ui.BorderStrong)) g.DrawLine(p, S(62), S(22), S(62), S(46));
-        var title = "Hızlı Arama";
-        var ts = Ui.Measure(g, title, TitleFont);
-        TextRenderer.DrawText(g, title, TitleFont, new Point(S(74), S(34) - ts.Height / 2), Ui.Text, Ui.Flags);
-        if (subtitle.Length > 0)
-        {
-            var ps = Ui.Measure(g, subtitle, PillFont);
-            var pr = new Rectangle(S(74) + ts.Width + S(12), S(34) - S(13), ps.Width + S(20), S(26));
-            if (pr.Right < moreButton.Left - S(6))
-            {
-                Ui.FillRound(g, Ui.Blend(Ui.Bg, Ui.Surface, 0.6F), pr, S(8));
-                Ui.DrawRound(g, Ui.BorderStrong, pr, S(8));
-                TextRenderer.DrawText(g, subtitle, PillFont, new Point(pr.X + S(10), pr.Y + (pr.Height - ps.Height) / 2), Ui.Muted, Ui.Flags);
-            }
-        }
-    }
+    static readonly Font FooterFont = new Font(Ui.Family, 8.5F);
+    static readonly Font HeaderTitleFont2 = new Font(Ui.FamilySemi, 11.5F);
+    int TitleRight { get { return S(58) + GText.Measure("VPN Manager", HeaderTitleFont2).Width + S(8); } }
 
+    // Footer: quiet keyboard hints; a status message takes their place for a moment.
     void PaintFooter(Graphics g, int w)
     {
-        var now = (float)clock.Elapsed.TotalSeconds;
-        // footer card: key hints on the left, VPN state on the right
         var fy = ClientSize.Height - FooterHeight;
-        var card = new Rectangle(S(10), fy + S(8), w - S(20), FooterHeight - S(18));
-        Ui.FillRound(g, Ui.Blend(Ui.Bg, Ui.Surface, 0.65F), card, S(12));
-        Ui.DrawRound(g, Ui.Border, card, S(12));
-        var cy = card.Y + card.Height / 2;
-
-        string stateText; Color stateColor;
-        if (connectedId != null || fortiConnectedId != null) { stateText = "Bağlı"; stateColor = Ui.Success; }
-        else if (lastFound) { stateText = "VPN Hazır"; stateColor = Ui.Success; }
-        else { stateText = "OpenVPN kapalı"; stateColor = Ui.Faint; }
-        var ss = Ui.Measure(g, stateText, FooterFont);
-        var sx = card.Right - S(14) - ss.Width;
-        TextRenderer.DrawText(g, stateText, FooterFont, new Point(sx, cy - ss.Height / 2), stateColor, Ui.Flags);
-        var pulse = Ease.Frac(now / 2F); var hr = S(8) + S(10) * Ease.OutCubic(pulse);
-        if (stateColor != Ui.Faint) using (var halo = new SolidBrush(Color.FromArgb((int)(90 * (1 - pulse)), stateColor))) g.FillEllipse(halo, sx - S(12) - hr / 2F, cy - hr / 2F, hr, hr);
-        using (var b = new SolidBrush(stateColor)) g.FillEllipse(b, sx - S(16), cy - S(4), S(8), S(8));
-        var leftLimit = sx - S(28);
-
-        if (status != null)
+        var cy = fy + FooterHeight / 2 - S(2);
+        var lineY = fy + S(2);
+        using (var p = new Pen(Color.FromArgb(Themes.IsLight ? 40 : 28, Themes.IsLight ? Color.Black : Color.White), 1F)) g.DrawLine(p, S(18), lineY, w - S(18), lineY);
+        if (false)
         {
-            using (var p = new Pen(Ui.Success, S(2F)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-                g.DrawLines(p, new[] { new PointF(card.X + S(16), cy), new PointF(card.X + S(20), cy + S(4)), new PointF(card.X + S(27), cy - S(4)) });
-            TextRenderer.DrawText(g, status, FooterFont, new Rectangle(card.X + S(36), cy - S(9), leftLimit - card.X - S(36), S(18)), Ui.Text, Ui.Flags | TextFormatFlags.EndEllipsis);
+            using (var p = new Pen(Ui.Success, S(1.8F)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                g.DrawLines(p, new[] { new PointF(S(20), cy), new PointF(S(24), cy + S(4)), new PointF(S(31), cy - S(4)) });
+            GText.Draw(g, status, FooterFont, new Rectangle(S(40), cy - S(10), w - S(60), S(20)), Ui.Text);
+            return;
         }
-        else
+        var x = S(18); var first = true;
+        foreach (var hint in new[] { new[] { "↑↓", "Seç" }, new[] { "Enter", "Bağlan" }, new[] { "Ctrl P", "Sabitle" }, new[] { "Esc", "Gizle" } })
         {
-            var x = card.X + S(12); var first = true;
-            foreach (var hint in new[] { new[] { "↑↓", "Seç" }, new[] { "Enter", "Bağlan" }, new[] { "Ctrl + P", "Sabitle" }, new[] { "Esc", "Gizle" } })
-            {
-                var kw = Ui.Measure(g, hint[0], Ui.KeyFontLarge).Width + S(14);
-                var lw = Ui.Measure(g, hint[1], FooterFont).Width;
-                var need = (first ? 0 : S(17)) + kw + S(7) + lw;
-                if (x + need > leftLimit) break;
-                if (!first) { using (var p = new Pen(Ui.Border)) g.DrawLine(p, x + S(8), cy - S(9), x + S(8), cy + S(9)); x += S(17); }
-                var kr = new Rectangle(x, cy - S(12), kw, S(24));
-                Ui.FillRound(g, Ui.Blend(Ui.Bg, Ui.Accent, 0.06F), kr, S(6));
-                Ui.DrawRound(g, Ui.Blend(Ui.Accent, Ui.Bg, 0.35F), kr, S(6));
-                var ks = Ui.Measure(g, hint[0], Ui.KeyFontLarge);
-                TextRenderer.DrawText(g, hint[0], Ui.KeyFontLarge, new Point(kr.X + (kw - ks.Width) / 2, cy - ks.Height / 2), Ui.Text, Ui.Flags);
-                x += kw + S(7);
-                var ls = Ui.Measure(g, hint[1], FooterFont);
-                TextRenderer.DrawText(g, hint[1], FooterFont, new Point(x, cy - ls.Height / 2), Ui.Muted, Ui.Flags);
-                x += lw; first = false;
-            }
+            var kw = GText.Measure(hint[0], Ui.KeyFontLarge).Width + S(14);
+            var lw = GText.Measure(hint[1], FooterFont).Width;
+            var need = (first ? 0 : S(14)) + kw + S(6) + lw;
+            if (x + need > w - S(14)) break;
+            if (!first) x += S(14);
+            var kr = new RectangleF(x, cy - S(11), kw, S(22));
+            Glass.Paint(g, kr, S(7), GlassKind.Secondary, 1.5F);
+            GText.Draw(g, hint[0], Ui.KeyFontLarge, Rectangle.Round(kr), Ui.Muted, true);
+            x += kw + S(6);
+            GText.Draw(g, hint[1], FooterFont, new Rectangle(x, cy - S(10), lw, S(20)), Ui.Faint);
+            x += lw; first = false;
         }
     }
-
-    // Point on the header light streak for the moving highlight (sprite rectangle), or Empty.
-    Rectangle ShimmerPoint(Rectangle waveRect, float now)
-    {
-        if (shimmerPath == null || shimmerArea != waveRect) { shimmerPath = Ui.WavePoints(waveRect); shimmerArea = waveRect; }
-        if (shimmerPath.Length < 2) return Rectangle.Empty;
-        var ph = Ease.Frac(now / 3.4F);
-        if (ph > 0.75F) return Rectangle.Empty; // short pause between passes
-        var idx = (int)((ph / 0.75F) * (shimmerPath.Length - 1));
-        var p = shimmerPath[idx]; var d = S(28);
-        return new Rectangle((int)p.X - d / 2, (int)p.Y - d / 2, d, d);
-    }
-
 
     // True while the panel or OpenVPN is the foreground window (the user is looking at them).
     bool Watched
@@ -1620,23 +747,73 @@ internal sealed class SearchForm : Form
         }
     }
 
-    void WakeAmbient() { if (Visible && Watched) { if (!ambient.Enabled) ambient.Start(); list.Wake(); } }
+    void WakeAmbient() { if (Visible && Watched) list.Wake(); }
 
-    // ~15 fps while watched: repaint only the small areas that move (shimmer, logo glow, status dot).
-    void AmbientTick()
-    {
-        if (!Watched) { ambient.Stop(); Invalidate(); return; }
-        var now = (float)clock.Elapsed.TotalSeconds; var w = ClientSize.Width;
-        var waveRect = new Rectangle((int)(w * 0.28F), -S(4), (int)(w * 0.72F), HeaderHeight - S(6));
-        // header is static now (no shimmer / logo pulse); only the footer status dot pulses
-        var fy = ClientSize.Height - FooterHeight;
-        Invalidate(new Rectangle(w - S(150), fy + S(8), S(140), FooterHeight - S(18)));     // status dot pulse
-    }
+    void AmbientTick() { }
 
     void InvalidateHeader() { Invalidate(new Rectangle(0, 0, ClientSize.Width, HeaderHeight)); }
     void InvalidateFooter() { Invalidate(new Rectangle(0, ClientSize.Height - FooterHeight, ClientSize.Width, FooterHeight)); }
 
-    void SetStatus(string text) { status = text; statusTimer.Stop(); statusTimer.Start(); InvalidateFooter(); }
+    readonly ToastLayer toast = new ToastLayer();
+    static readonly string[] ProblemWords = { "kurulamadı", "alınamadı", "bulunamadı", "doğrulanamadı", "kullanılıyor", "oluşturulamadı", "silinemedi", "okunamadı", "kopyalanamadı", "başarısız", "formu doldurulamadı" };
+    void SetStatus(string text)
+    {
+        status = text; UpdateIsland();
+        if (!string.IsNullOrEmpty(text) && toast.Parent != null) toast.ShowToast(text, ProblemWords.Any(w => text.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0));
+    }
+
+    // ---------- Connection island ----------
+
+    static bool IsAuthEvent(string ev) { return ev == "AUTH" || ev == "GET_CONFIG" || ev == "ASSIGN_IP" || ev == "ADD_ROUTES" || ev == "AUTH_PENDING"; }
+
+    // Maps the app's real connection state onto the island. Called whenever something may have changed; cheap.
+    void UpdateIsland()
+    {
+        if (island == null) return;
+        var live = ConnectedProfile() ?? FortiConnectedProfile();
+        UpdateTrayIcon(live != null ? "connected" : list.IsConnecting ? "connecting" : islandError != null && DateTime.UtcNow < islandErrorUntil ? "error" : null);
+        if (list.IsDisconnecting) { island.SetState(IslandState.Disconnecting, "Bağlantı kesiliyor…", "", DateTime.MinValue); return; }
+        if (islandError != null && DateTime.UtcNow < islandErrorUntil) { island.SetState(IslandState.Error, islandError, "", DateTime.MinValue); return; }
+        islandError = null;
+        if (list.IsConnecting)
+        {
+            var auth = fortiAuth || (monitor != null && IsAuthEvent(monitor.LastEvent));
+            island.SetState(auth ? IslandState.Authenticating : IslandState.Connecting, auth ? "Kimlik doğrulanıyor…" : "Bağlanıyor…", "", DateTime.MinValue);
+            return;
+        }
+        if (live != null)
+        {
+            var since = live.Id == fortiConnectedId ? fortiSince : (monitor != null ? monitor.Current.SinceUtc : DateTime.MinValue);
+            island.SetState(IslandState.Connected, live.Name, "", since);
+            return;
+        }
+        island.SetState(IslandState.Disconnected, "Bağlı değil", "", DateTime.MinValue);
+    }
+
+    string trayBadge = "?"; Icon trayIcon;
+    void UpdateTrayIcon(string badge)
+    {
+        if (tray == null || badge == trayBadge) return;
+        trayBadge = badge;
+        try { var old = trayIcon; trayIcon = IconArt.TrayIcon(badge); tray.Icon = trayIcon; IconArt.Release(old); } catch { }
+    }
+
+    // Demo mode: pretend a profile is connected (no process is started, nothing is changed on this PC).
+    void DemoConnect(string name, bool announce = false)
+    {
+        fortiConnectedId = null;
+        var p = string.IsNullOrEmpty(name) ? null : profiles.FirstOrDefault(x => x.Name.IndexOf(name, StringComparison.CurrentCultureIgnoreCase) >= 0);
+        if (p != null) { fortiConnectedId = p.Id; fortiSince = DateTime.UtcNow.AddMinutes(-47); if (announce) SetStatus("\"" + p.Name + "\" bağlandı"); }
+        var sel = list.SelectedProfile; ApplyFilter(sel != null ? sel.Id : null);
+        InvalidateFooter(); UpdateIsland();
+    }
+
+    void DisconnectCurrent()
+    {
+        if (Demo.On) { DemoConnect(null); return; }
+        if (connectedId != null) Disconnect();
+        else { var f = FortiConnectedProfile(); if (f != null) DisconnectForti(f); }
+    }
 
     // ---------- Menus ----------
 
@@ -1662,7 +839,7 @@ internal sealed class SearchForm : Form
     // Status card for the top of the menus: connection + last backup.
     MenuStatusItem StatusCard()
     {
-        var connected = ConnectedProfile();
+        var connected = ConnectedProfile() ?? FortiConnectedProfile();
         var backup = settings.LastBackupUtc > DateTime.MinValue.AddYears(1) ? "Son yedek: " + Ui.Relative((long)(settings.LastBackupUtc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds) : "Henüz yedek alınmadı";
         if (connected != null)
             return new MenuStatusItem(connected.Name, (LiveTextFor(connected) ?? "Bağlı") + "  ·  " + backup, Ui.Success);
@@ -1872,7 +1049,7 @@ internal sealed class SearchForm : Form
             {
                 fortiOpening = false;
                 if (err != null) { if (fortiConnectingId == p.Id) fortiConnectingId = null; list.ConnectFailed(p.Id); SetStatus(err); return; }
-                if (outcome == FortiGui.Outcome.Pressed) SetStatus("FortiClient \"" + p.Name + "\" bağlanıyor…");
+                if (outcome == FortiGui.Outcome.Pressed) { fortiAuth = true; SetStatus("FortiClient \"" + p.Name + "\" bağlanıyor…"); }
                 else if (outcome == FortiGui.Outcome.NeedsPassword) SetStatus("FortiClient'ta \"" + p.Name + "\" seçildi — parolayı girip Connect'e basın");
                 else if (outcome == FortiGui.Outcome.FillFailed) SetStatus("FortiClient formu doldurulamadı — \"" + p.Name + "\" için parolayı elle girin");
                 else SetStatus("FortiClient'ta \"" + p.Name + "\" seçildi — Connect'e basın");
@@ -1991,9 +1168,10 @@ internal sealed class SearchForm : Form
         var sel = list.SelectedProfile;
         ApplyFilter(sel != null ? sel.Id : null);
         if (id != null && id == fortiConnectingId) { fortiConnectingId = null; list.ConnectSucceeded(id); }
+        fortiAuth = fortiConnectingId != null && fortiAuth;
         var p2 = profiles.FirstOrDefault(p => p.Id == id);
         if (p2 != null) SetStatus("\"" + p2.Name + "\" (FortiClient) bağlandı");
-        InvalidateFooter();
+        InvalidateFooter(); UpdateIsland();
     }
 
     void OnConnectionChanged()
@@ -2014,7 +1192,7 @@ internal sealed class SearchForm : Form
         }
         if (id != null && c.ProfileName != null) SetStatus("\"" + c.ProfileName + "\" bağlandı");
         tray.Text = id != null && c.ProfileName != null ? Trim63("OpenVPN Hızlı Arama · Bağlı: " + c.ProfileName) : "OpenVPN Hızlı Arama";
-        InvalidateFooter();
+        InvalidateFooter(); UpdateIsland();
     }
 
     static void ClearMenu(ToolStrip m) { var old = new List<ToolStripItem>(); foreach (ToolStripItem it in m.Items) old.Add(it); m.Items.Clear(); foreach (var it in old) it.Dispose(); }
@@ -2026,7 +1204,7 @@ internal sealed class SearchForm : Form
         string err;
         var id = connectedId;
         if (ConnectionControl.Disconnect(out err)) { SetStatus("Bağlantı kesiliyor…"); if (id != null) list.BeginDisconnect(id); disconnectStarted = DateTime.UtcNow; }
-        else MessageBox.Show(this, err ?? "Bağlantı kesilemedi.", "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        else GlassDialog.Show(this, err ?? "Bağlantı kesilemedi.", "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     // ---------- Backup / restore / import ----------
@@ -2050,7 +1228,7 @@ internal sealed class SearchForm : Form
                 if (error != null)
                 {
                     if (silent) SetStatus("Otomatik yedek alınamadı: " + error);
-                    else MessageBox.Show(this, "Yedek alınamadı:\n" + error, "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    else GlassDialog.Show(this, "Yedek alınamadı:\n" + error, "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
                 settings.LastBackupUtc = DateTime.UtcNow; SaveSettings();
@@ -2082,7 +1260,7 @@ internal sealed class SearchForm : Form
     {
         var info = "Kayıtlı VPN parolalarınız profil dosyalarında değil, Windows Kimlik Bilgileri Yöneticisi'nde tutulur.\n\n" +
                    "Şimdi açılacak Windows sihirbazında \"Kimlik bilgilerini yedekle\" ile parolalarınızı, kendi belirlediğiniz bir parolayla şifreli bir .crd dosyasına yedekleyebilirsiniz. Aynı sihirbaz başka bir bilgisayarda \"Geri yükle\" ile içeri alır.\n\nDevam edilsin mi?";
-        if (MessageBox.Show(this, info, "VPN parolalarını yedekle", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+        if (GlassDialog.Show(this, info, "VPN parolalarını yedekle", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
         try { Process.Start(new ProcessStartInfo { FileName = "credwiz.exe", UseShellExecute = true }); }
         catch (Exception ex)
         {
@@ -2097,7 +1275,7 @@ internal sealed class SearchForm : Form
         {
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
             try { BackupService.ExportProfile(p.Id, dlg.FileName); SetStatus("\"" + p.Name + "\" dışa aktarıldı"); }
-            catch (Exception ex) { MessageBox.Show(this, "Dışa aktarılamadı:\n" + ex.Message, "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            catch (Exception ex) { GlassDialog.Show(this, "Dışa aktarılamadı:\n" + ex.Message, "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
     }
 
@@ -2125,7 +1303,7 @@ internal sealed class SearchForm : Form
         var tmp = Path.Combine(Path.GetTempPath(), "OvpnQS-" + Guid.NewGuid().ToString("N"));
         List<string> files, pinnedNames;
         try { files = ImportService.ExtractBackup(zip, tmp, out pinnedNames); }
-        catch (Exception ex) { ImportService.CleanupTemp(tmp); MessageBox.Show(this, "Yedek okunamadı:\n" + ex.Message, "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        catch (Exception ex) { ImportService.CleanupTemp(tmp); GlassDialog.Show(this, "Yedek okunamadı:\n" + ex.Message, "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         ImportOvpns(files, tmp, pinnedNames, ImportService.ReadUsernames(zip));
     }
 
@@ -2140,12 +1318,12 @@ internal sealed class SearchForm : Form
         if (fresh == 0)
         {
             if (tempDir != null) ImportService.CleanupTemp(tempDir);
-            MessageBox.Show(this, "Seçilen " + files.Count + " profilin hepsi OpenVPN Connect'te zaten var.", "İçe aktarma", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            GlassDialog.Show(this, "Seçilen " + files.Count + " profilin hepsi OpenVPN Connect'te zaten var.", "İçe aktarma", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         var ask = files.Count + " profil bulundu. " + fresh + " tanesi OpenVPN Connect'e eklenecek, " + (files.Count - fresh) + " tanesi zaten var ve atlanacak.\n\n" +
                   "Kayıtlı parolalar yedeğe dahil değildir; ilk bağlantıda parola sorulabilir.\n\nDevam edilsin mi?";
-        if (MessageBox.Show(this, ask, "İçe aktarma", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+        if (GlassDialog.Show(this, ask, "İçe aktarma", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
         {
             if (tempDir != null) ImportService.CleanupTemp(tempDir);
             return;
@@ -2166,10 +1344,10 @@ internal sealed class SearchForm : Form
                     foreach (var p in profiles) if (pinnedNames.Contains(p.Name, StringComparer.CurrentCultureIgnoreCase)) pins.Add(p.Id);
                     PinStore.Save(pins); ApplyFilter(null);
                 }
-                if (error != null) { MessageBox.Show(this, "İçe aktarma başarısız:\n" + error, "İçe aktarma", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                if (error != null) { GlassDialog.Show(this, "İçe aktarma başarısız:\n" + error, "İçe aktarma", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
                 var msg = r.Imported + " profil eklendi, " + r.Skipped + " atlandı, " + r.Failed + " başarısız.";
                 var details = r.Messages != null && r.Messages.Count > 0 ? "\n\n" + string.Join("\n", r.Messages.Take(15).ToArray()) : "";
-                MessageBox.Show(this, msg + details, "İçe aktarma tamamlandı", MessageBoxButtons.OK, r.Failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                GlassDialog.Show(this, msg + details, "İçe aktarma tamamlandı", MessageBoxButtons.OK, r.Failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
             });
         });
     }
@@ -2196,10 +1374,10 @@ internal sealed class SearchForm : Form
 
     void DeleteProfile(VpnProfile p)
     {
-        if (MessageBox.Show(this, "\"" + p.Name + "\" profili OpenVPN Connect'ten kalıcı olarak silinecek.\nBu işlem geri alınamaz (yedeğiniz varsa geri yükleyebilirsiniz).\n\nDevam edilsin mi?",
+        if (GlassDialog.Show(this, "\"" + p.Name + "\" profili OpenVPN Connect'ten kalıcı olarak silinecek.\nBu işlem geri alınamaz (yedeğiniz varsa geri yükleyebilirsiniz).\n\nDevam edilsin mi?",
             "Profili sil", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
         var err = RemoveProfile(p);
-        if (err != null) MessageBox.Show(this, "Profil silinemedi:\n" + err, "Profili sil", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        if (err != null) GlassDialog.Show(this, "Profil silinemedi:\n" + err, "Profili sil", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         else { SetStatus("\"" + p.Name + "\" silindi"); ReloadSoon(); }
     }
 
@@ -2277,10 +1455,12 @@ internal sealed class SearchForm : Form
     void ApplyTheme()
     {
         Themes.Apply(settings.Theme);
-        BackColor = Ui.Bg; ForeColor = Ui.Text;
+        ForeColor = Ui.Text;
         search.RefreshTheme();
-        list.BackColor = Ui.Bg; search.Hotkey = settings.Hotkey;
+        search.Hotkey = settings.Hotkey;
+        RefreshSegments();
         ApplyFrameStyle();
+        UpdateIsland();
         Invalidate(true);
     }
 
@@ -2296,7 +1476,7 @@ internal sealed class SearchForm : Form
 
     void ShowShortcuts()
     {
-        MessageBox.Show(this,
+        GlassDialog.Show(this,
             settings.Hotkey + "\tPaneli aç / gizle (her yerden)\n" +
             "↑ ↓  PgUp PgDn\tProfil seç\n" +
             "Enter\t\tSeçili profile bağlan\n" +
@@ -2331,11 +1511,8 @@ internal sealed class SearchForm : Form
         if (!IsHandleCreated) return;
         try
         {
-            var on = Themes.IsLight ? 0 : 1; NativeMethods.DwmSetWindowAttribute(Handle, 20, ref on, 4);
-            var corner = docked ? 3 : 2; // Windows 11: small rounding when docked, normal when floating
-            NativeMethods.DwmSetWindowAttribute(Handle, 33, ref corner, 4);
-            var border = Ui.Border.R | (Ui.Border.G << 8) | (Ui.Border.B << 16);
-            NativeMethods.DwmSetWindowAttribute(Handle, 34, ref border, 4);
+            Backdrop.Apply(Handle, !Themes.IsLight);       // compositor acrylic on Windows 11 22H2+, opaque fallback material elsewhere
+            Backdrop.SetCorner(Handle, docked ? 3 : 2);    // DWM rounding: antialiased edge and native shadow
         }
         catch { }
     }
@@ -2425,7 +1602,6 @@ internal sealed class SearchForm : Form
         {
             userMoved = false; PlaceWindow();
             // fade in, and let the rows slide in
-            Opacity = 0; fadeStep = 0; fadeTimer.Start();
             list.AnimateNext = true; var sel = list.SelectedProfile; ApplyFilter(sel != null ? sel.Id : null);
             noActivate = !activate; Show(); noActivate = false;
             UpdateDockState();
@@ -2437,7 +1613,7 @@ internal sealed class SearchForm : Form
 
     void HideForLater()
     {
-        manualOverride = false; Hide(); ambient.Stop(); fadeTimer.Stop(); Opacity = 1;
+        manualOverride = false; Hide(); ambient.Stop();
         trimTimer.Stop(); trimTimer.Start(); // give memory back a few seconds after hiding
     }
 
@@ -2450,8 +1626,8 @@ internal sealed class SearchForm : Form
         List<VpnProfile> loaded;
         try
         {
-            loaded = ProfileStore.Load();
-            if (settings.ShowForti)
+            loaded = Demo.On ? Demo.Profiles() : ProfileStore.Load();
+            if (!Demo.On && settings.ShowForti)
             {
                 var forti = FortiStore.Load();
                 Dictionary<string, long> starts;
@@ -2500,25 +1676,26 @@ internal sealed class SearchForm : Form
         var terms = ProfileStore.SearchKey(Input.Text).Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray();
         var byName = StringComparer.Create(CultureInfo.GetCultureInfo("tr-TR"), true);
         var rows = new List<ListRow>();
+        var pool = providerFilter == 1 ? profiles.Where(p => !FortiStore.IsForti(p)).ToList() : providerFilter == 2 ? profiles.Where(FortiStore.IsForti).ToList() : profiles;
         if (terms.Length == 0)
         {
-            var live = profiles.Where(p => p.Id == connectedId || p.Id == fortiConnectedId).ToList();
+            var live = pool.Where(p => p.Id == connectedId || p.Id == fortiConnectedId).ToList();
             var liveIds = new HashSet<string>(live.Select(p => p.Id));
-            var pinned = profiles.Where(p => pins.Contains(p.Id) && !liveIds.Contains(p.Id)).OrderBy(p => p.Name, byName).ToList();
-            var recent = profiles.Where(p => !pins.Contains(p.Id) && !liveIds.Contains(p.Id) && p.LastConnected > 0).OrderByDescending(p => p.LastConnected).Take(5).ToList();
+            var pinned = pool.Where(p => pins.Contains(p.Id) && !liveIds.Contains(p.Id)).OrderBy(p => p.Name, byName).ToList();
+            var recent = pool.Where(p => !pins.Contains(p.Id) && !liveIds.Contains(p.Id) && p.LastConnected > 0).OrderByDescending(p => p.LastConnected).Take(5).ToList();
             var used = new HashSet<string>(live.Concat(pinned).Concat(recent).Select(p => p.Id));
-            var rest = profiles.Where(p => !used.Contains(p.Id) && !FortiStore.IsForti(p)).OrderBy(p => p.Name, byName).ToList();
-            var fortiRest = profiles.Where(p => !used.Contains(p.Id) && FortiStore.IsForti(p)).OrderBy(p => p.Name, byName).ToList();
+            var rest = pool.Where(p => !used.Contains(p.Id) && !FortiStore.IsForti(p)).OrderBy(p => p.Name, byName).ToList();
+            var fortiRest = pool.Where(p => !used.Contains(p.Id) && FortiStore.IsForti(p)).OrderBy(p => p.Name, byName).ToList();
             AddGroup(rows, "BAĞLI", live, Glyph.Plug);
             AddGroup(rows, "SABİTLENENLER", pinned, Glyph.Star);
-            AddGroup(rows, "SON BAĞLANILANLAR", recent, Glyph.History);
+            AddGroup(rows, "SON KULLANILAN", recent, Glyph.History);
             AddGroup(rows, fortiRest.Count > 0 ? "OPENVPN PROFİLLERİ" : used.Count > 0 ? "TÜM PROFİLLER" : null, rest);
             AddGroup(rows, "FORTICLIENT VPN", fortiRest, Glyph.ShieldLock);
-            shownCount = profiles.Count;
+            shownCount = pool.Count;
         }
         else
         {
-            var hits = profiles.Where(p => ProfileStore.Matches(p, terms))
+            var hits = pool.Where(p => ProfileStore.Matches(p, terms))
                 .OrderBy(p => ProfileStore.Score(p, terms)).ThenByDescending(p => pins.Contains(p.Id)).ThenByDescending(p => p.LastConnected).ThenBy(p => p.Name, byName).ToList();
             AddGroup(rows, hits.Count == 1 ? "1 SONUÇ" : hits.Count + " SONUÇ", hits, Glyph.Search);
             shownCount = hits.Count;
@@ -2529,13 +1706,13 @@ internal sealed class SearchForm : Form
         {
             if (loadError != null) { title = "Profiller okunamadı"; hint = loadError; }
             else if (profiles.Count == 0) { title = "Kayıtlı profil yok"; hint = "OpenVPN Connect'e profil ekleyin; liste kendiliğinden güncellenir."; }
-            else { title = "Sonuç bulunamadı"; hint = "\"" + Input.Text.Trim() + "\" ile eşleşen profil yok. Farklı bir kelime deneyin."; }
+            else { title = "Sonuç bulunamadı"; hint = Input.Text.Trim().Length > 0 ? "\"" + Input.Text.Trim() + "\" ile eşleşen profil yok. Farklı bir kelime deneyin." : "Bu filtrede profil yok."; }
         }
         list.SetRows(rows, terms, title, hint, keepId);
 
         subtitle = loadError != null && profiles.Count == 0 ? "profil okunamadı"
-            : terms.Length == 0 ? profiles.Count + " profil"
-            : shownCount + " / " + profiles.Count;
+            : terms.Length == 0 ? pool.Count + " profil"
+            : shownCount + " / " + pool.Count;
         InvalidateHeader();
     }
 
@@ -2545,7 +1722,7 @@ internal sealed class SearchForm : Form
         var pinned = !pins.Contains(p.Id);
         if (pinned) pins.Add(p.Id); else pins.Remove(p.Id);
         PinStore.Save(pins);
-        ApplyFilter(p.Id);
+        ApplyFilter(p.Id); list.PulsePin(p.Id);
         SetStatus(pinned ? "\"" + p.Name + "\" sabitlendi" : "\"" + p.Name + "\" sabitlemesi kaldırıldı");
     }
 
@@ -2559,6 +1736,7 @@ internal sealed class SearchForm : Form
         if (e.KeyCode == Keys.Escape) { if (Input.TextLength > 0) ResetSearch(); else HideForLater(); }
         else if (e.Control && e.KeyCode == Keys.F) { Input.Focus(); Input.SelectAll(); }
         else if (e.Control && e.KeyCode == Keys.P) TogglePin(list.SelectedProfile);
+        else if (e.Control && e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D3) { segmented.Selected = e.KeyCode - Keys.D1; }
         else if (e.Control && e.KeyCode == Keys.Oemcomma) BeginInvoke(new Action(ShowSettings));
         else if (e.KeyCode == Keys.Down) list.MoveSelection(1);
         else if (e.KeyCode == Keys.Up) list.MoveSelection(-1);
@@ -2576,17 +1754,18 @@ internal sealed class SearchForm : Form
     void Connect(VpnProfile p)
     {
         if (p == null) return;
+        if (Demo.On) { DemoConnect(p.Name, true); return; }
         if (FortiStore.IsForti(p)) { ConnectForti(p); return; }
         if (p.Id == connectedId) { list.ConnectSucceeded(p.Id); SetStatus("\"" + p.Name + "\" zaten bağlı"); return; }
         if (p.Id == connectingProfileId) return;
-        if (!File.Exists(openVpnPath)) { list.ConnectFailed(p.Id); MessageBox.Show(this, "OpenVPN Connect bulunamadı.", Text); return; }
+        if (!File.Exists(openVpnPath)) { list.ConnectFailed(p.Id); GlassDialog.Show(this, "OpenVPN Connect bulunamadı.", Text); return; }
         try
         {
             var arg = "--connect-shortcut=" + p.Id;
             if (p.Id.IndexOf(' ') >= 0) arg = "\"" + arg + "\"";
             using (Process.Start(new ProcessStartInfo { FileName = openVpnPath, Arguments = arg, UseShellExecute = true })) { }
         }
-        catch (Exception ex) { list.ConnectFailed(p.Id); MessageBox.Show(this, "Bağlantı başlatılamadı:\n" + ex.Message, Text); return; }
+        catch (Exception ex) { list.ConnectFailed(p.Id); GlassDialog.Show(this, "Bağlantı başlatılamadı:\n" + ex.Message, Text); return; }
         connectingProfileId = p.Id; connectStarted = DateTime.UtcNow;
         list.BeginConnect(p.Id);
         SetStatus("\"" + p.Name + "\" bağlanıyor…");
@@ -2660,13 +1839,14 @@ internal sealed class SearchForm : Form
         tick++;
         var busyConnecting = connectingProfileId != null || disconnectStarted != DateTime.MinValue;
         // poll the connection fast while a connect/disconnect is in flight, otherwise every 2 s
-        if ((busyConnecting || tick % 4 == 0) && monitor != null) monitor.Poll();
+        if (!Demo.On && (busyConnecting || tick % 4 == 0) && monitor != null) monitor.Poll();
         if (busyConnecting) CheckConnectTimeout();
+        UpdateIsland();
         if (tick % 4 == 0) CheckConfigChanged();
-        if (tick % 120 == 20) CheckAutoBackup();
+        if (!Demo.On && tick % 120 == 20) CheckAutoBackup();
         if (settings.ReachabilityCheck && tick % 1200 == 0) Reachability.CheckAll(profiles, true);
         if (!Visible && tick % 600 == 300) NativeMethods.TrimMemory(); // every 5 min while hidden
-        if (settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (Visible || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
+        if (!Demo.On && settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (Visible || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
 
         // The process scan (~8 ms, allocates) only runs when the tracked window is gone, and at most every 2 s.
         // Otherwise the cached handle is checked (microseconds); WinEvent hooks cover moves in between.
@@ -2712,7 +1892,7 @@ internal sealed class SearchForm : Form
     {
         IntPtr h; NativeMethods.RECT r;
         if (FindOpenVpnWindow(out h) && NativeMethods.GetFrame(h, out r)) { DockTo(h, r); return; }
-        var area = Screen.FromPoint(Cursor.Position).WorkingArea;
+        var area = (Demo.On ? Screen.PrimaryScreen : Screen.FromPoint(Cursor.Position)).WorkingArea;
         if (!placed || !area.IntersectsWith(Bounds))
             SetBounds(area.Left + (area.Width - Width) / 2, area.Top + Math.Max(0, (area.Height - floatHeight) / 2), Width, Math.Min(floatHeight, area.Height));
         placed = true;
@@ -2761,6 +1941,7 @@ internal sealed class SearchForm : Form
     static bool FindOpenVpnWindow(out IntPtr h)
     {
         h = IntPtr.Zero;
+        if (Demo.On) return false;   // demo mode never docks to a real OpenVPN window
         var processes = Process.GetProcessesByName("OpenVPNConnect");
         try
         {
@@ -2792,13 +1973,25 @@ internal sealed class SearchForm : Form
 
 internal static class Program
 {
-    const string MutexName = "Local\\OpenVpnQuickSearch.SingleInstance", EventName = "Local\\OpenVpnQuickSearch.Activate";
+    static float devScale;
+    static string MutexName = "Local\\OpenVpnQuickSearch.SingleInstance", EventName = "Local\\OpenVpnQuickSearch.Activate";
     const int ASFW_ANY = -1;
 
     [STAThread]
     static int Main(string[] args)
     {
         var background = args.Any(a => a.Equals("--background", StringComparison.OrdinalIgnoreCase));
+        // Development switches: a separate instance name and settings file let a test build run next to the installed one.
+        foreach (var a in args)
+        {
+            if (a.StartsWith("--instance=", StringComparison.OrdinalIgnoreCase)) { var n = a.Substring(11); MutexName += "." + n; EventName += "." + n; }
+            else if (a.StartsWith("--settings=", StringComparison.OrdinalIgnoreCase)) SettingsStore.PathOverride = a.Substring(11);
+            else if (a.Equals("--demo", StringComparison.OrdinalIgnoreCase)) Demo.On = true;
+            else if (a.StartsWith("--demo-connected=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.ConnectedName = a.Substring(17); }
+            else if (a.StartsWith("--demo-search=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.Query = a.Substring(14); }
+            else if (a.StartsWith("--demo-settings=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; int.TryParse(a.Substring(16), out Demo.SettingsPage); }
+            else if (a.StartsWith("--scale=", StringComparison.OrdinalIgnoreCase)) float.TryParse(a.Substring(8), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out devScale);
+        }
         try
         {
             if (args.Any(a => a.Equals("--list", StringComparison.OrdinalIgnoreCase)))
@@ -2821,7 +2014,7 @@ internal static class Program
                     return 0;
                 }
                 try { NativeMethods.SetProcessDPIAware(); } catch { }
-                using (var g = Graphics.FromHwnd(IntPtr.Zero)) Ui.Scale = Math.Max(1F, g.DpiX / 96F);
+                using (var g = Graphics.FromHwnd(IntPtr.Zero)) Ui.Scale = devScale > 0 ? devScale : Math.Max(1F, g.DpiX / 96F);
                 using (var activation = new EventWaitHandle(false, EventResetMode.AutoReset, EventName))
                 {
                     Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -2847,3 +2040,5 @@ internal static class Program
         }
     }
 }
+
+

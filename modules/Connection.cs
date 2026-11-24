@@ -57,6 +57,9 @@ internal sealed class ConnectionMonitor : IDisposable
 
     public ConnectionState Current { get { return current; } }
 
+    // Last OpenVPN Connect log event (CONNECTING, WAIT, AUTH, GET_CONFIG, CONNECTED ...), empty when unknown.
+    public string LastEvent { get { return lastEvent ?? ""; } }
+
     public void Poll()
     {
         if (disposed) return;
@@ -636,11 +639,11 @@ internal sealed class HistoryForm : Form
             try
             {
                 ConnectionHistory.ExportCsv(dlg.FileName);
-                MessageBox.Show(this, "Bağlantı geçmişi dışa aktarıldı:\r\n" + dlg.FileName, "Bağlantı geçmişi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                GlassDialog.Show(this, "Bağlantı geçmişi dışa aktarıldı:\r\n" + dlg.FileName, "Bağlantı geçmişi", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "Dışa aktarılamadı: " + ex.Message, "Bağlantı geçmişi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                GlassDialog.Show(this, "Dışa aktarılamadı: " + ex.Message, "Bağlantı geçmişi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
     }

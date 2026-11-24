@@ -73,11 +73,11 @@ static class Tests
 
     static void ShowsTunnel()
     {
-        Check(FortiGui.ShowsTunnel("Personal VPNs SANBOR-YENİ", "SANBOR-YENİ"), "grup önekli değer eşleşir");
-        Check(FortiGui.ShowsTunnel("Personal VPNs sanbor-yeni", "SANBOR-YENİ"), "büyük/küçük harf (Türkçe İ) eşleşir");
-        Check(FortiGui.ShowsTunnel("SANBOR-YENİ", "SANBOR-YENİ"), "öneksiz değer eşleşir");
-        Check(!FortiGui.ShowsTunnel("Personal VPNs ESKI-SANBOR-YENİ", "SANBOR-YENİ"), "ad parçası eşleşmez");
-        Check(!FortiGui.ShowsTunnel("Personal VPNs SANBOR", "SANBOR-YENİ"), "farklı tünel eşleşmez");
+        Check(FortiGui.ShowsTunnel("Personal VPNs ÖRNEK-İŞ", "ÖRNEK-İŞ"), "grup önekli değer eşleşir");
+        Check(FortiGui.ShowsTunnel("Personal VPNs örnek-iş", "ÖRNEK-İŞ"), "büyük/küçük harf (Türkçe İ) eşleşir");
+        Check(FortiGui.ShowsTunnel("ÖRNEK-İŞ", "ÖRNEK-İŞ"), "öneksiz değer eşleşir");
+        Check(!FortiGui.ShowsTunnel("Personal VPNs ESKI-ÖRNEK-İŞ", "ÖRNEK-İŞ"), "ad parçası eşleşmez");
+        Check(!FortiGui.ShowsTunnel("Personal VPNs ÖRNEK", "ÖRNEK-İŞ"), "farklı tünel eşleşmez");
         Check(!FortiGui.ShowsTunnel("", "X"), "boş değer eşleşmez");
     }
 
@@ -90,20 +90,20 @@ static class Tests
         var t2 = new DateTime(2026, 11, 24, 9, 0, 0, DateTimeKind.Utc);
         var history = new List<HistoryEntry>
         {
-            new HistoryEntry { ProfileId = "forti-ssl:SANBOR", StartUtc = t1, EndUtc = t1.AddMinutes(5) },
-            new HistoryEntry { ProfileId = "forti-ssl:SANBOR", StartUtc = t2, EndUtc = t2.AddMinutes(5) },
+            new HistoryEntry { ProfileId = "forti-ssl:ALFA", StartUtc = t1, EndUtc = t1.AddMinutes(5) },
+            new HistoryEntry { ProfileId = "forti-ssl:ALFA", StartUtc = t2, EndUtc = t2.AddMinutes(5) },
             new HistoryEntry { ProfileId = "ovpn-1", StartUtc = t2, EndUtc = t2.AddMinutes(1) },
             new HistoryEntry { ProfileId = "", StartUtc = t2, EndUtc = t2 },
         };
         var starts = ConnectionHistory.LastStarts(history);
-        Check(starts["forti-ssl:SANBOR"] == (long)(t2 - epoch).TotalMilliseconds, "profil başına en son başlangıç");
+        Check(starts["forti-ssl:ALFA"] == (long)(t2 - epoch).TotalMilliseconds, "profil başına en son başlangıç");
         Check(!starts.ContainsKey(""), "kimliksiz kayıt yok sayılır");
 
-        var forti = new VpnProfile { Id = "forti-ssl:SANBOR", Name = "SANBOR", LastConnected = 0 };
-        var other = new VpnProfile { Id = "forti-ssl:TOPAZ", Name = "TOPAZ", LastConnected = 0 };
+        var forti = new VpnProfile { Id = "forti-ssl:ALFA", Name = "ALFA", LastConnected = 0 };
+        var other = new VpnProfile { Id = "forti-ssl:BETA", Name = "BETA", LastConnected = 0 };
         var ovpn = new VpnProfile { Id = "ovpn-1", Name = "x", LastConnected = 5 };
         FortiStore.ApplyLastConnected(new[] { forti, other, ovpn }, starts);
-        Check(forti.LastConnected == starts["forti-ssl:SANBOR"], "bağlanılmış Forti profili zaman alır");
+        Check(forti.LastConnected == starts["forti-ssl:ALFA"], "bağlanılmış Forti profili zaman alır");
         Check(other.LastConnected == 0, "hiç bağlanılmamış Forti profili 0 kalır");
         Check(ovpn.LastConnected == 5, "OpenVPN profiline dokunulmaz (kendi zamanı config.json'dan)");
     }

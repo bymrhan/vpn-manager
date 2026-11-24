@@ -374,7 +374,7 @@ internal static class FortiGui
         return true;
     }
 
-    // The combo shows "<group> <tunnel>", e.g. "Personal VPNs SANBOR-YENİ".
+    // The combo shows "<group> <tunnel>", e.g. "Personal VPNs ÖRNEK-TÜNEL".
     internal static bool ShowsTunnel(string shown, string tunnel)
     {
         if (string.IsNullOrEmpty(shown) || string.IsNullOrEmpty(tunnel)) return false;
