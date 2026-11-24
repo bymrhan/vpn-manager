@@ -1,0 +1,41 @@
+OPENVPN HIZLI ARAMA — KURULUM
+=============================
+
+!!! GÜVENLİK UYARISI !!!
+Bu paketteki "profiller" klasörü VPN profillerini ŞİFRESİZ olarak içerir
+(.ovpn dosyalarındaki özel anahtarlar ve sertifikalar dahil). Bu zip'i yalnızca
+kendi cihazlarınıza veya güvendiğiniz kişilere verin; e-posta / paylaşımlı
+klasörlerde bırakmayın. Kurulum sihirbazı aktarımdan sonra paketi bilgisayardan siler.
+Kayıtlı parolalar pakette YOKTUR; ilk bağlantıda parola sorulur.
+
+GEREKSİNİMLER
+- Windows 10 / 11 (.NET Framework 4.8 — Windows ile birlikte gelir)
+- OpenVPN Connect 3.x (profilleri içe aktarmak için kurulu olmalı)
+- FortiClient VPN 7.x (isteğe bağlı)
+
+KURULUM
+1. Zip'i bir klasöre çıkarın.
+2. "Kur.cmd" dosyasına çift tıklayın. Yönetici izni gerekmez; program
+   %LOCALAPPDATA%\Programs\OpenVPN Hizli Arama klasörüne kurulur ve
+   Başlat menüsüne eklenir.
+3. İlk kurulum sihirbazı açılır:
+   - Bu cihazdaki OpenVPN Connect ve FortiClient'ı ve profillerini tarar.
+   - Paketteki OpenVPN profillerinden bu cihazda olmayanları içe aktarır
+     (OpenVPN Connect otomatik başlatılır; aynı adda olanlar atlanır).
+   - Paketteki FortiClient SSL VPN tünellerini ekler (yönetici izni ister;
+     kullanıcı adı / parola FortiClient'ta ilk bağlantıda girilir).
+     IPsec tünelleri cihaza bağlı anahtarlar içerdiği için aktarılmaz.
+   - Windows açılışında başlatma, masaüstü kısayolu, tema ayarlarını yapar.
+
+KULLANIM
+- OpenVPN Connect'i açın; panel otomatik olarak yanına yapışır.
+- Ctrl+Alt+V: paneli her yerden açar / gizler.
+- Ayrıntılar: kurulum klasöründeki "OpenVPN-Hizli-Arama-Kullanim.txt".
+
+PAKETSİZ KULLANIM
+"profiller" klasörü olmadan da çalışır: program her cihazda o cihazdaki
+OpenVPN Connect ve FortiClient profillerini kendisi tarar.
+Sihirbazı tekrar açmak için: OpenVPN-Hizli-Arama.exe --setup
+
+KALDIRMA
+Kurulum klasöründeki "Kaldir.cmd". VPN uygulamalarındaki profillere dokunmaz.

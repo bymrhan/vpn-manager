@@ -1,0 +1,16 @@
+# Build outputs and binaries (build.ps1 writes to ..\..\outputs, outside this repository)
+*.exe
+*.dll
+*.pdb
+*.zip
+
+# VPN profiles and credentials must never be committed
+*.ovpn
+profiller/
+*.ovpn.zip
+OpenVPN-Profilleri.zip
+FortiClient-Tunelleri.json
+
+# Hand-made copies from before version control
+*.v3-backup.cs
+*.old.exe

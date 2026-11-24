@@ -1,0 +1,7 @@
+# Sources are CRLF with UTF-8 BOM (csc and PowerShell 5.1 need the BOM for Turkish text).
+*.cs   text eol=crlf
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.txt  text eol=crlf
+*.md   text eol=crlf
+*.ico  binary
