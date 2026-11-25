@@ -428,6 +428,15 @@ internal sealed class SNote : SControl
 {
     public string Text2; public Glyph Glyph;
     public SNote(string text, Glyph glyph) { Text2 = text; Glyph = glyph; Height = S(50); }
+    // Height follows the wrapped text at the current width (theme, DPI and font can change it).
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+        if (Width <= S(80)) return;
+        var textH = TextRenderer.MeasureText(Text2 ?? "", SFonts.RowDesc, new Size(Width - S(56), int.MaxValue), TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak).Height;
+        var h = Math.Max(S(50), textH + S(24));
+        if (h != Height) Height = h;
+    }
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics; g.Clear(Parent != null ? Parent.BackColor : Ui.Bg); g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -787,7 +796,7 @@ internal sealed class SettingsForm : Form
             .Add(new SRow("Çökmeden sonra rapor öner", "Sonraki açılışta GitHub'da rapor açmayı sorar", askToggle, Glyph.Info))
             .Add(new SRow("Günlük klasörünü aç", ShortPath(CrashReporter.DefaultLogDir), openLogs, Glyph.Folder))
             .Add(new SRow("Son hatayı bildir", "Temizlenmiş raporu tarayıcıda GitHub'da açar", report, Glyph.Open));
-        page.Add(new SNote(CrashReporter.ReportSummary, Glyph.Lock) { Height = S(92) });
+        page.Add(new SNote(CrashReporter.ReportSummary, Glyph.Lock));
 
         var dataDir = Path.GetDirectoryName(SettingsStore.FilePath);
         var openData = new SButton("Aç", SButtonKind.Secondary, Glyph.Folder);
