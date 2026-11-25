@@ -3,7 +3,7 @@
 OpenVPN Connect, FortiClient VPN, Sophos Connect ve WatchGuard Mobile VPN with SSL profillerinizi **tek bir cam (Liquid Glass) panelden** arayın, sabitleyin ve tek tıkla bağlanın.
 Yüzlerce profil arasında firma adı, sunucu adresi, kullanıcı adı veya `.ovpn` dosya adıyla anında filtreler; Windows 10/11, tek `exe`, yönetici izni gerektirmez.
 
-> **English summary:** A small Windows (WinForms/GDI+, .NET Framework 4.8) companion for OpenVPN Connect, FortiClient VPN, Sophos Connect and WatchGuard Mobile VPN with SSL. Instant fuzzy search over all saved profiles, one-click connect/disconnect, pinning, live connection state, server reachability dots, backups, duplicate cleanup, connection history, light/dark/system themes. Connecting runs in the background (client windows are not brought to the front; they appear only when you must act). Optional self-update from GitHub Releases (ask / automatic / off, SHA-256 verified, rollback). The app is unsigned. The Sophos list/state output format was verified only against an empty profile list, and WatchGuard (single connection, driven through its dialog) was not exercised against a live tunnel. Install with one PowerShell line (below). Screenshots use fictional sample companies (`--demo` mode).
+> **English summary:** A small Windows (WinForms/GDI+, .NET Framework 4.8) companion for OpenVPN Connect, FortiClient VPN, Sophos Connect and WatchGuard Mobile VPN with SSL. Instant fuzzy search over all saved profiles, one-click connect/disconnect, pinning, live connection state, server reachability dots, backups, duplicate cleanup, connection history, light/dark/system themes. Connecting runs in the background (client windows are not brought to the front; they appear only when you must act). Optional self-update from GitHub Releases (ask / automatic / off, SHA-256 verified, rollback). Own log (`%APPDATA%\OpenVpnQuickSearch\logs`) and a consent-based error report: after a crash the app offers to open a sanitized report (no passwords, usernames, profile/customer names, hosts, IPs, e-mail, machine name or user paths) as a pre-filled GitHub issue in the user's browser; the app itself uploads nothing (a public app cannot hold a GitHub write token). The app is unsigned. The Sophos list/state output format was verified only against an empty profile list, and WatchGuard (single connection, driven through its dialog) was not exercised against a live tunnel. Install with one PowerShell line (below). Screenshots use fictional sample companies (`--demo` mode).
 
 ## Kurulum (tek komut)
 
@@ -140,6 +140,7 @@ Bağlanma ve kesme sırasında istemci pencereleri **öne getirilmez**; çalış
 - **Genel:** kısayol tuşu, Windows açılışında başlat, panel tarafı, sunucu erişim testi ve her istemci için bir anahtar: *FortiClient profilleri*, *Sophos Connect profilleri*, *WatchGuard profilleri*. Sophos ve WatchGuard anahtarları yalnızca o istemci **algılanırsa** görünür. Bir anahtarı kapatmak o istemcinin satırlarını listeden kaldırır ve durumunu sıfırlar; anahtarlar yeniden başlatmada korunur.
 - **Yedekleme** ve **Görünüm:** yedek sıklığı / sayısı / klasörü; tema.
 - **Hakkında > Güncelleme:** bkz. aşağıdaki [Güncelleme](#güncelleme).
+- **Hakkında > Tanılama:** *Hata kaydı tut*, *Çökmeden sonra rapor öner*, *Günlük klasörünü aç*, *Son hatayı bildir*; bkz. [Hata raporları ve günlükler](#hata-raporları-ve-günlükler).
 
 ## Güncelleme
 Uygulama, bu deponun [Releases](https://github.com/bymrhan/vpn-manager/releases) sayfasındaki son sürümü denetler. Ayarlar > Hakkında > **Güncelleme** bloğu:
@@ -155,14 +156,36 @@ Uygulama, bu deponun [Releases](https://github.com/bymrhan/vpn-manager/releases)
 Sürüm yayınlama adımları için bkz. [`docs/RELEASING.md`](docs/RELEASING.md) (`build.ps1 -NoProfiles` zip'in yanına `.sha256` yazar; ikisi de sürüme yüklenir).
 
 ## Tanılama
-- **`%APPDATA%\OpenVpnQuickSearch\forti.log`:** FortiClient otomatik bağlanma adımlarının sonucunu satır satır yazar (hangi tünel, sonuç, kısa ayrıntı). **Parola içermez.** FortiClient'ta *Connect* bulunamazsa nedenini buradan okuyabilirsiniz.
+- **Uygulama günlüğü** `%APPDATA%\OpenVpnQuickSearch\logs\app-YYYYMMDD.log`: bkz. [Hata raporları ve günlükler](#hata-raporları-ve-günlükler). FortiClient otomatik bağlanma adımları da buraya `forti` etiketiyle yazılır (eski `forti.log` artık yazılmaz; kalan dosyayı silebilirsiniz).
 - `%APPDATA%\OpenVpnQuickSearch\history.csv`: bağlantı geçmişi; `pinned.txt`: sabitlenenler.
 - Güncelleme kurulumu için kurulum klasöründeki `guncelleme.log` (yukarıya bakın).
 
+## Hata raporları ve günlükler
+Uygulama kendi günlüğünü tutar ve beklenmedik bir hatadan sonra **sizin onayınızla** GitHub'da bir hata kaydı (issue) açmanızı önerir. Kayıtlar bu deponun [Issues](https://github.com/bymrhan/vpn-manager/issues?q=label%3Ahata) bölümünde `hata` etiketiyle toplanır; düzeltmeler oradan yapılır.
+
+**Ne kaydedilir, nereye**
+- `%APPDATA%\OpenVpnQuickSearch\logs\app-YYYYMMDD.log` (UTF-8): açılış/kapanış (sürüm, Windows, .NET, ekran ölçeği, hangi VPN istemcilerinin kurulu olduğu), her sağlayıcı için bağlan/kes istekleri ve sonuçları (**yalnızca sağlayıcı türü ve sonuç**; profil adı, sunucu, kullanıcı adı yazılmaz), güncelleme denetimleri, istemci yoklama hataları (10 dakikada en fazla bir satır) ve hatalar (yığın izi, mutlak yol olmadan). Parola hiçbir zaman yazılmaz.
+- Satır biçimi: `zaman düzey kaynak ileti` (ör. `2026-11-25 14:03:11.123 INFO  forti connect outcome: Pressed`). En fazla 5 dosya × ~512 KB tutulur, eskiler silinir. Yazma arka planda yapılır; arayüzü bekletmez.
+- Yakalanmamış bir hata olursa aynı klasöre temizlenmiş bir kayıt (`crash-<zaman>.txt`) ve bir sonraki açılış için işaret yazılır; bağlanma sırasında yakalanan hatalar `error-<zaman>.txt` olarak tutulur (her türden en fazla 5).
+- Ayarlar > Hakkında > *Hata kaydı tut* kapatılırsa günlük ve hata kayıtları yazılmaz. Demo modunda (`--demo`) hiçbir şey yazılmaz ve tarayıcı açılmaz.
+
+**Rapor ne içerir / ne içermez**
+- İçerir: uygulama sürümü, Windows ve .NET sürümü, ekran ölçeği, VPN istemcilerinin kurulu olup olmadığı (var/yok), hatanın türü ve kod satırları (sınıf ve yöntem adları, dosya adı ve satır), son 60 günlük satırı ve 8 karakterlik bir **parmak izi** (hata türü + ilk 3 yöntem adı; satır numarası ve yol içermez, sürümler arasında aynı kalır).
+- İçermez: parolalar, belirteçler ve anahtarlar (PEM / `.ovpn` anahtar blokları), kullanıcı adları, profil ve müşteri adları, `.ovpn` dosya adları, sunucu adları, IP (v4/v6) ve e-posta adresleri, makine adı, Windows kullanıcı adı ve kişisel klasör yolları. Bilinen değerler (yüklü profiller, kayıtlı kimlik bilgilerinin kullanıcı adları, Windows kullanıcı/makine adı) `<profil-1>`, `<sunucu-2>`, `<kullanici>`, `<makine>`, `~` gibi yer tutuculara çevrilir; geri kalanlar kalıplarla (IP, `ad.uzantı` biçimli sunucu adı, `password=`, `-p <değer>`, `Authorization`, uzun base64/hex) yakalanır. Hata iletilerindeki tırnak içi metinler (yollar, adlar) tümüyle çıkarılır.
+
+**Nasıl bildirilir**
+1. Çökmeden sonraki açılışta: *"Önceki oturum beklenmedik şekilde kapandı. Hata raporunu GitHub'da açmak ister misiniz?"* → **Raporu aç** / **Sonra** / **Bir daha sorma**. İstediğiniz zaman: Ayarlar > Hakkında > **Son hatayı bildir**.
+2. Uygulama önce aynı parmak izli bir kayıt var mı diye GitHub'ın herkese açık arama API'sine **salt okunur** bir istek yapar (yalnızca 8 karakterlik parmak izi gider). Varsa *"Bu hata zaten bildirilmiş"* der ve o kaydı açar; ağ yoksa bu adım atlanır.
+3. Yoksa tarayıcınızda bu deponun "yeni kayıt" sayfası **başlık ve rapor dolu** olarak açılır (`[hata] <Tür>: <Yöntem> (<parmak izi>)`). Rapor adres sınırına (~7000 karakter) sığmazsa kısaltılır ve tam hâli panoya kopyalanır.
+4. Raporu okuyup gerekirse düzenleyin ve GitHub'da **Submit new issue**'ya siz basın (GitHub hesabı gerekir).
+
+**Neden otomatik gönderim yok?** GitHub'a yazmak bir erişim belirteci (token) gerektirir; herkese açık bir uygulamaya gömülen belirteç hemen ele geçirilir ve kötüye kullanılır. Ayrıca kullanıcılar müşteri VPN'leriyle çalışır; hiçbir veri sizin görüp onaylamadığınız şekilde çıkmamalıdır. Bu yüzden uygulama **hiçbir şey göndermez**: raporu yalnızca sizin kontrol ettiğiniz tarayıcı, siz bastığınızda gönderir.
+
+**Bakımcı için:** kayıtlar `hata` etiketiyle gelir, başlıktaki parmak izi aynı hatayı birleştirir: `gh issue list -l hata`, `gh issue list -l hata --search "<parmak izi> in:title" --state all`. Ayrıntılı akış: [`docs/TRIAGE.md`](docs/TRIAGE.md).
 ## Güvenlik ve gizlilik
 - OpenVPN profillerinden yalnızca **profil adı, sunucu, kullanıcı adı ve dosya adı** metadata'sı kullanılır; parola, özel anahtar ve sertifika içeriği saklanmaz, loglanmaz, ayarlara yazılmaz.
 - FortiClient, Sophos Connect ve WatchGuard parolaları yalnızca siz *"Bu bilgisayarda sakla"* derseniz **Windows Kimlik Bilgileri**'ne (`OpenVpnQuickSearch:forti:<tünel>`, `OpenVpnQuickSearch:sophos:<bağlantı>`, `OpenVpnQuickSearch:watchguard:<sunucu>`; kullanıcıya bağlı şifreli) yazılır; istemcilerin kendi kayıtlı parolaları okunmaz. Sophos'a bağlanırken parola `sccli` komut satırında kısa süre görünür.
-- Ağ erişimi yalnızca sunucu erişim testi (TCP/ping) ve güncelleme denetimi/indirmesi içindir (yalnızca bu deponun GitHub sürümleri; kapatılabilir). Telemetri yoktur.
+- Ağ erişimi yalnızca sunucu erişim testi (TCP/ping), güncelleme denetimi/indirmesi (yalnızca bu deponun GitHub sürümleri; kapatılabilir) ve siz *Raporu aç* dediğinizde yapılan salt okunur yineleme aramasıdır (yalnızca hata parmak izi). Telemetri yoktur; hata raporları yalnızca sizin tarayıcınızdan, siz gönderirseniz gider.
 - **Yedekler `.ovpn` içindeki özel anahtarları içerir**; güvenli yerde tutun.
 - Bu repo ve sürüm paketleri **hiçbir profil, anahtar veya firma verisi içermez** (`.gitignore` `*.ovpn`, `profiller/`, `*.zip` dosyalarını dışarıda tutar).
 - Uygulama şu an imzasız: Windows SmartScreen "bilinmeyen yayıncı" uyarısı gösterebilir. Dilerseniz [`install.ps1`](install.ps1) ve kaynak kodu inceleyip kendiniz derleyebilirsiniz.
@@ -182,7 +205,7 @@ Gerçek profilleriniz yerine uydurma örnek firmalarla arayüzü denemek (ekran 
 & "$env:LOCALAPPDATA\Programs\OpenVPN Hizli Arama\OpenVPN-Hizli-Arama.exe" --demo --instance=demo --settings="$env:TEMP\vpnm-demo.json"
 ```
 
-Ek anahtarlar: `--demo-connected=Acme` (örnek profili bağlı göster), `--demo-search=en`, `--demo-settings=0..3` (Ayarlar sayfası), `--scale=1.5`. Demo modu uydurma Sophos ve WatchGuard satırları da gösterir. Demo modunda OpenVPN Connect / FortiClient / Sophos / WatchGuard'a, sabitleme dosyasına ve ayarlara **dokunulmaz**; hiçbir bağlantı başlatılmaz.
+Ek anahtarlar: `--demo-connected=Acme` (örnek profili bağlı göster), `--demo-search=en`, `--demo-settings=0..3` (Ayarlar sayfası), `--scale=1.5`. Demo modu uydurma Sophos ve WatchGuard satırları da gösterir. Demo modunda OpenVPN Connect / FortiClient / Sophos / WatchGuard'a, sabitleme dosyasına ve ayarlara **dokunulmaz**; hiçbir bağlantı başlatılmaz, günlük yazılmaz, hata raporu ve tarayıcı açılmaz.
 
 ## Geliştirme
 
@@ -209,11 +232,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `modules\SophosConnect.cs`, `WatchGuardSsl.cs`, `VpnProviders.cs` | Sophos (`sccli`) ve WatchGuard entegrasyonu, sağlayıcı yönlendirme |
 | `modules\QuietWindow.cs` | İstemci pencerelerini arka planda tutma |
 | `modules\Updater.cs` | Güncelleme denetimi, doğrulama, kurulum yardımcısı |
+| `modules\Diagnostics.cs` | Uygulama günlüğü, çökme yakalama, rapor temizleyici, GitHub kayıt bağlantısı |
 | `modules\BackupService.cs`, `ImportService.cs`, `Duplicates.cs` | Yedek, içe/dışa aktarma, yinelenen profiller |
 | `modules\Demo.cs` | `--demo` örnek verisi |
 | `paket\` | Kurulum paketi şablonları (`kur.ps1`, `kaldir.ps1`, `BENIOKU.txt`, kullanım) |
 | `install.ps1` | Uzaktan tek komut kurulum |
-| `docs\RELEASING.md`, `docs\providers\` | Sürüm yayınlama adımları, WatchGuard bulguları |
+| `docs\RELEASING.md`, `docs\TRIAGE.md`, `docs\providers\` | Sürüm yayınlama, hata kayıtlarını ayıklama, WatchGuard bulguları |
+| `.github\ISSUE_TEMPLATE\` | "Hata raporu" kayıt formu (`hata` etiketi) |
 | `tests\` | Otomatik testler; `tests\manual\` gerçek FortiClient penceresine karşı elle denemeler |
 
 Tek satırla derleme:
@@ -227,4 +252,4 @@ Kaynak dosyalar UTF-8 **BOM'lu** ve CRLF'dir (Türkçe metin için `csc` ve Wind
 ## Sürüm
 **2.0.0** — Liquid Glass yeniden tasarımı: cam malzeme sistemi, bağlantı kapsülü, yeni liste/menü/ayarlar, SVG ikon kütüphanesi, FortiClient entegrasyonu, uzaktan kurulum.
 
-**Sonraki sürüm (geliştirmede)** — Sophos Connect ve WatchGuard SSL VPN desteği, arka planda bağlanma, FortiClient otomatik doldurma düzeltmesi ve `forti.log`, sağlayıcıya göre ayar anahtarları, otomatik güncelleme sistemi.
+**Sonraki sürüm (geliştirmede)** — Sophos Connect ve WatchGuard SSL VPN desteği, arka planda bağlanma, FortiClient otomatik doldurma düzeltmesi, sağlayıcıya göre ayar anahtarları, otomatik güncelleme sistemi, uygulama günlüğü ve onaylı GitHub hata raporları.

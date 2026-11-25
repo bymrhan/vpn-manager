@@ -22,7 +22,8 @@ FORTICLIENT VPN
   FortiClient'ı açar ve "Connect'e basın" der.
 - Ayarlar > Genel > "FortiClient profilleri" ile gizlenebilir.
 - Yedekleme, dışa aktarma, silme ve yinelenen profiller yalnızca OpenVPN profilleri içindir.
-- Tanılama günlüğü: %APPDATA%\OpenVpnQuickSearch\forti.log (parola içermez).
+- Tanılama günlüğü: %APPDATA%\OpenVpnQuickSearch\logs\app-YYYYMMDD.log ("forti" satırları;
+  parola, profil ve sunucu adı içermez).
 
 SOPHOS CONNECT VE WATCHGUARD SSL VPN
 ------------------------------------
@@ -161,6 +162,12 @@ parolayı sil" veya Denetim Masası > Kimlik Bilgileri Yöneticisi > Windows Kim
 Parolalar uygulamanın ayar, geçmiş veya log dosyalarına yazılmaz.
 FortiClient'ın kendi kayıtlı parolaları okunmaz.
 
+Hata raporları:
+Beklenmedik bir hatadan sonraki açılışta uygulama, temizlenmiş bir hata raporunu GitHub'da
+açmayı önerir ("Raporu aç" / "Sonra" / "Bir daha sorma"). Ayarlar > Hakkında > "Son hatayı
+bildir" ile istediğiniz zaman açabilirsiniz. Rapor parola, kullanıcı / profil / sunucu adı,
+IP ve e-posta adresi, makine adı ve kişisel klasör yolu içermez. Uygulama hiçbir şey
+göndermez: rapor tarayıcıda açılır, göndermeyi siz yaparsınız (GitHub hesabı gerekir).
 Kurulum paketleri:
 "OpenVPN-Hizli-Arama-PROFILLI-PAYLASMAYIN.zip" bu bilgisayarın OpenVPN profillerini (özel
 anahtarlarla) içerir; yalnızca kendi bilgisayarlarınıza taşımak için kullanın, PAYLAŞMAYIN.
