@@ -27,7 +27,7 @@ Check (-not ($bytes | Where-Object { $_ -gt 127 })) 'install.ps1 is ASCII-only'
 $text = [IO.File]::ReadAllText($installPs1)
 $iHash = $text.IndexOf('$expected -ne $actual'); $iExpand = $text.IndexOf('Expand-Archive'); $iMode = $text.IndexOf('(Get-VpnmInstallMode $installDir $kur)')
 Check ($iHash -gt 0 -and $iExpand -gt $iHash -and $iMode -gt $iExpand) 'SHA-256 check before expand, expand before mode decision'
-Check ($text.Contains('& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $kur' + "`n")) 'interactive kur.ps1 call unchanged'
+Check ($text -match '& powershell\.exe -NoProfile -ExecutionPolicy Bypass -File \$kur\r?\n') 'interactive kur.ps1 call unchanged'
 
 $work = Join-Path $env:TEMP ('vpnm-install-tests-' + [guid]::NewGuid().ToString('N'))
 try {
