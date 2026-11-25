@@ -83,8 +83,12 @@ folder by other means if GitHub is not an option; the `app-*.log` files are **no
   account (recommended: the bot account), same title and body as the browser flow. With
   `CrashPrompt=auto` the user confirmed a one-time warning but was not asked for this report;
   check the privacy of the body first (step 2 above).
-- **Unlabelled reports.** A bot account cannot set labels and the app's 422 retry drops the label,
-  so such issues lack `hata` and `gh issue list -l hata` misses them. Find and label them:
+- **Unlabelled reports.** GitHub silently ignores labels sent by non-collaborators, so issues the
+  bot account opens arrive without `hata`. By default the Action `.github/workflows/label-hata.yml`
+  adds it at once (needs the repository variable `REPORT_BOT_LOGIN` and the `hata` label; see
+  RELEASING.md). Issues can still lack it when the Action is not set up or failed, or when the
+  `hata` label was missing (the app's 422 retry then creates the issue without a label). Fallback,
+  find and label them by hand:
   `gh issue list --state all --search "[hata] in:title -label:hata"` (or `--author <bot>`), then
   `gh issue edit <n> --add-label hata`. Until labelled, the app's duplicate check does not see them
   (it only matches issues labelled `hata`), so the same fingerprint can open a second issue.

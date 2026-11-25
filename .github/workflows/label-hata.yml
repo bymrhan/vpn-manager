@@ -1,0 +1,26 @@
+# Adds the "hata" label to error reports opened by the app's bot account. GitHub silently drops
+# labels sent by non-collaborators, so bot issues arrive unlabelled; the app's duplicate check only
+# matches issues labelled "hata". Setup (docs/RELEASING.md):
+#   gh variable set REPORT_BOT_LOGIN --body <bot-login>
+#   gh label create hata --color d73a4a
+# The issue title is never put into the script; only the number is passed through env.
+name: label-hata
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    if: github.event.issue.user.login == vars.REPORT_BOT_LOGIN && startsWith(github.event.issue.title, '[hata] ')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add the hata label
+        env:
+          NUMBER: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh issue edit "$NUMBER" --add-label hata

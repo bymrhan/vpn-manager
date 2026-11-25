@@ -87,13 +87,21 @@ Anyone can extract the token from the exe, so choose the token by what it can do
    (`secrets/` is in `.gitignore`), or set `$env:VPNM_ISSUE_TOKEN` for the build shell only.
 
 On this public repository the bot can only do what any stranger can: open issues and write
-comments (it could also comment on or star other public repositories, so keep the account empty).
-Worst case if extracted: spam under the bot's name; block the account (repository *Settings* >
-*Moderation* or `gh api -X PUT /user/blocks/<bot>` as the owner) and revoke the token.
-Because the bot cannot set labels, GitHub silently drops `labels: ["hata"]`: its issues arrive
-**without** the `hata` label. Label them during triage (docs\TRIAGE.md), or add a small Action that
-labels issues whose title starts with `[hata] `; the app's duplicate check only matches issues that
-carry `hata`, so unlabelled reports are not commented on until they are labelled.
+comments. `public_repo` also lets it create, fork and push to public repositories of its own and
+comment on other public repositories, so **keep the bot account empty and watch it** (its profile
+and activity; turn on e-mail notifications for it). Worst case if extracted: spam under the bot's
+name; block the account (repository *Settings* > *Moderation* or `gh api -X PUT /user/blocks/<bot>` as
+the owner) and revoke the token.
+
+GitHub silently ignores labels sent by non-collaborators, so the bot's issues arrive **without**
+`hata` (no error, so the app's 422 retry does not apply; that retry only covers a missing label).
+The app's duplicate check only matches issues labelled `hata`, so they must be labelled:
+- **Default: the Action** `.github/workflows/label-hata.yml` labels every issue the bot opens with a
+  title starting `[hata] `. One-time setup as the owner:
+  `gh variable set REPORT_BOT_LOGIN --body <bot-login>` and `gh label create hata --color d73a4a`.
+  The workflow uses the run's own `GITHUB_TOKEN` (permission `issues: write`) and only the issue
+  number, never the title, in its script.
+- **Fallback:** label by hand during triage (docs\TRIAGE.md).
 
 **Alternative (not recommended): the owner's fine-grained token.** *Fine-grained tokens* >
 *Generate new token*, *Repository access* = **Only select repositories** > `bymrhan/vpn-manager`,
