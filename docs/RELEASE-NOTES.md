@@ -3,6 +3,10 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.2
+
+- **Görünüm iyileştirmeleri:** her profil satırının alt satırı artık sağlayıcı logosu ve adıyla başlar (*[logo] Sağlayıcı · sunucu · kullanıcı*, OpenVPN satırlarında da); silinen profil yerinde solarak çıkar; bağlantı kapsülündeki bağlanma/hata parıltısı söner; kimlik bilgisi, bağlantı geçmişi ve yinelenen profiller pencerelerinde düğmeler Ayarlar'daki cam düğmelerle aynıdır.
+
 ## 2.1.1
 
 - **Uygulama nerede görünsün:** Ayarlar > Genel'de üç seçenek: *Tepsi* (varsayılan), *Tepsi + düğme* (pencere açıkken görev çubuğunda da düğme), *Görev çubuğu* (tepsi simgesi yok; düğme uygulama açık olduğu sürece durur, gizlemek pencereyi düğmeye küçültür, pencereyi kapatmak uygulamadan çıkar). Kaydedince yeniden başlatmadan uygulanır.
