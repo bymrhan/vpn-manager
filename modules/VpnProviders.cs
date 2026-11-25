@@ -99,6 +99,20 @@ internal static class VpnProviders
         return s;
     }
 
+    // Sophos / WatchGuard segment: shown while the provider is enabled and either installed (even
+    // with no connection yet, so the user finds the tab and its hint) or has rows (demo rows).
+    public static bool ShowsExtSegment(bool enabled, bool installed, int rows)
+    {
+        return enabled && (installed || rows > 0);
+    }
+
+    // List text when the selected Sophos / WatchGuard segment has no rows; null for other segments.
+    public static string[] EmptySegmentText(VpnKind? segment)
+    {
+        if (segment == VpnKind.Sophos) return new[] { "Sophos Connect bağlantısı yok", "Sophos Connect'te tanımlı bağlantı yok. .pro veya .ovpn dosyasını Sophos Connect'e ekleyin." };
+        if (segment == VpnKind.WatchGuard) return new[] { "WatchGuard sunucusu yok", "WatchGuard SSL VPN istemcisinde kayıtlı sunucu yok." };
+        return null;
+    }
     public static string[] SegmentNames(IList<VpnKind?> segments)
     {
         var names = new string[segments.Count];

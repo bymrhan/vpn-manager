@@ -676,14 +676,15 @@ internal sealed class SearchForm : Form
     }
 
     // FortiClient segment only exists while FortiClient profiles are enabled; Sophos and WatchGuard
-    // segments only while that client is installed, enabled and has profiles in the list.
+    // segments while that client is enabled and installed (also with no connection: the list then
+    // says how to add one), or has rows (demo).
     // The selected provider stays selected when other segments come and go.
     void RefreshSegments()
     {
         var current = VpnProviders.SegmentAt(segmentKinds, providerFilter);
         segmentKinds = VpnProviders.Segments(settings.ShowForti,
-            settings.ShowSophos && profiles.Any(SophosStore.IsSophos),
-            settings.ShowWatchGuard && profiles.Any(WatchGuardStore.IsWatchGuard));
+            VpnProviders.ShowsExtSegment(settings.ShowSophos, sophosInstalled, profiles.Count(SophosStore.IsSophos)),
+            VpnProviders.ShowsExtSegment(settings.ShowWatchGuard, watchGuardInstalled, profiles.Count(WatchGuardStore.IsWatchGuard)));
         providerFilter = VpnProviders.IndexOf(segmentKinds, current);
         segmented.Items = VpnProviders.SegmentNames(segmentKinds);
         segmented.Selected = providerFilter;
@@ -1253,7 +1254,7 @@ internal sealed class SearchForm : Form
     }
 
     readonly ExtVpn sophos = new ExtVpn { Kind = VpnKind.Sophos }, watchGuard = new ExtVpn { Kind = VpnKind.WatchGuard };
-    bool sophosInstalled, watchGuardInstalled; // refreshed by ReloadProfiles (file checks)
+    bool sophosInstalled, watchGuardInstalled, installChanged; // refreshed by ReloadProfiles (file checks)
 
     IEnumerable<ExtVpn> Exts { get { return new[] { sophos, watchGuard }; } }
 
@@ -2220,8 +2221,10 @@ internal sealed class SearchForm : Form
                 loaded.AddRange(forti);
             }
             // Sophos Connect (cached sccli list, refreshed on a worker) and WatchGuard (registry only).
+            var wasInstalled = sophosInstalled + "," + watchGuardInstalled;
             sophosInstalled = !Demo.On && SophosStore.IsInstalled;
             watchGuardInstalled = !Demo.On && WatchGuardStore.IsInstalled;
+            installChanged = wasInstalled != sophosInstalled + "," + watchGuardInstalled;
             var extra = new List<VpnProfile>();
             if (ExtEnabled(sophos))
             {
@@ -2248,7 +2251,7 @@ internal sealed class SearchForm : Form
         }
         configStamp = stamp; loadError = null;
         var signature = string.Join("\u0002", loaded.Select(p => p.Id + "\u0001" + p.Name + "\u0001" + p.Host + "\u0001" + p.Username + "\u0001" + p.Source + "\u0001" + p.LastConnected).ToArray());
-        if (!force && signature == profileSignature) return;
+        if (!force && signature == profileSignature) { if (installChanged) { RefreshSegments(); ApplyFilter(list.SelectedProfile != null ? list.SelectedProfile.Id : null); } return; }
         profileSignature = signature; profiles = loaded;
         RefreshSegments();
         var selected = list.SelectedProfile;
@@ -2307,9 +2310,11 @@ internal sealed class SearchForm : Form
         }
 
         string title = "", hint = "";
+        var emptySegment = VpnProviders.EmptySegmentText(segment);
         if (rows.Count == 0)
         {
-            if (loadError != null) { title = "Profiller okunamadı"; hint = loadError; }
+            if (pool.Count == 0 && emptySegment != null) { title = emptySegment[0]; hint = emptySegment[1]; }
+            else if (loadError != null) { title = "Profiller okunamadı"; hint = loadError; }
             else if (profiles.Count == 0) { title = "Kayıtlı profil yok"; hint = "OpenVPN Connect'e profil ekleyin; liste kendiliğinden güncellenir."; }
             else { title = "Sonuç bulunamadı"; hint = Input.Text.Trim().Length > 0 ? "\"" + Input.Text.Trim() + "\" ile eşleşen profil yok. Farklı bir kelime deneyin." : "Bu filtrede profil yok."; }
         }
