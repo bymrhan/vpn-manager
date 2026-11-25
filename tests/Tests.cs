@@ -84,8 +84,8 @@ static class Tests
         Run("GitHub gönderimi: anahtar temizleme", TokenSanitizing);
         Run("GitHub gönderimi: otomatik kip kararı", AutoModeDecision);
         Run("GitHub gönderimi: güvenlik incelemesi korumaları", IssueReviewGuards);
-        Run("Ayarlar: görev çubuğunda göster", TaskbarSetting);
-        Run("Görev çubuğu düğmesi kararları", TaskbarDecisions);
+        Run("Ayarlar: uygulama nerede görünsün (Presence, eski anahtar)", TaskbarSetting);
+        Run("Tepsi / görev çubuğu kararları", TaskbarDecisions);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -460,25 +460,50 @@ static class Tests
         SettingsStore.PathOverride = path;
         try
         {
-            Check(!AppSettings.Defaults().ShowInTaskbar, "varsayılan: görev çubuğunda yok");
-            Check(!SettingsStore.Load().ShowInTaskbar, "dosya yokken kapalı");
+            Check(AppSettings.Defaults().Presence == "tray", "varsayılan: tepsi");
+            Check(SettingsStore.Load().Presence == "tray", "dosya yokken tepsi");
             var s = SettingsStore.Load();
-            s.ShowInTaskbar = true;
-            Check(s.Clone().ShowInTaskbar, "Clone değeri taşır");
-            s.Normalize();
-            Check(s.ShowInTaskbar, "Normalize değeri korur");
-            SettingsStore.Save(s);
-            Check(SettingsStore.Load().ShowInTaskbar, "açık değer kaydedilip geri okunur");
-            Check(File.ReadAllText(path).Contains("\"ShowInTaskbar\":true"), "dosyada ShowInTaskbar anahtarı var");
-            s.ShowInTaskbar = false; SettingsStore.Save(s);
-            Check(!SettingsStore.Load().ShowInTaskbar, "kapalı değer kaydedilip geri okunur");
+            foreach (var mode in new[] { "both", "taskbar", "tray" })
+            {
+                s.Presence = mode;
+                Check(s.Clone().Presence == mode, "Clone değeri taşır (" + mode + ")");
+                SettingsStore.Save(s);
+                Check(SettingsStore.Load().Presence == mode, "kaydedilip geri okunur (" + mode + ")");
+                var text = File.ReadAllText(path);
+                Check(text.Contains("\"Presence\":\"" + mode + "\"") && !text.Contains("ShowInTaskbar"), "dosyada yalnız Presence anahtarı var (" + mode + ")");
+            }
+            s.Presence = "Taskbar"; s.Normalize();
+            Check(s.Presence == "tray", "Normalize: geçersiz değer (büyük harf) tepsi");
+            s.Presence = null; s.Normalize();
+            Check(s.Presence == "tray", "Normalize: boş değer tepsi");
+
+            // 2.1.0 files: only the bool ShowInTaskbar
+            File.WriteAllText(path, "{\"Hotkey\":\"Ctrl+Alt+V\",\"AutoStart\":true,\"ShowInTaskbar\":true}");
+            var legacy = SettingsStore.Load();
+            Check(legacy.Presence == "both" && legacy.AutoStart, "eski ShowInTaskbar=true: tepsi + düğme, diğerleri korunur");
+            File.WriteAllText(path, "{\"ShowInTaskbar\":false}");
+            Check(SettingsStore.Load().Presence == "tray", "eski ShowInTaskbar=false: tepsi");
             File.WriteAllText(path, "{\"Hotkey\":\"Ctrl+Alt+V\",\"AutoStart\":true}");
             var old = SettingsStore.Load();
-            Check(!old.ShowInTaskbar && old.AutoStart, "anahtarı olmayan eski dosya: kapalı, diğerleri korunur");
+            Check(old.Presence == "tray" && old.AutoStart, "anahtarı olmayan eski dosya: tepsi, diğerleri korunur");
             File.WriteAllText(path, "{\"ShowInTaskbar\":\"evet\"}");
-            Check(!SettingsStore.Load().ShowInTaskbar, "yanlış türde değer (metin) kapalı");
+            Check(SettingsStore.Load().Presence == "tray", "eski anahtar yanlış türde (metin): tepsi");
             File.WriteAllText(path, "{\"ShowInTaskbar\":1}");
-            Check(!SettingsStore.Load().ShowInTaskbar, "yanlış türde değer (sayı) kapalı");
+            Check(SettingsStore.Load().Presence == "tray", "eski anahtar yanlış türde (sayı): tepsi");
+            File.WriteAllText(path, "{\"ShowInTaskbar\":true,\"Presence\":\"taskbar\"}");
+            Check(SettingsStore.Load().Presence == "taskbar", "ikisi de varsa Presence geçerli");
+            File.WriteAllText(path, "{\"ShowInTaskbar\":true,\"Presence\":\"tray\"}");
+            Check(SettingsStore.Load().Presence == "tray", "Presence=tray eski anahtarı ezer");
+            File.WriteAllText(path, "{\"ShowInTaskbar\":true,\"Presence\":\"dugme\"}");
+            Check(SettingsStore.Load().Presence == "tray", "geçersiz Presence: tepsi (eski anahtara dönülmez)");
+            File.WriteAllText(path, "{\"Presence\":3}");
+            Check(SettingsStore.Load().Presence == "tray", "yanlış türde Presence (sayı): tepsi");
+            // migrated file is written back with Presence only
+            File.WriteAllText(path, "{\"ShowInTaskbar\":true}");
+            SettingsStore.Save(SettingsStore.Load());
+            var migrated = File.ReadAllText(path);
+            Check(migrated.Contains("\"Presence\":\"both\"") && !migrated.Contains("ShowInTaskbar"), "taşınan dosya Presence ile yazılır");
+            Check(SettingsStore.Load().Presence == "both", "taşınan değer kalıcı");
         }
         finally
         {
@@ -490,10 +515,25 @@ static class Tests
     static void TaskbarDecisions()
     {
         const int APP = TaskbarButton.WS_EX_APPWINDOW, TOOL = TaskbarButton.WS_EX_TOOLWINDOW, OTHER = 0x100 | 0x8; // WS_EX_WINDOWEDGE | WS_EX_TOPMOST
-        Check(TaskbarButton.Wanted(true, false, false), "normal çalışma: ayar açıksa düğme var");
-        Check(!TaskbarButton.Wanted(false, false, true), "ayar kapalıysa düğme yok");
-        Check(!TaskbarButton.Wanted(true, true, false), "demo, ayar dosyası verilmeden: düğme yok");
-        Check(TaskbarButton.Wanted(true, true, true), "demo, --settings ile: ayar uygulanır");
+        Check(PresenceMode.Effective("both", false, false) == "both", "normal çalışma: ayar uygulanır");
+        Check(PresenceMode.Effective("taskbar", false, false) == "taskbar", "normal çalışma: görev çubuğu");
+        Check(PresenceMode.Effective("taskbar", true, false) == "tray" && PresenceMode.Effective("both", true, false) == "tray", "demo, ayar dosyası verilmeden: tepsi");
+        Check(PresenceMode.Effective("taskbar", true, true) == "taskbar", "demo, --settings ile: ayar uygulanır");
+        Check(PresenceMode.Effective("x", false, false) == "tray", "geçersiz ayar: tepsi");
+        Check(PresenceMode.FromLegacy(true) == "both" && PresenceMode.FromLegacy(false) == "tray", "eski anahtar: true = tepsi + düğme");
+        Check(PresenceMode.TrayIcon("tray") && PresenceMode.TrayIcon("both") && !PresenceMode.TrayIcon("taskbar"), "tepsi simgesi: görev çubuğu kipinde gizli");
+        Check(!PresenceMode.Button("tray") && PresenceMode.Button("both") && PresenceMode.Button("taskbar"), "düğme: tepsi + düğme ve görev çubuğu");
+        Check(!PresenceMode.HideMinimizes("tray") && !PresenceMode.HideMinimizes("both") && PresenceMode.HideMinimizes("taskbar"), "gizle = küçült: yalnız görev çubuğu");
+        Check(!PresenceMode.CloseExits("tray") && !PresenceMode.CloseExits("both") && PresenceMode.CloseExits("taskbar"), "kapat = çık: yalnız görev çubuğu");
+        Check(PresenceMode.TrayIcon(null) && !PresenceMode.Button(null) && !PresenceMode.CloseExits("bogus"), "geçersiz kip tepsi gibi davranır");
+        Check(PresenceMode.StartsMinimized("taskbar", true, false), "görev çubuğu + --background: küçültülmüş başlar");
+        Check(!PresenceMode.StartsMinimized("taskbar", true, true), "OpenVPN açıkken yapışık gösterilir");
+        Check(!PresenceMode.StartsMinimized("taskbar", false, false), "normal başlangıç: açık");
+        Check(!PresenceMode.StartsMinimized("tray", true, false) && !PresenceMode.StartsMinimized("both", true, false), "tepsi kiplerinde --background gizli başlar");
+        const int MIN = TaskbarButton.WS_MINIMIZEBOX, POPUP = unchecked((int)0x80000000) | 0x02000000; // WS_POPUP | WS_CLIPCHILDREN
+        Check(TaskbarButton.Style(POPUP, true) == (POPUP | MIN) && TaskbarButton.Style(POPUP | MIN, false) == POPUP, "küçültme kutusu açılıp kapanır, diğer bitler kalır");
+        Check(TaskbarButton.Style(POPUP | MIN, true) == (POPUP | MIN), "zaten açık: değişmez");
+        Check(SettingsForm.PresenceText("taskbar").StartsWith("Görev çubuğu:") && SettingsForm.PresenceText("both").StartsWith("Tepsi + düğme:") && SettingsForm.PresenceText("tray").StartsWith("Tepsi:"), "ayar açıklaması seçime göre değişir");
         Check(TaskbarButton.ExStyle(OTHER, true) == (OTHER | APP), "açmak APPWINDOW ekler, diğer bitler kalır");
         Check(TaskbarButton.ExStyle(OTHER | TOOL, true) == (OTHER | APP), "açmak TOOLWINDOW'u kaldırır");
         Check(TaskbarButton.ExStyle(OTHER | APP, false) == OTHER, "kapatmak yalnız APPWINDOW'u kaldırır");
@@ -518,6 +558,13 @@ static class Tests
             }
             Check(f.Handle == h && f.IsHandleCreated && !f.RecreatingHandle, "tutamaç değişmedi");
             Check(TaskbarButton.Apply(h, false, false) == TaskbarChange.None, "aynı değer ikinci kez: değişiklik yok");
+            for (var i = 0; i < 4; i++)
+            {
+                var on = i % 2 == 0;
+                TaskbarButton.SetMinimizeBox(h, on);
+                Check(TaskbarButton.HasMinimizeBox(h) == on, "küçültme kutusu " + (on ? "açıldı" : "kapandı") + " (" + (i + 1) + ")");
+            }
+            Check(f.Handle == h && !TaskbarButton.Iconic(h), "küçültme kutusu tutamacı değiştirmez; gizli form küçültülmüş değil");
         }
     }
 

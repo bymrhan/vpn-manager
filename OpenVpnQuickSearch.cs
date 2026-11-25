@@ -500,6 +500,7 @@ internal static class Ease
 internal sealed class SearchForm : Form
 {
     const int WM_HOTKEY = 0x0312, WM_MOVING = 0x0216, WM_SIZING = 0x0214, WM_EXITSIZEMOVE = 0x0232, WM_NCHITTEST = 0x0084, HotkeyId = 0x5651;
+    const int WM_SIZE = 0x0005, SIZE_MINIMIZED = 1;
     const int HTCLIENT = 1, HTCAPTION = 2, HTLEFT = 10, HTRIGHT = 11, HTTOP = 12, HTTOPLEFT = 13, HTTOPRIGHT = 14, HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
     const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_NOREPEAT = 0x4000;
     const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10, SWP_NOOWNERZORDER = 0x200;
@@ -553,7 +554,7 @@ internal sealed class SearchForm : Form
     {
         backgroundMode = background; openVpnPath = FindOpenVpnPath();
         settings = appSettings ?? AppSettings.Defaults();
-        taskbarButton = TaskbarWanted; // read by CreateParams when the handle is created below
+        presence = PresenceWanted; // read by CreateParams when the handle is created below, and by BuildMenus (tray icon)
         var area = Screen.PrimaryScreen.WorkingArea;
         AutoScaleMode = AutoScaleMode.None;
         Text = "OpenVPN Hızlı Arama"; StartPosition = FormStartPosition.Manual; BackColor = Color.Black; ForeColor = Ui.Text; Font = Ui.SubFont;
@@ -574,7 +575,7 @@ internal sealed class SearchForm : Form
         watcher.Interval = 500; watcher.Tick += WatcherTick;
         // no window fade: Opacity would make the window layered and drop the compositor blur; the list and island animate instead
         ambient.Tick += delegate { AmbientTick(); };
-        trimTimer.Tick += delegate { trimTimer.Stop(); if (!Visible) NativeMethods.TrimMemory(); };
+        trimTimer.Tick += delegate { trimTimer.Stop(); if (!OnScreen) NativeMethods.TrimMemory(); };
         statusTimer.Interval = 2600; statusTimer.Tick += delegate { statusTimer.Stop(); status = null; InvalidateFooter(); };
 
         // modules: server reachability, live connection status, drag & drop import
@@ -596,7 +597,7 @@ internal sealed class SearchForm : Form
         CrashReporter.Status = SetStatus;   // result of a direct GitHub send
         CrashReporter.AutoConsent = () => settings.CrashAutoConsent;
         CrashReporter.NeverAsk = delegate { UiInvoke(delegate { settings.CrashPrompt = "never"; SaveSettings(); }); };
-        Shown += delegate { BeginInvoke(new Action(delegate { CrashReporter.OfferPendingCrash(this); })); };
+        Shown += delegate { BeginInvoke(new Action(OfferCrashWhenOnScreen)); };
 
         ReloadProfiles();
         if (Demo.On) DemoConnect(Demo.ConnectedName); else monitor.Poll();
@@ -607,11 +608,17 @@ internal sealed class SearchForm : Form
         hookProc = OnWinEvent;
         IntPtr h; lastFound = FindOpenVpnWindow(out h);
         if (lastFound) TrackOpenVpn(h);
-        allowVisible = !backgroundMode || lastFound;
+        // Taskbar mode keeps the window (and so its button) for the whole run: a --background start
+        // shows it minimized instead of keeping it hidden (PresenceMode.StartsMinimized).
+        var startMinimized = PresenceMode.StartsMinimized(presence, backgroundMode, lastFound);
+        allowVisible = !backgroundMode || lastFound || startMinimized;
         noActivate = backgroundMode;
         PlaceWindow();
 
         var handle = Handle; // create handle now so hotkey and activation work while hidden
+        // Not shown yet: WinForms only records the state; the first Show uses SW_SHOWMINIMIZED, which
+        // does not take the focus from a background start. The normal bounds are the ones just placed.
+        if (startMinimized) WindowState = FormWindowState.Minimized;
         foregroundHook = NativeMethods.SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, hookProc, 0, 0, WINEVENT_SKIPOWNPROCESS);
         if (activation != null)
             activationWait = ThreadPool.RegisterWaitForSingleObject(activation, delegate
@@ -621,27 +628,45 @@ internal sealed class SearchForm : Form
         watcher.Start();
     }
 
-    // ShowInTaskbar stays false (changing it recreates the handle). The "Görev çubuğunda göster"
-    // setting is the WS_EX_APPWINDOW bit instead (modules\Glass.cs TaskbarButton): set here for the
-    // handle created at startup and for any WinForms style refresh, flipped live by ApplyTaskbarButton.
+    // ShowInTaskbar stays false (changing it recreates the handle). The "Uygulama nerede görünsün"
+    // setting (PresenceMode) is the WS_EX_APPWINDOW bit (button) and, in taskbar mode, WS_MINIMIZEBOX
+    // (modules\Glass.cs TaskbarButton): set here for the handle created at startup and for any
+    // WinForms style refresh, flipped live on the same handle by ApplyPresence.
     protected override CreateParams CreateParams
     {
-        get { var cp = base.CreateParams; cp.ExStyle = TaskbarButton.ExStyle(cp.ExStyle, taskbarButton); return cp; }
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ExStyle = TaskbarButton.ExStyle(cp.ExStyle, PresenceMode.Button(presence));
+            cp.Style = TaskbarButton.Style(cp.Style, PresenceMode.HideMinimizes(presence));
+            return cp;
+        }
     }
 
-    bool taskbarButton;
-    bool TaskbarWanted { get { return TaskbarButton.Wanted(settings.ShowInTaskbar, Demo.On, !string.IsNullOrEmpty(SettingsStore.PathOverride)); } }
+    string presence = PresenceMode.Tray; // the mode in effect (PresenceMode.Effective)
+    string PresenceWanted { get { return PresenceMode.Effective(settings.Presence, Demo.On, !string.IsNullOrEmpty(SettingsStore.PathOverride)); } }
+
+    // Minimized to the taskbar button (taskbar mode; native state, WinForms' WindowState can lag).
+    bool Iconic { get { return IsHandleCreated && TaskbarButton.Iconic(Handle); } }
+    // Shown and not minimized: what "the panel is open" means in every mode.
+    bool OnScreen { get { return Visible && !Iconic; } }
 
     // After "Kaydet": same handle, so the hotkey, the WinEvent hooks and the DWM backdrop stay bound.
-    void ApplyTaskbarButton()
+    void ApplyPresence()
     {
-        var want = TaskbarWanted;
-        if (want == taskbarButton) return;
-        taskbarButton = want;
+        var mode = PresenceWanted;
+        if (mode == presence) return;
+        presence = mode;
+        if (tray != null) tray.Visible = PresenceMode.TrayIcon(mode);
         if (!IsHandleCreated) return;
-        // a minimized window without a button would be left as a bare caption stub: bring it back first
-        if (!want && Visible && WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-        TaskbarButton.Apply(Handle, want, Visible);
+        var minimizes = PresenceMode.HideMinimizes(mode);
+        // leaving taskbar mode while minimized: without a permanent button the window must not stay
+        // minimized (it would be left as a bare caption stub), so it comes back first
+        if (!minimizes && Visible && Iconic) TaskbarButton.Restore(Handle, false);
+        TaskbarButton.SetMinimizeBox(Handle, minimizes);
+        TaskbarButton.Apply(Handle, PresenceMode.Button(mode), Visible);
+        // entering taskbar mode while hidden: the button exists for the whole run, so show it minimized
+        if (minimizes && !Visible) MinimizeToTaskbar();
     }
 
     // ---------- Layout ----------
@@ -782,7 +807,7 @@ internal sealed class SearchForm : Form
     {
         get
         {
-            if (!Visible || WindowState == FormWindowState.Minimized) return false;
+            if (!OnScreen || WindowState == FormWindowState.Minimized) return false;
             var fg = NativeMethods.GetForegroundWindow();
             return fg == Handle || (ovpnHwnd != IntPtr.Zero && fg == ovpnHwnd) || ContainsFocus;
         }
@@ -872,11 +897,11 @@ internal sealed class SearchForm : Form
         Styled(mainMenu); Styled(trayMenu); Styled(rowMenu);
         trayMenu.Opening += delegate { BuildTrayMenu(); };
         BuildTrayMenu();
-        tray = new NotifyIcon { Icon = IconArt.Load(SystemInformation.SmallIconSize) ?? Icon ?? SystemIcons.Application, Text = "OpenVPN Hızlı Arama", ContextMenuStrip = trayMenu, Visible = true };
+        tray = new NotifyIcon { Icon = IconArt.Load(SystemInformation.SmallIconSize) ?? Icon ?? SystemIcons.Application, Text = "OpenVPN Hızlı Arama", ContextMenuStrip = trayMenu, Visible = PresenceMode.TrayIcon(presence) };
         tray.MouseClick += delegate(object s, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left) return;
-            if (Visible && WindowState != FormWindowState.Minimized) HideForLater(); else { manualOverride = true; ShowAndFocus(true); }
+            if (OnScreen) HideForLater(); else { manualOverride = true; ShowAndFocus(true); }
         };
     }
 
@@ -1463,7 +1488,7 @@ internal sealed class SearchForm : Form
     void MaybePollExt(ExtVpn x)
     {
         if (x.Polling || !ExtEnabled(x)) return;
-        if (!Visible && x.ConnectedId == null && !x.InFlight) return;
+        if (!OnScreen && x.ConnectedId == null && !x.InFlight) return;
         if (!profiles.Any(p => ExtFor(p) == x)) return;
         if (!VpnProviders.DuePoll(x.Kind, x.InFlight, x.PollSoon, (DateTime.UtcNow - x.LastPoll).TotalSeconds)) return;
         var started = DateTime.UtcNow;
@@ -1638,7 +1663,7 @@ internal sealed class SearchForm : Form
                 settings.LastBackupUtc = DateTime.UtcNow; SaveSettings();
                 if (openSettings != null) openSettings.SetLastBackup(settings.LastBackupUtc, count);
                 SetStatus(count + " profil yedeklendi · " + Path.GetFileName(zip));
-                if (!silent && tray != null) tray.ShowBalloonTip(4000, "Yedek alındı", count + " profil yedeklendi.\n" + zip, ToolTipIcon.Info);
+                if (!silent && tray != null && tray.Visible) tray.ShowBalloonTip(4000, "Yedek alındı", count + " profil yedeklendi.\n" + zip, ToolTipIcon.Info);
             });
         });
     }
@@ -1970,7 +1995,7 @@ internal sealed class SearchForm : Form
             return;
         }
         if (settings.UpdateMode != "auto") return;
-        if (!UpdateLogic.IsIdle(Visible && WindowState != FormWindowState.Minimized, UpdateClient.IdleMilliseconds(), UpdateBusy, UpdateDialogOpen)) return;
+        if (!UpdateLogic.IsIdle(OnScreen, UpdateClient.IdleMilliseconds(), UpdateBusy, UpdateDialogOpen)) return;
         InstallUpdate(true);
     }
 
@@ -2009,7 +2034,7 @@ internal sealed class SearchForm : Form
     void ShowSettings()
     {
         if (openSettings != null) { openSettings.Activate(); return; }
-        if (!Visible) { manualOverride = true; ShowAndFocus(true); }
+        if (!OnScreen) { manualOverride = true; ShowAndFocus(true); }
         settings.AutoStart = AutoStart.IsEnabled();
         using (var f = new SettingsForm(settings))
         {
@@ -2041,7 +2066,7 @@ internal sealed class SearchForm : Form
                 if (r.LogEnabled) AppLog.Info("app", "logging turned on by the user");
             }
             if (r.Hotkey != old.Hotkey) { RegisterAppHotkey(true); search.Hotkey = r.Hotkey; }
-            if (r.ShowInTaskbar != old.ShowInTaskbar) ApplyTaskbarButton();
+            if (r.Presence != old.Presence) ApplyPresence();
             ApplyTheme();
             if (r.DockSide != old.DockSide) { autoSide = 0; lastRect = new NativeMethods.RECT(); docked = false; Sync(true); }
             if (r.ReachabilityCheck && !old.ReachabilityCheck) Reachability.CheckAll(profiles, false);
@@ -2142,9 +2167,17 @@ internal sealed class SearchForm : Form
     {
         if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotkeyId)
         {
-            if (Visible && ContainsFocus) HideForLater();
+            if (OnScreen && ContainsFocus) HideForLater();
             else { manualOverride = true; ShowAndFocus(true); }
             return;
+        }
+        if (m.Msg == WM_SIZE)
+        {
+            // Minimized to / restored from the taskbar button (taskbar mode: Esc, the header buttons,
+            // the button itself, Win+D ...). Restore work runs after WinForms has updated WindowState.
+            var minimized = m.WParam.ToInt32() == SIZE_MINIMIZED;
+            if (minimized && !wasIconic) { wasIconic = true; ambient.Stop(); trimTimer.Stop(); trimTimer.Start(); }
+            else if (!minimized && wasIconic) { wasIconic = false; BeginInvoke(new Action(OnRestored)); }
         }
         if (m.Msg == WM_NCHITTEST) { base.WndProc(ref m); if (m.Result.ToInt32() == HTCLIENT) m.Result = (IntPtr)HitTest(m.LParam); return; }
         if (m.Msg == WM_MOVING) userMoved = true;               // user dragged the panel off OpenVPN
@@ -2193,8 +2226,12 @@ internal sealed class SearchForm : Form
 
     void OnFormClosingHandler(object sender, FormClosingEventArgs e)
     {
-        // Alt+F4 only hides; shutdown, logoff, Task Manager and "Çıkış" really close.
-        if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; HideForLater(); }
+        // Tray / both: Alt+F4 only hides. Taskbar mode: closing the window (Alt+F4, the taskbar's
+        // "Pencereyi kapat") exits like any application. Shutdown, logoff (WM_ENDSESSION),
+        // Task Manager and "Çıkış" really close in every mode.
+        if (exiting || e.CloseReason != CloseReason.UserClosing) return;
+        if (PresenceMode.CloseExits(presence)) { exiting = true; AppLog.Info("app", "window closed by the user (taskbar mode): exiting"); return; }
+        e.Cancel = true; HideForLater();
     }
 
     void Cleanup()
@@ -2226,14 +2263,53 @@ internal sealed class SearchForm : Form
             UpdateDockState();
             WakeAmbient();
         }
-        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        if (Iconic)
+        {
+            // Minimized to the taskbar button: opening the panel docks it again, like showing it from
+            // the tray (OnRestored finishes once the restore went through).
+            userMoved = false;
+            TaskbarButton.Restore(Handle, activate);
+        }
+        else if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         if (activate) { Activate(); NativeMethods.SetForegroundWindow(Handle); Input.Focus(); Input.SelectAll(); }
     }
 
+    // "Hide" in every sense of the app (Esc, header buttons, hotkey, tray click, auto-hide after a
+    // connect or when OpenVPN's window goes away): hidden to the tray, or minimized to the taskbar
+    // button in taskbar mode (PresenceMode.HideMinimizes).
     void HideForLater()
     {
-        manualOverride = false; Hide(); ambient.Stop();
+        manualOverride = false;
+        if (PresenceMode.HideMinimizes(presence)) MinimizeToTaskbar(); else Hide();
+        ambient.Stop();
         trimTimer.Stop(); trimTimer.Start(); // give memory back a few seconds after hiding
+    }
+
+    void MinimizeToTaskbar()
+    {
+        if (exiting) return;
+        allowVisible = true;
+        if (!Visible) { WindowState = FormWindowState.Minimized; noActivate = true; Show(); noActivate = false; return; }
+        if (!Iconic) WindowState = FormWindowState.Minimized;
+    }
+
+    // Back from the taskbar button (its click, the hotkey, a second launch, OpenVPN reappearing).
+    bool wasIconic, crashOfferPending;
+    void OnRestored()
+    {
+        if (exiting || IsDisposed || !OnScreen) return;
+        list.AnimateNext = true; var sel = list.SelectedProfile; ApplyFilter(sel != null ? sel.Id : null);
+        UpdateDockState();
+        WakeAmbient();
+        if (crashOfferPending) { crashOfferPending = false; CrashReporter.OfferPendingCrash(this); }
+    }
+
+    // Last session's crash report is offered the first time the panel is on screen; a window that
+    // starts minimized (taskbar mode, --background) waits for its first restore, so the question is
+    // never a dialog owned by a minimized (and therefore hidden) window.
+    void OfferCrashWhenOnScreen()
+    {
+        if (OnScreen) CrashReporter.OfferPendingCrash(this); else crashOfferPending = true;
     }
 
     // ---------- Profiles and filtering ----------
@@ -2463,7 +2539,7 @@ internal sealed class SearchForm : Form
         if (exiting) return;
         if (ev == EVENT_SYSTEM_FOREGROUND)
         {
-            if (hwnd != IntPtr.Zero && hwnd == ovpnHwnd) { Sync(false); if (docked && Visible) RaiseAbove(); }
+            if (hwnd != IntPtr.Zero && hwnd == ovpnHwnd) { Sync(false); if (docked && OnScreen) RaiseAbove(); }
             WakeAmbient();
             return;
         }
@@ -2509,10 +2585,10 @@ internal sealed class SearchForm : Form
         if (tick % 4 == 0) CheckConfigChanged();
         if (!Demo.On && tick % 120 == 20) CheckAutoBackup();
         if (settings.ReachabilityCheck && tick % 1200 == 0) Reachability.CheckAll(profiles, true);
-        if (!Visible && tick % 600 == 300) NativeMethods.TrimMemory(); // every 5 min while hidden
-        if (!Demo.On && settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (Visible || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
+        if (!OnScreen && tick % 600 == 300) NativeMethods.TrimMemory(); // every 5 min while hidden / minimized
+        if (!Demo.On && settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (OnScreen || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
         if (!Demo.On) { MaybePollExt(sophos); MaybePollExt(watchGuard); }
-        if (!Demo.On && tick % 600 == 450 && Visible && ExtEnabled(sophos)) RefreshSophosAsync(); // new / removed Sophos connections, every 5 min
+        if (!Demo.On && tick % 600 == 450 && OnScreen && ExtEnabled(sophos)) RefreshSophosAsync(); // new / removed Sophos connections, every 5 min
         if (!Demo.On) UpdateTick();
 
         // The process scan (~8 ms, allocates) only runs when the tracked window is gone, and at most every 2 s.
@@ -2537,15 +2613,17 @@ internal sealed class SearchForm : Form
         lastFound = found;
 
         // React only to OpenVPN appearing/disappearing, so Esc and the close button stay respected.
-        if (rising && !Visible) ShowAndFocus(false);
-        else if (falling && Visible && !manualOverride && !userMoved) HideForLater();
+        // "Hidden" includes minimized to the taskbar button (taskbar mode).
+        if (rising && !OnScreen) ShowAndFocus(false);
+        else if (falling && OnScreen && !manualOverride && !userMoved) HideForLater();
         UpdateDockState();
     }
 
     void UpdateDockState()
     {
-        // minimized by the system or another tool: leave the restore bounds alone until it comes back
-        if (WindowState == FormWindowState.Minimized) return;
+        // minimized (taskbar mode, the system or another tool): leave the restore bounds alone until it
+        // comes back (OnRestored docks it then); a minimized window reports off-screen bounds
+        if (Iconic || WindowState == FormWindowState.Minimized) return;
         var h = ovpnHwnd;
         var nowDocked = Visible && !userMoved && h != IntPtr.Zero && lastFound;
         NativeMethods.RECT r;

@@ -58,6 +58,7 @@ internal sealed class ReportPreview : Form
         if (r == null) return;
         string title, body;
         CrashReporter.Outgoing(r, out title, out body);
+        GlassDialog.Surface(owner);
         using (var f = new ReportPreview(title, body)) { if (owner != null) f.ShowDialog(owner); else f.ShowDialog(); }
     }
 }

@@ -162,7 +162,48 @@ internal static class Backdrop
 }
 
 // ---------------------------------------------------------------------
-// Taskbar button ("Görev çubuğunda göster"). The main window keeps WinForms' ShowInTaskbar = false
+// Where the app shows itself (Settings > Genel > "Uygulama nerede görünsün", AppSettings.Presence):
+//   tray    "Tepsi"         tray icon; "hiding" hides the window; no taskbar button (default)
+//   both    "Tepsi + düğme" tray icon, plus a taskbar button while the window is shown (2.1.0's
+//                           "Görev çubuğunda göster")
+//   taskbar "Görev çubuğu"  no tray icon; a taskbar button for as long as the app runs: "hiding"
+//                           minimizes the window to it, and closing the window exits the app
+// Pure decisions only; SearchForm applies them (ApplyPresence, HideForLater, OnFormClosingHandler).
+// ---------------------------------------------------------------------
+internal static class PresenceMode
+{
+    public const string Tray = "tray", Both = "both", Taskbar = "taskbar";
+    public static readonly string[] All = { Tray, Both, Taskbar };
+
+    public static bool IsValid(string mode) { return Array.IndexOf(All, mode) >= 0; }
+    public static string Normalize(string mode) { return IsValid(mode) ? mode : Tray; }
+
+    // settings.json from 2.1.0 has only the bool "ShowInTaskbar".
+    public static string FromLegacy(bool showInTaskbar) { return showInTaskbar ? Both : Tray; }
+
+    // The mode in effect. A demo run follows the stored setting only when a settings file was
+    // passed (--settings=); otherwise it keeps the tray (same rule as 2.1.0's taskbar toggle).
+    public static string Effective(string setting, bool demo, bool settingsFilePassed)
+    {
+        return demo && !settingsFilePassed ? Tray : Normalize(setting);
+    }
+
+    public static bool TrayIcon(string mode) { return Normalize(mode) != Taskbar; }
+    public static bool Button(string mode) { return Normalize(mode) != Tray; }
+    // "Hide" (Esc, header buttons, hotkey, auto-hide) minimizes to the taskbar button instead.
+    public static bool HideMinimizes(string mode) { return Normalize(mode) == Taskbar; }
+    // The user closing the window (Alt+F4, the taskbar's "Pencereyi kapat") exits the app.
+    public static bool CloseExits(string mode) { return Normalize(mode) == Taskbar; }
+    // A --background start shows a minimized taskbar button (taskbar mode) instead of staying hidden;
+    // when OpenVPN's window is already showing the panel is shown docked, as in every mode.
+    public static bool StartsMinimized(string mode, bool background, bool openVpnShowing)
+    {
+        return HideMinimizes(mode) && background && !openVpnShowing;
+    }
+}
+
+// ---------------------------------------------------------------------
+// Taskbar button (Presence "both" / "taskbar"). The main window keeps WinForms' ShowInTaskbar = false
 // (it is owned by WinForms' hidden taskbar-owner window, so it has no button). Instead of toggling
 // ShowInTaskbar, which destroys and recreates the window handle (hotkey, WinEvent hooks and the
 // DWM backdrop are bound to it), the WS_EX_APPWINDOW bit is flipped on the same handle: an owned
@@ -173,19 +214,43 @@ internal enum TaskbarChange { None, StyleOnly, Reshow }
 
 internal static class TaskbarButton
 {
-    public const int WS_EX_TOOLWINDOW = 0x80, WS_EX_APPWINDOW = 0x40000;
-    const int GWL_EXSTYLE = -20, SW_HIDE = 0, SW_SHOW = 5, SW_SHOWNA = 8;
+    public const int WS_EX_TOOLWINDOW = 0x80, WS_EX_APPWINDOW = 0x40000, WS_MINIMIZEBOX = 0x20000;
+    const int GWL_STYLE = -16, GWL_EXSTYLE = -20, SW_HIDE = 0, SW_SHOWNOACTIVATE = 4, SW_SHOW = 5, SW_SHOWNA = 8, SW_RESTORE = 9;
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int GetWindowLong(IntPtr h, int index);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] static extern int SetWindowLong(IntPtr h, int index, int value);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
 
-    // Whether the window should have a button. A demo run follows the stored setting only when a
-    // settings file was passed (--settings=); otherwise it keeps today's behaviour (no button).
-    public static bool Wanted(bool setting, bool demo, bool settingsFilePassed)
+    // Window style with / without WS_MINIMIZEBOX. The borderless window needs it in taskbar mode so
+    // a click on its button minimizes / restores it like any other window; the box itself is never
+    // drawn (no caption). Without a permanent button (tray / both) it stays off: a minimized window
+    // there would have nothing to come back from.
+    public static int Style(int current, bool minimizeBox)
     {
-        return setting && (!demo || settingsFilePassed);
+        return minimizeBox ? current | WS_MINIMIZEBOX : current & ~WS_MINIMIZEBOX;
+    }
+
+    public static void SetMinimizeBox(IntPtr hwnd, bool on)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        var current = GetWindowLong(hwnd, GWL_STYLE);
+        var next = Style(current, on);
+        if (next != current) SetWindowLong(hwnd, GWL_STYLE, next);
+    }
+
+    public static bool HasMinimizeBox(IntPtr hwnd)
+    {
+        return hwnd != IntPtr.Zero && (GetWindowLong(hwnd, GWL_STYLE) & WS_MINIMIZEBOX) != 0;
+    }
+
+    public static bool Iconic(IntPtr hwnd) { return hwnd != IntPtr.Zero && IsIconic(hwnd); }
+
+    // Brings a minimized window back (activated, or without taking the focus).
+    public static void Restore(IntPtr hwnd, bool activate)
+    {
+        if (Iconic(hwnd)) ShowWindow(hwnd, activate ? SW_RESTORE : SW_SHOWNOACTIVATE);
     }
 
     // Extended style with / without a button. A button also needs WS_EX_TOOLWINDOW off; turning the

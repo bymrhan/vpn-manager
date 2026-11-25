@@ -267,15 +267,26 @@ internal sealed class SHotkey : SControl
 internal sealed class SRow : SControl
 {
     public string Title, Description; public Glyph Glyph; public Control Editor;
+    bool stacked;
     public SRow(string title, string description, Control editor, Glyph glyph = Glyph.None)
     {
         Title = title; Description = description; Editor = editor; Glyph = glyph; Height = S(description == null ? 52 : 64);
         if (editor != null) Controls.Add(editor);
     }
+    // Stacked: title and description on top, the editor below them (a wide editor such as a
+    // three-way choice with long labels would leave no room for the text beside it).
+    public bool Stacked
+    {
+        get { return stacked; }
+        set { stacked = value; Height = S(value ? 106 : Description == null ? 52 : 64); PerformLayout(); Invalidate(); }
+    }
+    int TextLeft { get { return Glyph != Glyph.None ? S(18) + S(32) + S(14) : S(18); } }
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e);
-        if (Editor != null) Editor.Location = new Point(Width - S(18) - Editor.Width, (Height - Editor.Height) / 2);
+        if (Editor == null) return;
+        if (stacked) Editor.Location = new Point(TextLeft, S(60));
+        else Editor.Location = new Point(Width - S(18) - Editor.Width, (Height - Editor.Height) / 2);
     }
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -283,13 +294,13 @@ internal sealed class SRow : SControl
         var x = S(18);
         if (Glyph != Glyph.None)
         {
-            var ib = new Rectangle(x, (Height - S(32)) / 2, S(32), S(32));
+            var ib = new Rectangle(x, stacked ? S(16) : (Height - S(32)) / 2, S(32), S(32));
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Glass.Paint(g, ib, S(10), GlassKind.Secondary, 1.8F);
             Glyphs.Draw(g, Glyph, new RectangleF(ib.X + S(8), ib.Y + S(8), S(16), S(16)), Ui.Text);
             x = ib.Right + S(14);
         }
-        var w = (Editor != null ? Editor.Left - S(16) : Width - S(18)) - x;
+        var w = (Editor != null && !stacked ? Editor.Left - S(16) : Width - S(18)) - x;
         if (Description == null)
             TextRenderer.DrawText(g, Title, SFonts.RowTitle, new Rectangle(x, 0, w, Height), Ui.Text, Ui.Flags | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         else
@@ -682,8 +693,9 @@ internal sealed class SettingsForm : Form
 
         var auto = new SToggle(); auto.SetInstant(work.AutoStart);
         auto.CheckedChanged += delegate { work.AutoStart = auto.Checked; Dirty(); };
-        var taskbar = new SToggle(); taskbar.SetInstant(work.ShowInTaskbar);
-        taskbar.CheckedChanged += delegate { work.ShowInTaskbar = taskbar.Checked; Dirty(); };
+        var presence = new SSegmented("Tepsi", "Tepsi + düğme", "Görev çubuğu") { SelectedIndex = Math.Max(0, Array.IndexOf(PresenceMode.All, work.Presence)) };
+        var presenceRow = new SRow("Uygulama nerede görünsün", PresenceText(work.Presence), presence, Glyph.Layers) { Stacked = true };
+        presence.Changed += delegate { work.Presence = PresenceMode.All[presence.SelectedIndex]; presenceRow.Description = PresenceText(work.Presence); presenceRow.Invalidate(); Dirty(); };
         var side = new SSegmented("Otomatik", "Sol", "Sağ") { SelectedIndex = work.DockSide == "left" ? 1 : work.DockSide == "right" ? 2 : 0 };
         side.Changed += delegate { work.DockSide = new[] { "auto", "left", "right" }[side.SelectedIndex]; Dirty(); };
         var reach = new SToggle(); reach.SetInstant(work.ReachabilityCheck);
@@ -692,7 +704,7 @@ internal sealed class SettingsForm : Form
         forti.CheckedChanged += delegate { work.ShowForti = forti.Checked; Dirty(); };
         var card = page.Add(new SCard(), caption: "DAVRANIŞ")
             .Add(new SRow("Windows açılışında başlat", "Oturum açılınca arka planda başlar, OpenVPN açılınca görünür.", auto, Glyph.Power))
-            .Add(new SRow("Görev çubuğunda göster", "Açıkken uygulama penceresi görev çubuğunda görünür.", taskbar, Glyph.Layers))
+            .Add(presenceRow)
             .Add(new SRow("Panel tarafı", "Yapışılacak taraf", side, Glyph.Panel))
             .Add(new SRow("Sunucu erişim testi", "Profil avatarında yeşil / kırmızı durum noktası.", reach, Glyph.Server))
             .Add(new SRow("FortiClient profilleri", "FortiClient VPN tünellerini de listele.", forti, Glyph.ShieldLock));
@@ -881,6 +893,13 @@ internal sealed class SettingsForm : Form
         return "Sor: göndermeden önce sorar";
     }
 
+    internal static string PresenceText(string mode)
+    {
+        return mode == PresenceMode.Taskbar ? "Görev çubuğu: düğme uygulama açıkken hep durur, tepsi simgesi gizlenir."
+             : mode == PresenceMode.Both ? "Tepsi + düğme: tepsi simgesi; pencere açıkken görev çubuğunda düğme."
+             : "Tepsi: simge tepside durur; gizlenince görev çubuğunda görünmez.";
+    }
+
     static string ModeText(string mode)
     {
         return mode == "auto" ? "Otomatik: boştayken sessizce kurar"
@@ -973,7 +992,7 @@ internal sealed class SettingsForm : Form
     {
         get
         {
-            return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.ShowInTaskbar != original.ShowInTaskbar || work.BackupFolder != original.BackupFolder ||
+            return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.Presence != original.Presence || work.BackupFolder != original.BackupFolder ||
                    work.BackupFrequency != original.BackupFrequency || work.BackupKeep != original.BackupKeep || work.DockSide != original.DockSide ||
                    work.Theme != original.Theme || work.ReachabilityCheck != original.ReachabilityCheck || work.ShowForti != original.ShowForti ||
                    work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard ||

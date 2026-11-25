@@ -113,8 +113,16 @@ internal sealed class GlassDialog : Form
     {
         return ShowCore(owner, text, caption, buttons, icon, 0);
     }
+    // A dialog owned by a minimized window is hidden with it (taskbar mode minimizes the panel instead
+    // of hiding it): the owner comes back first. A hidden owner (tray mode) is left alone, as before.
+    internal static void Surface(IWin32Window owner)
+    {
+        var f = owner as Form;
+        if (f != null && f.IsHandleCreated && f.Visible && TaskbarButton.Iconic(f.Handle)) TaskbarButton.Restore(f.Handle, true);
+    }
     static DialogResult ShowCore(IWin32Window owner, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, int def)
     {
+        Surface(owner);
         using (var d = new GlassDialog(text, caption, buttons, icon, def)) return owner != null ? d.ShowDialog(owner) : d.ShowDialog();
     }
     public static DialogResult Show(IWin32Window owner, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxDefaultButton def) { return ShowCore(owner, text, caption, buttons, icon, def == MessageBoxDefaultButton.Button2 ? 1 : def == MessageBoxDefaultButton.Button3 ? 2 : 0); }
@@ -128,6 +136,7 @@ internal sealed class GlassDialog : Form
     public static int ShowChoice(IWin32Window owner, string text, string caption, string[] labels, int defaultIndex, int escIndex, MessageBoxIcon icon)
     {
         DialogResult r;
+        Surface(owner);
         using (var d = new GlassDialog(text, caption, MessageBoxButtons.OK, icon, defaultIndex, labels, escIndex)) r = owner != null ? d.ShowDialog(owner) : d.ShowDialog();
         var i = Array.IndexOf(ChoiceResults, r);
         return i >= 0 && i < labels.Length ? i : escIndex;
