@@ -456,12 +456,13 @@ internal sealed class SKeys : SControl
 internal sealed class SPage : Panel
 {
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] static extern int SetWindowTheme(IntPtr hwnd, string app, string idlist);
-    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); try { SetWindowTheme(Handle, Themes.IsLight ? "Explorer" : "DarkMode_Explorer", null); } catch { } }
-
+    // Own slim scrollbar instead of the native one: the native bar is a square strip in the system
+    // colors that breaks the rounded glass window edge.
+    int scrollY, contentH, dragOffset = -1;
     public string Title, Subtitle;
     public SPage(string title, string subtitle)
     {
-        Title = title; Subtitle = subtitle; AutoScroll = true; DoubleBuffered = true; ClientSizeChanged += delegate { PerformLayout(); };
+        Title = title; Subtitle = subtitle; AutoScroll = false; DoubleBuffered = true; ClientSizeChanged += delegate { PerformLayout(); Invalidate(); };
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
     }
     int Gutter { get { return Ui.S(30); } }
@@ -482,7 +483,7 @@ internal sealed class SPage : Panel
         stacking = true;
         try
         {
-            var yy = Ui.S(82) + AutoScrollPosition.Y; var w = ClientSize.Width - 2 * Gutter;
+            var yy = Ui.S(82) - scrollY; var w = ClientSize.Width - 2 * Gutter;
             foreach (var c in stack)
             {
                 var x = c is SCaption ? Gutter + Ui.S(4) : Gutter;
@@ -490,15 +491,70 @@ internal sealed class SPage : Panel
                 var card = c as SCard; if (card != null) card.Relayout();
                 yy += c.Height + Ui.S(gaps[c]);
             }
+            contentH = yy + scrollY + Ui.S(10);
+            var max = MaxScroll;
+            if (scrollY > max) { scrollY = max; stacking = false; OnLayout(e); return; }
         }
         finally { stacking = false; }
+        Invalidate();
     }
+
+    int MaxScroll { get { return Math.Max(0, contentH - ClientSize.Height); } }
+
+    public void ScrollBy(int dy)
+    {
+        var n = Math.Max(0, Math.Min(MaxScroll, scrollY + dy));
+        if (n == scrollY) return;
+        scrollY = n; PerformLayout(); Invalidate(true);
+    }
+
+    public void ScrollToTop() { scrollY = 0; PerformLayout(); Invalidate(true); }
+
+    Rectangle ThumbRect()
+    {
+        if (MaxScroll <= 0) return Rectangle.Empty;
+        var track = ClientSize.Height - Ui.S(24);
+        var th = Math.Max(Ui.S(36), (int)((long)track * ClientSize.Height / contentH));
+        var y = Ui.S(12) + (int)((long)(track - th) * scrollY / MaxScroll);
+        return new Rectangle(ClientSize.Width - Ui.S(10), y, Ui.S(5), th);
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e) { ScrollBy(-e.Delta / 120 * Ui.S(64)); base.OnMouseWheel(e); }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        var t = ThumbRect();
+        if (t.IsEmpty || e.Button != MouseButtons.Left) return;
+        var hit = Rectangle.Inflate(t, Ui.S(5), Ui.S(2));
+        if (hit.Contains(e.Location)) { dragOffset = e.Y - t.Y; Capture = true; }
+        else if (e.X >= ClientSize.Width - Ui.S(18)) ScrollBy(e.Y < t.Y ? -ClientSize.Height + Ui.S(60) : ClientSize.Height - Ui.S(60));
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (dragOffset < 0) return;
+        var track = ClientSize.Height - Ui.S(24); var t = ThumbRect();
+        var room = track - t.Height; if (room <= 0) return;
+        var y = Math.Max(0, Math.Min(room, e.Y - dragOffset - Ui.S(12)));
+        var n = (int)((long)MaxScroll * y / room);
+        if (n != scrollY) { scrollY = n; PerformLayout(); Invalidate(true); }
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); if (dragOffset >= 0) { dragOffset = -1; Capture = false; } }
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics; g.Clear(BackColor);
-        var off = AutoScrollPosition.Y;
+        var off = -scrollY;
         TextRenderer.DrawText(g, Title, SFonts.PageTitle, new Point(Gutter, Ui.S(26) + off), Ui.Text, Ui.Flags);
         TextRenderer.DrawText(g, Subtitle, SFonts.RowDesc, new Point(Gutter + Ui.S(1), Ui.S(56) + off), Ui.Muted, Ui.Flags);
+        var t = ThumbRect();
+        if (!t.IsEmpty)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var path = Ui.Round(new RectangleF(t.X, t.Y, t.Width, t.Height), t.Width / 2F)) using (var b = new SolidBrush(Color.FromArgb(dragOffset >= 0 ? 150 : 90, Ui.Muted))) g.FillPath(b, path);
+        }
     }
 }
 
@@ -811,8 +867,12 @@ internal sealed class SettingsForm : Form
     {
         nav = i;
         for (var k = 0; k < pages.Count; k++) pages[k].Visible = k == i;
+        pages[i].ScrollToTop();
         Invalidate(new Rectangle(0, 0, NavWidth, Height));
     }
+
+    // Wheel over any control of the window scrolls the visible page (pages have no native scrollbar).
+    protected override void OnMouseWheel(MouseEventArgs e) { if (nav >= 0 && nav < pages.Count) pages[nav].ScrollBy(-e.Delta / 120 * S(64)); base.OnMouseWheel(e); }
 
     Rectangle NavRect(int i) { return new Rectangle(S(18), S(84) + i * S(42), NavWidth - S(36), S(36)); }
 
