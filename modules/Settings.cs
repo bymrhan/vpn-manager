@@ -28,6 +28,10 @@ internal sealed class AppSettings
     public bool ShowForti;              // list FortiClient VPN tunnels too
     public bool ShowSophos;             // list Sophos Connect connections too (when installed)
     public bool ShowWatchGuard;         // list WatchGuard SSL VPN servers too (when installed)
+    public string UpdateMode;           // "ask" (tell the user), "auto" (install silently when idle), "off" (manual check only)
+    public string UpdateInterval;       // "startup", "daily", "weekly"
+    public DateTime LastUpdateCheckUtc; // last successful update check
+    public string SkippedVersion;       // "2.1.0" the user chose to skip; "" = none
 
     public static AppSettings Defaults()
     {
@@ -44,7 +48,11 @@ internal sealed class AppSettings
             ReachabilityCheck = true,
             ShowForti = true,
             ShowSophos = true,
-            ShowWatchGuard = true
+            ShowWatchGuard = true,
+            UpdateMode = "ask",
+            UpdateInterval = "daily",
+            LastUpdateCheckUtc = DateTime.MinValue,
+            SkippedVersion = ""
         };
     }
 
@@ -70,6 +78,10 @@ internal sealed class AppSettings
         if (Array.IndexOf(new[] { "auto", "right", "left" }, DockSide) < 0) DockSide = d.DockSide;
         if (Array.IndexOf(new[] { "dark", "light", "system" }, Theme) < 0) Theme = d.Theme;
         if (LastBackupUtc.Kind == DateTimeKind.Unspecified) LastBackupUtc = DateTime.SpecifyKind(LastBackupUtc, DateTimeKind.Utc);
+        if (Array.IndexOf(new[] { "ask", "auto", "off" }, UpdateMode) < 0) UpdateMode = d.UpdateMode;
+        if (Array.IndexOf(new[] { "startup", "daily", "weekly" }, UpdateInterval) < 0) UpdateInterval = d.UpdateInterval;
+        if (LastUpdateCheckUtc.Kind == DateTimeKind.Unspecified) LastUpdateCheckUtc = DateTime.SpecifyKind(LastUpdateCheckUtc, DateTimeKind.Utc);
+        SkippedVersion = UpdateLogic.NormalizeTag(SkippedVersion) ?? "";
     }
 }
 
@@ -111,6 +123,11 @@ internal static class SettingsStore
             s.ShowForti = Bool(d, "ShowForti", s.ShowForti);
             s.ShowSophos = Bool(d, "ShowSophos", s.ShowSophos);
             s.ShowWatchGuard = Bool(d, "ShowWatchGuard", s.ShowWatchGuard);
+            s.UpdateMode = Str(d, "UpdateMode", s.UpdateMode);
+            s.UpdateInterval = Str(d, "UpdateInterval", s.UpdateInterval);
+            long uticks = Long(d, "LastUpdateCheckUtcTicks", 0);
+            s.LastUpdateCheckUtc = uticks > 0 && uticks <= DateTime.MaxValue.Ticks ? new DateTime(uticks, DateTimeKind.Utc) : DateTime.MinValue;
+            s.SkippedVersion = Str(d, "SkippedVersion", s.SkippedVersion);
         }
         catch
         {
@@ -140,6 +157,10 @@ internal static class SettingsStore
         d["ShowForti"] = n.ShowForti;
         d["ShowSophos"] = n.ShowSophos;
         d["ShowWatchGuard"] = n.ShowWatchGuard;
+        d["UpdateMode"] = n.UpdateMode;
+        d["UpdateInterval"] = n.UpdateInterval;
+        d["LastUpdateCheckUtcTicks"] = n.LastUpdateCheckUtc.Kind == DateTimeKind.Local ? n.LastUpdateCheckUtc.ToUniversalTime().Ticks : n.LastUpdateCheckUtc.Ticks;
+        d["SkippedVersion"] = n.SkippedVersion;
         var json = new JavaScriptSerializer().Serialize(d);
 
         var path = FilePath;

@@ -46,6 +46,13 @@ static class Tests
         Run("Erişim testi uç noktası", ReachabilityEndpoints);
         Run("Ayarlar: sağlayıcı anahtarları", ProviderSettings);
         Run("Demo sağlayıcı satırları", DemoProviders);
+        Run("Güncelleme: sürüm karşılaştırma", UpdateVersions);
+        Run("Güncelleme: sürüm JSON'u", UpdateReleaseJson);
+        Run("Güncelleme: SHA-256 dosyası", UpdateSha256);
+        Run("Güncelleme: denetim zamanı", UpdateDue);
+        Run("Güncelleme: boşta mı / kurulu kopya mı", UpdateIdleAndInstall);
+        Run("Güncelleme: paket doğrulama", UpdateVerifyPackage);
+        Run("Ayarlar: güncelleme", UpdateSettings);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -401,5 +408,162 @@ static class Tests
         if (WatchGuardStore.IsInstalled) Check(profiles.Count == WatchGuardStore.Servers().Count, "kayıttaki her sunucu için bir profil (" + profiles.Count + ")");
         foreach (var p in profiles) if (!WatchGuardStore.IsWatchGuard(p)) Check(false, "profil kimliği watchguard-ssl: ile başlar");
         Check(WatchGuardStore.ClientRunning == running, "istemci başlatılmadı");
+    }
+
+    // ---------- Updates ----------
+
+    static void UpdateVersions()
+    {
+        Check(UpdateLogic.CompareVersions("2.10.0", "2.9.0") > 0, "2.10.0 > 2.9.0 (sayısal)");
+        Check(UpdateLogic.CompareVersions("v2.1.0", "2.1.0") == 0, "v öneki yok sayılır");
+        Check(UpdateLogic.CompareVersions("2.0", "2.0.0") == 0, "2.0 = 2.0.0");
+        Check(UpdateLogic.CompareVersions("2.0.0", "2.0.1") < 0, "2.0.0 < 2.0.1");
+        Check(UpdateLogic.CompareVersions("3.0.0", "2.99.99") > 0, "3.0.0 > 2.99.99");
+        Check(UpdateLogic.NormalizeTag("v2.1.0") == "2.1.0", "etiket v2.1.0 -> 2.1.0");
+        Check(UpdateLogic.NormalizeTag("v2.1.0-beta") == null && UpdateLogic.NormalizeTag("nightly") == null && UpdateLogic.NormalizeTag("") == null, "geçersiz etiketler reddedilir");
+        Check(UpdateLogic.IsNewer("v2.1.0", "2.0.0") && !UpdateLogic.IsNewer("v2.0.0", "2.0.0") && !UpdateLogic.IsNewer("1.9.9", "2.0.0"), "IsNewer");
+        int[] parts;
+        Check(UpdateLogic.TryParseVersion(UpdateLogic.CurrentVersion, out parts), "çalışan sürüm okunur (" + UpdateLogic.CurrentVersion + ")");
+    }
+
+    static string ReleaseJson(string tag, bool prerelease, bool draft, bool zip, bool sha, string host)
+    {
+        var assets = new List<string>();
+        var b = host + "/bymrhan/vpn-manager/releases/download/" + tag + "/";
+        if (zip) assets.Add("{\"name\":\"OpenVPN-Hizli-Arama-Kurulum.zip\",\"browser_download_url\":\"" + b + "OpenVPN-Hizli-Arama-Kurulum.zip\"}");
+        if (sha) assets.Add("{\"name\":\"OpenVPN-Hizli-Arama-Kurulum.zip.sha256\",\"browser_download_url\":\"" + b + "OpenVPN-Hizli-Arama-Kurulum.zip.sha256\"}");
+        assets.Add("{\"name\":\"notlar.txt\",\"browser_download_url\":\"" + b + "notlar.txt\"}");
+        return "{\"tag_name\":\"" + tag + "\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/releases/tag/" + tag + "\"," +
+               "\"body\":\"## Yenilikler\\n- Örnek değişiklik\",\"prerelease\":" + (prerelease ? "true" : "false") + ",\"draft\":" + (draft ? "true" : "false") +
+               ",\"assets\":[" + string.Join(",", assets) + "]}";
+    }
+
+    static void UpdateReleaseJson()
+    {
+        string problem;
+        var r = UpdateLogic.ParseRelease(ReleaseJson("v2.1.0", false, false, true, true, "https://github.com"), out problem);
+        Check(r != null && r.Version == "2.1.0" && r.Tag == "v2.1.0", "etiket ve sürüm okunur");
+        Check(r != null && r.HtmlUrl == "https://github.com/bymrhan/vpn-manager/releases/tag/v2.1.0" && r.Notes.Contains("Örnek değişiklik"), "sürüm sayfası ve notlar okunur");
+        Check(r != null && r.CanInstall && r.ZipUrl.EndsWith("/v2.1.0/OpenVPN-Hizli-Arama-Kurulum.zip") && r.ShaUrl.EndsWith(".zip.sha256"), "paket ve SHA-256 dosyası bulunur");
+        Check(UpdateLogic.IsOffered(r) && UpdateLogic.ShouldOffer(r, "2.0.0", "", false), "yeni sürüm önerilir");
+        Check(!UpdateLogic.ShouldOffer(r, "2.1.0", "", false) && !UpdateLogic.ShouldOffer(r, "2.2.0", "", false), "aynı / eski sürüm önerilmez");
+        Check(!UpdateLogic.ShouldOffer(r, "2.0.0", "2.1.0", false) && UpdateLogic.ShouldOffer(r, "2.0.0", "2.1.0", true), "atlanan sürüm yalnızca elle denetimde gösterilir");
+
+        var pre = UpdateLogic.ParseRelease(ReleaseJson("v2.2.0", true, false, true, true, "https://github.com"), out problem);
+        Check(pre != null && !UpdateLogic.IsOffered(pre) && !UpdateLogic.ShouldOffer(pre, "2.0.0", "", true), "ön sürüm yok sayılır");
+        var draft = UpdateLogic.ParseRelease(ReleaseJson("v2.2.0", false, true, true, true, "https://github.com"), out problem);
+        Check(draft != null && !UpdateLogic.IsOffered(draft), "taslak yok sayılır");
+
+        var noSha = UpdateLogic.ParseRelease(ReleaseJson("v2.1.0", false, false, true, false, "https://github.com"), out problem);
+        Check(noSha != null && !noSha.CanInstall && noSha.ShaUrl == null, "SHA-256 dosyası yoksa kurulmaz");
+        var noZip = UpdateLogic.ParseRelease(ReleaseJson("v2.1.0", false, false, false, true, "https://github.com"), out problem);
+        Check(noZip != null && !noZip.CanInstall && noZip.ZipUrl == null, "paket yoksa kurulmaz");
+        var foreign = UpdateLogic.ParseRelease(ReleaseJson("v2.1.0", false, false, true, true, "https://mirror.example"), out problem);
+        Check(foreign != null && !foreign.CanInstall, "başka sunucudaki dosyalar kabul edilmez");
+        var plain = UpdateLogic.ParseRelease(ReleaseJson("v2.1.0", false, false, true, true, "http://github.com"), out problem);
+        Check(plain != null && !plain.CanInstall, "HTTPS olmayan adres kabul edilmez");
+
+        Check(UpdateLogic.ParseRelease(ReleaseJson("nightly", false, false, true, true, "https://github.com"), out problem) == null && problem != null, "geçersiz etiket: sürüm yok");
+        Check(UpdateLogic.ParseRelease("{bozuk", out problem) == null && problem != null, "bozuk JSON: sürüm yok");
+        var odd = UpdateLogic.ParseRelease("{\"tag_name\":\"v2.1.0\",\"html_url\":\"https://phish.example/x\"}", out problem);
+        Check(odd != null && odd.HtmlUrl == UpdateLogic.ReleasesPage && !odd.CanInstall, "yabancı sürüm sayfası adresi yerine depo sayfası");
+        Check(UpdateLogic.NotesPreview("## Yenilikler\n- Bir\n- İki\n- Üç\n- Dört", 200) == "Yenilikler · Bir · İki", "sürüm notu önizlemesi");
+    }
+
+    static void UpdateSha256()
+    {
+        var h = new string('a', 32) + new string('B', 32);
+        Check(UpdateLogic.ParseSha256(h + "  OpenVPN-Hizli-Arama-Kurulum.zip\n") == h.ToLowerInvariant(), "sha256sum biçimi");
+        Check(UpdateLogic.ParseSha256(h) == h.ToLowerInvariant(), "yalnızca özet");
+        Check(UpdateLogic.ParseSha256("yok") == null && UpdateLogic.ParseSha256("") == null && UpdateLogic.ParseSha256(new string('a', 65)) == null, "özet yoksa null");
+        Check(UpdateLogic.Sha256Line(h, "x.zip") == h.ToLowerInvariant() + "  x.zip\n", "yazılan satır sürüm dosyasıyla aynı biçimde");
+    }
+
+    static void UpdateDue()
+    {
+        var now = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc); var never = DateTime.MinValue;
+        Check(UpdateLogic.IsDue("startup", now.AddMinutes(-1), never, false, now) && !UpdateLogic.IsDue("startup", never, never, true, now), "açılışta: her çalıştırmada bir kez");
+        Check(UpdateLogic.IsDue("daily", never, never, false, now), "günlük: hiç denetlenmediyse hemen");
+        Check(!UpdateLogic.IsDue("daily", now.AddHours(-23), never, true, now) && UpdateLogic.IsDue("daily", now.AddHours(-24), never, true, now), "günlük: 24 saatte bir");
+        Check(!UpdateLogic.IsDue("weekly", now.AddDays(-6), never, true, now) && UpdateLogic.IsDue("weekly", now.AddDays(-7), never, true, now), "haftalık: 7 günde bir");
+        Check(UpdateLogic.IsDue("daily", now.AddDays(2), never, true, now), "saat geri alındıysa denetlenir");
+        Check(!UpdateLogic.IsDue("daily", never, now.AddMinutes(-10), true, now) && UpdateLogic.IsDue("daily", never, now.AddMinutes(-61), true, now), "başarısız denetim 1 saat sonra yeniden denenir");
+    }
+
+    static void UpdateIdleAndInstall()
+    {
+        Check(UpdateLogic.IsIdle(false, 0, false, false), "panel gizli: boşta");
+        Check(!UpdateLogic.IsIdle(true, 30000, false, false) && UpdateLogic.IsIdle(true, 120000, false, false), "panel açık: 2 dakika girişsiz kalınca boşta");
+        Check(!UpdateLogic.IsIdle(false, 999999, true, false), "bağlanma / kesme sürerken kurulmaz");
+        Check(!UpdateLogic.IsIdle(false, 999999, false, true), "pencere açıkken kurulmaz");
+        var dir = @"C:\Users\kullanici\AppData\Local\Programs\OpenVPN Hizli Arama";
+        Check(UpdateLogic.IsInstalledCopy(dir + @"\OpenVPN-Hizli-Arama.exe", dir) && UpdateLogic.IsInstalledCopy(dir.ToLowerInvariant() + @"\openvpn-hizli-arama.exe", dir + @"\"), "kurulum klasöründeki kopya");
+        Check(!UpdateLogic.IsInstalledCopy(@"C:\Araclar\OpenVPN-Hizli-Arama.exe", dir) && !UpdateLogic.IsInstalledCopy(dir + @"\Baska.exe", dir) && !UpdateLogic.IsInstalledCopy(null, dir), "taşınabilir kopya kendini güncellemez");
+        Check(UpdateLogic.InstallDir.EndsWith(@"\Programs\OpenVPN Hizli Arama", StringComparison.OrdinalIgnoreCase), "kurulum klasörü kur.ps1 ile aynı");
+    }
+
+    static void UpdateVerifyPackage()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-update-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var zip = Path.Combine(dir, "paket.zip");
+            Func<string> make = delegate
+            {
+                if (File.Exists(zip)) File.Delete(zip);
+                using (var z = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    using (var w = new StreamWriter(z.CreateEntry("kur.ps1").Open())) w.Write("# sahte kur.ps1");
+                    using (var w = new StreamWriter(z.CreateEntry("uygulama/OpenVPN-Hizli-Arama.exe").Open())) w.Write("sahte exe");
+                }
+                using (var sha = System.Security.Cryptography.SHA256.Create()) using (var fs = File.OpenRead(zip))
+                    return BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
+            };
+            string err;
+            var hash = make();
+            var pkg = UpdateClient.VerifyAndExtract(zip, UpdateLogic.Sha256Line(hash, "OpenVPN-Hizli-Arama-Kurulum.zip"), dir, out err);
+            Check(pkg != null && File.Exists(Path.Combine(pkg, "kur.ps1")) && File.Exists(Path.Combine(pkg, "uygulama", "OpenVPN-Hizli-Arama.exe")), "doğru özet: paket açılır");
+            if (pkg != null) Directory.Delete(pkg, true);
+
+            make();
+            pkg = UpdateClient.VerifyAndExtract(zip, UpdateLogic.Sha256Line(new string('0', 64), "x.zip"), dir, out err);
+            Check(pkg == null && err != null && !File.Exists(zip) && !Directory.Exists(Path.Combine(dir, "paket")), "yanlış özet: hiçbir şey açılmaz, paket silinir");
+
+            make();
+            pkg = UpdateClient.VerifyAndExtract(zip, "", dir, out err);
+            Check(pkg == null && err != null && !Directory.Exists(Path.Combine(dir, "paket")), "özet yok: güncelleme durur");
+
+            string dl;
+            Check(UpdateClient.Download(new ReleaseInfo { Tag = "v9.9.9", Version = "9.9.9", ZipUrl = "https://mirror.example/a.zip", ShaUrl = "https://mirror.example/a.zip.sha256" }, out dl) == null && dl != null, "yabancı adresten indirme yapılmaz");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void UpdateSettings()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ovpnqs-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        SettingsStore.PathOverride = path;
+        try
+        {
+            File.WriteAllText(path, "{\"Hotkey\":\"Ctrl+Alt+V\",\"Theme\":\"light\",\"ShowForti\":true}");
+            var old = SettingsStore.Load();
+            Check(old.Theme == "light" && old.UpdateMode == "ask" && old.UpdateInterval == "daily" && old.LastUpdateCheckUtc == DateTime.MinValue && old.SkippedVersion == "", "eski settings.json: güncelleme varsayılanları (sor, günlük)");
+            var d = AppSettings.Defaults();
+            Check(d.UpdateMode == "ask" && d.UpdateInterval == "daily", "varsayılanlar");
+            var when = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+            old.UpdateMode = "auto"; old.UpdateInterval = "weekly"; old.LastUpdateCheckUtc = when; old.SkippedVersion = "v2.1.0";
+            SettingsStore.Save(old);
+            var back = SettingsStore.Load();
+            Check(back.UpdateMode == "auto" && back.UpdateInterval == "weekly" && back.LastUpdateCheckUtc == when && back.SkippedVersion == "2.1.0", "güncelleme ayarları kaydedilip geri okunur");
+            File.WriteAllText(path, "{\"UpdateMode\":\"hep\",\"UpdateInterval\":5,\"SkippedVersion\":\"bozuk\",\"LastUpdateCheckUtcTicks\":\"x\"}");
+            var bad = SettingsStore.Load();
+            Check(bad.UpdateMode == "ask" && bad.UpdateInterval == "daily" && bad.SkippedVersion == "" && bad.LastUpdateCheckUtc == DateTime.MinValue, "geçersiz değerler varsayılana döner");
+        }
+        finally
+        {
+            SettingsStore.PathOverride = null;
+            try { File.Delete(path); } catch { }
+        }
     }
 }

@@ -1,0 +1,463 @@
+﻿using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Net;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+
+// =====================================================================
+// Updates from the GitHub Releases of bymrhan/vpn-manager.
+//   UpdateLogic  - pure decisions (versions, release JSON, due time, idle, install location); unit-tested.
+//   UpdateClient - network and file work (check, download, SHA-256, extract, start the installer helper).
+//   UpdateNotice - the non-modal glass notice for "ask" mode.
+// Security: only HTTPS, only release assets of this repository, SHA-256 checked against the
+// release's .sha256 asset before anything from the package runs. No user data is sent.
+// =====================================================================
+
+internal sealed class ReleaseInfo
+{
+    public string Tag, Version, HtmlUrl, Notes, ZipUrl, ShaUrl;
+    public bool Prerelease, Draft;
+
+    // Both assets present: the package can be downloaded and verified.
+    public bool CanInstall { get { return ZipUrl != null && ShaUrl != null; } }
+}
+
+internal static class UpdateLogic
+{
+    public const string Repo = "bymrhan/vpn-manager";
+    public const string ApiUrl = "https://api.github.com/repos/" + Repo + "/releases/latest";
+    public const string ReleasesPage = "https://github.com/" + Repo + "/releases";
+    public const string AssetPrefix = "https://github.com/" + Repo + "/releases/download/";
+    public const string ZipAsset = "OpenVPN-Hizli-Arama-Kurulum.zip";
+    public const string ShaAsset = ZipAsset + ".sha256";
+    public const string UserAgent = "VpnManager-Updater";
+    public const string ExeName = "OpenVPN-Hizli-Arama.exe";
+    public const int IdleThresholdMs = 2 * 60 * 1000;             // no keyboard / mouse input for about 2 minutes
+    public static readonly TimeSpan FailureRetry = TimeSpan.FromHours(1);
+
+    // "2.0.0" from AssemblyInformationalVersion (modules\AssemblyInfo.cs), else the assembly version.
+    public static string CurrentVersion
+    {
+        get
+        {
+            var asm = typeof(UpdateLogic).Assembly;
+            var info = (AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(asm, typeof(AssemblyInformationalVersionAttribute));
+            int[] parts;
+            if (info != null && TryParseVersion(info.InformationalVersion, out parts)) return Format(parts);
+            var v = asm.GetName().Version;
+            return v.Major + "." + v.Minor + "." + Math.Max(0, v.Build);
+        }
+    }
+
+    // %LOCALAPPDATA%\Programs\OpenVPN Hizli Arama (where install.ps1 / kur.ps1 install, no admin rights).
+    public static string InstallDir
+    {
+        get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "OpenVPN Hizli Arama"); }
+    }
+
+    // "v2.10.0", "2.1", "2.1.0.0" -> numbers (1 to 4 parts). Pre-release suffixes ("2.1.0-beta") are rejected.
+    public static bool TryParseVersion(string text, out int[] parts)
+    {
+        parts = null;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var t = text.Trim();
+        if (t.StartsWith("v", StringComparison.OrdinalIgnoreCase)) t = t.Substring(1);
+        var bits = t.Split('.');
+        if (bits.Length < 1 || bits.Length > 4) return false;
+        var result = new int[4];
+        for (var i = 0; i < bits.Length; i++)
+        {
+            int n;
+            if (bits[i].Length == 0 || bits[i].Length > 9 || !bits[i].All(char.IsDigit) || !int.TryParse(bits[i], NumberStyles.None, CultureInfo.InvariantCulture, out n)) return false;
+            result[i] = n;
+        }
+        parts = result;
+        return true;
+    }
+
+    // "v2.1.0" -> "2.1.0"; null when the tag is not a plain version.
+    public static string NormalizeTag(string tag)
+    {
+        int[] parts;
+        return TryParseVersion(tag, out parts) ? Format(parts) : null;
+    }
+
+    static string Format(int[] p)
+    {
+        return p[3] != 0 ? p[0] + "." + p[1] + "." + p[2] + "." + p[3] : p[0] + "." + p[1] + "." + p[2];
+    }
+
+    // Numeric compare, part by part ("2.10.0" > "2.9.0"). Unparseable versions sort lowest.
+    public static int CompareVersions(string a, string b)
+    {
+        int[] x, y;
+        var okA = TryParseVersion(a, out x); var okB = TryParseVersion(b, out y);
+        if (!okA || !okB) return okA == okB ? 0 : okA ? 1 : -1;
+        for (var i = 0; i < 4; i++) if (x[i] != y[i]) return x[i] < y[i] ? -1 : 1;
+        return 0;
+    }
+
+    public static bool IsNewer(string candidate, string current) { return CompareVersions(candidate, current) > 0 && NormalizeTag(candidate) != null; }
+
+    // Release JSON (GitHub REST "release" object) -> ReleaseInfo. Null when the JSON or the tag is unusable.
+    // Asset URLs are kept only when they are release assets of this repository over HTTPS.
+    public static ReleaseInfo ParseRelease(string json, out string problem)
+    {
+        problem = null;
+        Dictionary<string, object> d;
+        try { d = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json ?? ""); }
+        catch { problem = "sürüm bilgisi okunamadı"; return null; }
+        if (d == null) { problem = "sürüm bilgisi okunamadı"; return null; }
+        var r = new ReleaseInfo
+        {
+            Tag = Str(d, "tag_name"),
+            Notes = Str(d, "body") ?? "",
+            Prerelease = Bool(d, "prerelease"),
+            Draft = Bool(d, "draft")
+        };
+        r.Version = NormalizeTag(r.Tag);
+        if (r.Version == null) { problem = "sürüm etiketi geçersiz"; return null; }
+        var html = Str(d, "html_url");
+        r.HtmlUrl = html != null && html.StartsWith(ReleasesPage + "/", StringComparison.Ordinal) ? html : ReleasesPage;
+        object assets;
+        if (d.TryGetValue("assets", out assets) && assets is IEnumerable && !(assets is string))
+        {
+            foreach (var o in (IEnumerable)assets)
+            {
+                var a = o as IDictionary<string, object>;
+                if (a == null) continue;
+                var name = Str(a, "name"); var url = Str(a, "browser_download_url");
+                if (name == ZipAsset && IsAllowedAssetUrl(url, r.Tag, ZipAsset)) r.ZipUrl = url;
+                else if (name == ShaAsset && IsAllowedAssetUrl(url, r.Tag, ShaAsset)) r.ShaUrl = url;
+            }
+        }
+        return r;
+    }
+
+    // Only https://github.com/bymrhan/vpn-manager/releases/download/<tag>/<asset>.
+    public static bool IsAllowedAssetUrl(string url, string tag, string asset)
+    {
+        if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(tag)) return false;
+        return string.Equals(url, AssetPrefix + Uri.EscapeDataString(tag) + "/" + asset, StringComparison.Ordinal);
+    }
+
+    // Prereleases and drafts are never offered.
+    public static bool IsOffered(ReleaseInfo r) { return r != null && !r.Prerelease && !r.Draft && r.Version != null; }
+
+    // The release is worth telling the user about: offered, newer than this build, not skipped
+    // (a manual check ignores the skipped version).
+    public static bool ShouldOffer(ReleaseInfo r, string current, string skipped, bool manual)
+    {
+        if (!IsOffered(r) || !IsNewer(r.Version, current)) return false;
+        return manual || string.IsNullOrEmpty(skipped) || CompareVersions(r.Version, skipped) != 0;
+    }
+
+    // "<64 hex>  name" (sha256sum format) or a bare hash -> lower-case hash; null when none.
+    public static string ParseSha256(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        var m = System.Text.RegularExpressions.Regex.Match(text, @"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])");
+        return m.Success ? m.Value.ToLowerInvariant() : null;
+    }
+
+    public static string Sha256Line(string hash, string fileName) { return hash.ToLowerInvariant() + "  " + fileName + "\n"; }
+
+    // Is an automatic check due? "startup": once per run. "daily" / "weekly": since the last successful check.
+    // A failed check is retried no sooner than FailureRetry (startup: at the next start).
+    public static bool IsDue(string interval, DateTime lastCheckUtc, DateTime lastFailureUtc, bool checkedThisRun, DateTime nowUtc)
+    {
+        if (interval == "startup") return !checkedThisRun;
+        if (lastFailureUtc > DateTime.MinValue && nowUtc >= lastFailureUtc && nowUtc - lastFailureUtc < FailureRetry) return false;
+        if (lastCheckUtc <= DateTime.MinValue.AddYears(1)) return true;   // never checked
+        if (lastCheckUtc > nowUtc) return true;                            // clock moved back
+        return nowUtc - lastCheckUtc >= (interval == "weekly" ? TimeSpan.FromDays(7) : TimeSpan.FromDays(1));
+    }
+
+    // Silent install only when nothing is going on: no connect / disconnect / import, no dialog open,
+    // and the panel hidden or the user away from keyboard and mouse for IdleThresholdMs.
+    // A connected VPN does not block: the VPN clients run on their own.
+    public static bool IsIdle(bool windowVisible, long idleMs, bool busy, bool dialogOpen)
+    {
+        if (busy || dialogOpen) return false;
+        return !windowVisible || idleMs >= IdleThresholdMs;
+    }
+
+    // Only a copy running from the install dir updates itself; a portable copy elsewhere just notifies.
+    public static bool IsInstalledCopy(string exePath, string installDir)
+    {
+        if (string.IsNullOrEmpty(exePath) || string.IsNullOrEmpty(installDir)) return false;
+        try
+        {
+            var dir = Path.GetFullPath(Path.GetDirectoryName(exePath)).TrimEnd('\\');
+            var want = Path.GetFullPath(installDir).TrimEnd('\\');
+            return string.Equals(dir, want, StringComparison.OrdinalIgnoreCase) && string.Equals(Path.GetFileName(exePath), ExeName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    // First lines of the release notes for the notice (markdown markers removed).
+    public static string NotesPreview(string notes, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(notes)) return "";
+        var lines = notes.Replace("\r", "").Split('\n')
+            .Select(l => l.Trim().TrimStart('#', '*', '-', ' ').Trim())
+            .Where(l => l.Length > 0).Take(3);
+        var s = string.Join(" · ", lines);
+        return s.Length <= maxChars ? s : s.Substring(0, Math.Max(0, maxChars - 1)).TrimEnd() + "…";
+    }
+
+    static string Str(IDictionary<string, object> d, string k) { object v; return d.TryGetValue(k, out v) ? v as string : null; }
+    static bool Bool(IDictionary<string, object> d, string k) { object v; return d.TryGetValue(k, out v) && v is bool && (bool)v; }
+}
+
+internal static class UpdateClient
+{
+    const int TimeoutMs = 10000;
+    const long MaxZipBytes = 200L * 1024 * 1024, MaxShaBytes = 4096, MaxJsonBytes = 1024 * 1024;
+
+    [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+    [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+    // Milliseconds since the last keyboard / mouse input in this session (0 when unknown).
+    public static long IdleMilliseconds()
+    {
+        try
+        {
+            var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO)) };
+            if (!GetLastInputInfo(ref info)) return 0;
+            return unchecked((uint)Environment.TickCount - info.dwTime);
+        }
+        catch { return 0; }
+    }
+
+    // Working folder for downloads: %TEMP%\VpnManager-Update\<random>.
+    public static string WorkRoot { get { return Path.Combine(Path.GetTempPath(), "VpnManager-Update"); } }
+
+    // Removes download folders older than an hour (a finished update leaves its package behind).
+    public static void CleanupOld()
+    {
+        try
+        {
+            if (!Directory.Exists(WorkRoot)) return;
+            foreach (var d in Directory.GetDirectories(WorkRoot))
+                try { if ((DateTime.UtcNow - Directory.GetCreationTimeUtc(d)).TotalHours > 1) Directory.Delete(d, true); } catch { }
+        }
+        catch { }
+    }
+
+    // GET the latest release. Never call on the UI thread. Null + error on network / format problems.
+    public static ReleaseInfo FetchLatest(out string error)
+    {
+        error = null;
+        try
+        {
+            var json = Encoding.UTF8.GetString(Get(UpdateLogic.ApiUrl, MaxJsonBytes, "application/vnd.github+json"));
+            string problem;
+            var r = UpdateLogic.ParseRelease(json, out problem);
+            if (r == null) error = problem;
+            return r;
+        }
+        catch (Exception ex) { error = Describe(ex); return null; }
+    }
+
+    // Downloads the package and its .sha256, verifies and extracts it. Never call on the UI thread.
+    // Returns the extracted package folder (contains kur.ps1), or null + error. Nothing runs here.
+    public static string Download(ReleaseInfo r, out string error)
+    {
+        error = null;
+        if (r == null || !r.CanInstall) { error = "sürümde paket veya SHA-256 dosyası yok"; return null; }
+        if (!UpdateLogic.IsAllowedAssetUrl(r.ZipUrl, r.Tag, UpdateLogic.ZipAsset) || !UpdateLogic.IsAllowedAssetUrl(r.ShaUrl, r.Tag, UpdateLogic.ShaAsset)) { error = "beklenmeyen indirme adresi"; return null; }
+        var work = Path.Combine(WorkRoot, r.Version + "-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(work);
+            var shaText = Encoding.ASCII.GetString(Get(r.ShaUrl, MaxShaBytes, null));
+            var zip = Path.Combine(work, UpdateLogic.ZipAsset);
+            File.WriteAllBytes(zip, Get(r.ZipUrl, MaxZipBytes, null));
+            var pkg = VerifyAndExtract(zip, shaText, work, out error);
+            if (pkg == null) TryDelete(work);
+            return pkg;
+        }
+        catch (Exception ex) { TryDelete(work); error = Describe(ex); return null; }
+    }
+
+    // SHA-256 of the zip must equal the hash in shaText (mandatory). Only then is the zip extracted
+    // to <workDir>\paket. A mismatch or a missing hash deletes the zip and extracts nothing.
+    public static string VerifyAndExtract(string zipPath, string shaText, string workDir, out string error)
+    {
+        error = null;
+        var expected = UpdateLogic.ParseSha256(shaText);
+        if (expected == null) { TryDeleteFile(zipPath); error = "SHA-256 özeti bulunamadı; güncelleme durduruldu"; return null; }
+        string actual;
+        using (var sha = SHA256.Create()) using (var fs = File.OpenRead(zipPath))
+            actual = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
+        if (!string.Equals(expected, actual, StringComparison.Ordinal)) { TryDeleteFile(zipPath); error = "SHA-256 doğrulanamadı; güncelleme durduruldu"; return null; }
+        var pkg = Path.Combine(workDir, "paket");
+        if (Directory.Exists(pkg)) Directory.Delete(pkg, true);
+        // .NET 4.6.2+ refuses entries that would land outside pkg ("..\" paths).
+        ZipFile.ExtractToDirectory(zipPath, pkg);
+        if (!File.Exists(Path.Combine(pkg, "kur.ps1")) || !File.Exists(Path.Combine(pkg, "uygulama", UpdateLogic.ExeName)))
+        {
+            TryDelete(pkg); error = "paket beklenmeyen biçimde"; return null;
+        }
+        return pkg;
+    }
+
+    // Install mechanics: a running exe cannot overwrite itself. Of the two options (rename the
+    // running exe to .old, or hand over to a helper), the helper is the safer one: the app starts
+    // the verified package's kur.ps1 -Update in a hidden PowerShell and exits. kur.ps1 waits for
+    // this process to end, backs up every file it replaces, copies the new files, restores the
+    // backup if any copy fails (the old exe stays), and starts the app again. Settings, pins,
+    // history (%APPDATA%) and the profile pack in the install dir are not touched.
+    public static bool StartInstall(string packageDir, string installDir, int waitPid, bool background, out string error)
+    {
+        error = null;
+        try
+        {
+            var kur = Path.Combine(packageDir, "kur.ps1");
+            if (!File.Exists(kur)) { error = "kur.ps1 bulunamadı"; return false; }
+            var ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
+            var args = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Quote(kur) +
+                       " -Update -InstallDir " + Quote(installDir.TrimEnd('\\')) + " -WaitPid " + waitPid.ToString(CultureInfo.InvariantCulture) + (background ? " -Background" : "");
+            var psi = new ProcessStartInfo(ps, args) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, WorkingDirectory = packageDir };
+            using (Process.Start(psi)) { }
+            return true;
+        }
+        catch (Exception ex) { error = ex.Message; return false; }
+    }
+
+    static string Quote(string s) { return "\"" + s.Replace("\"", "") + "\""; }
+
+    static byte[] Get(string url, long maxBytes, string accept)
+    {
+        if (!url.StartsWith("https://", StringComparison.Ordinal)) throw new InvalidOperationException("yalnızca HTTPS");
+        ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+        var req = (HttpWebRequest)WebRequest.Create(url);
+        req.Method = "GET"; req.Timeout = TimeoutMs; req.ReadWriteTimeout = TimeoutMs;
+        req.UserAgent = UpdateLogic.UserAgent; req.AllowAutoRedirect = true; req.MaximumAutomaticRedirections = 5;
+        req.UseDefaultCredentials = false; req.CookieContainer = null;
+        if (accept != null) req.Accept = accept;
+        using (var resp = (HttpWebResponse)req.GetResponse())
+        {
+            // GitHub serves assets from its download host; the final hop must still be HTTPS.
+            if (resp.ResponseUri == null || resp.ResponseUri.Scheme != Uri.UriSchemeHttps) throw new InvalidOperationException("yalnızca HTTPS");
+            if (resp.ContentLength > maxBytes) throw new InvalidOperationException("dosya beklenenden büyük");
+            using (var s = resp.GetResponseStream()) using (var ms = new MemoryStream())
+            {
+                var buf = new byte[81920]; int n;
+                while ((n = s.Read(buf, 0, buf.Length)) > 0)
+                {
+                    ms.Write(buf, 0, n);
+                    if (ms.Length > maxBytes) throw new InvalidOperationException("dosya beklenenden büyük");
+                }
+                return ms.ToArray();
+            }
+        }
+    }
+
+    static string Describe(Exception ex)
+    {
+        var w = ex as WebException;
+        if (w != null)
+        {
+            var http = w.Response as HttpWebResponse;
+            if (http != null) return "sunucu yanıtı " + (int)http.StatusCode;
+            if (w.Status == WebExceptionStatus.Timeout) return "zaman aşımı";
+            return "bağlantı kurulamadı";
+        }
+        return ex.Message;
+    }
+
+    static void TryDelete(string dir) { try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { } }
+    static void TryDeleteFile(string f) { try { if (File.Exists(f)) File.Delete(f); } catch { } }
+
+    // Opens a page of this repository's releases in the browser (other addresses are ignored).
+    public static void OpenReleasePage(string url)
+    {
+        if (string.IsNullOrEmpty(url) || !url.StartsWith(UpdateLogic.ReleasesPage, StringComparison.Ordinal)) url = UpdateLogic.ReleasesPage;
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+    }
+}
+
+// "ask" mode notice: a small glass card in the corner of the screen, above other windows, that does
+// not take focus. Same material as GlassDialog. Buttons: update now / later / skip this version,
+// plus the release notes.
+internal sealed class UpdateNotice : Form
+{
+    static int S(float v) { return Ui.S(v); }
+    const int WS_EX_TOOLWINDOW = 0x80;
+    readonly string caption, body;
+    readonly Rectangle textRect;
+    public event Action UpdateNow, Later, Skip, Notes;
+
+    public UpdateNotice(ReleaseInfo r, string current, bool canInstall)
+    {
+        AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
+        StartPosition = FormStartPosition.Manual; DoubleBuffered = true; BackColor = Ui.Bg; ForeColor = Ui.Text; Font = SFonts.Nav;
+        Text = "Güncelleme";
+        caption = "Sürüm " + r.Version + " hazır";
+        var notes = UpdateLogic.NotesPreview(r.Notes, 160);
+        body = (canInstall
+            ? "Yüklü sürüm " + current + ". Şimdi güncelleyebilir ya da sonraya bırakabilirsiniz."
+            : "Yüklü sürüm " + current + ". Bu kopya kurulum klasöründe değil; yeni sürümü sürüm sayfasından indirin.")
+            + (notes.Length > 0 ? "\n" + notes : "");
+        var width = S(440); var textW = width - S(96);
+        var textH = Math.Min(S(120), Math.Max(S(20), TextRenderer.MeasureText(body, SFonts.RowDesc, new Size(textW, 1000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height));
+        textRect = new Rectangle(S(76), S(56), textW, textH);
+        Size = new Size(width, textRect.Bottom + S(104));
+
+        var primary = new SButton(canInstall ? "Şimdi güncelle" : "Sürüm sayfasını aç", SButtonKind.Primary);
+        var later = new SButton("Sonra", SButtonKind.Secondary);
+        var skip = new SButton("Bu sürümü atla", SButtonKind.Ghost);
+        var notesBtn = new SButton("Sürüm notları", SButtonKind.Ghost, Glyph.Open);
+        var by = Height - S(22) - primary.Height;
+        primary.Location = new Point(Width - S(22) - primary.Width, by);
+        later.Location = new Point(primary.Left - S(8) - later.Width, by);
+        skip.Location = new Point(S(22), by);
+        notesBtn.Location = new Point(S(68), textRect.Bottom + S(6));
+        primary.Click += delegate { Close(); if (canInstall) { if (UpdateNow != null) UpdateNow(); } else if (Notes != null) Notes(); };
+        later.Click += delegate { Close(); if (Later != null) Later(); };
+        skip.Click += delegate { Close(); if (Skip != null) Skip(); };
+        notesBtn.Click += delegate { if (Notes != null) Notes(); };
+        Controls.AddRange(new Control[] { primary, later, skip, notesBtn });
+
+        var area = Screen.PrimaryScreen.WorkingArea;
+        Location = new Point(area.Right - Width - S(16), area.Bottom - Height - S(16));
+    }
+
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ExStyle |= WS_EX_TOOLWINDOW; return cp; } }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        try { Backdrop.SetCorner(Handle, 2); var d = Themes.IsLight ? 0 : 1; NativeMethods.DwmSetWindowAttribute(Handle, 20, ref d, 4); } catch { }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+        var panel = new RectangleF(S(8), S(8), Width - S(16), Height - S(16));
+        Ui.FillRound(g, Ui.GlassPrimary, panel, S(14));
+        Glass.Paint(g, panel, S(14), GlassKind.Primary, 1F);
+        var chip = new RectangleF(S(26), S(26), S(36), S(36));
+        Glass.Paint(g, chip, S(11), GlassKind.Secondary, 1.8F);
+        Glyphs.Draw(g, Glyph.Refresh, RectangleF.Inflate(chip, -S(9), -S(9)), Ui.Highlight);
+        TextRenderer.DrawText(g, caption, SFonts.Big, new Point(S(76), S(26)), Ui.Text, Ui.Flags);
+        TextRenderer.DrawText(g, body, SFonts.RowDesc, textRect, Ui.Muted, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        Glass.WindowFrame(g, ClientRectangle, S(8));
+    }
+}
