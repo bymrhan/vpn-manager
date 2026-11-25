@@ -98,15 +98,26 @@ internal static class Reachability
             {
                 if (!hostHints.TryGetValue(profileId, out hint)) hint = null;
             }
-            if (string.IsNullOrEmpty(hint)) return null;
-            // "host:port" hints (FortiClient SSL VPN gateways) are TCP/HTTPS endpoints
-            var colon = hint.LastIndexOf(':'); int port;
-            if (colon > 0 && hint.IndexOf(':') == colon && int.TryParse(hint.Substring(colon + 1), out port))
-                return new RemoteInfo { Host = hint.Substring(0, colon), Port = port, Proto = "tcp" };
-            if (profileId.StartsWith("forti-", StringComparison.Ordinal)) return new RemoteInfo { Host = hint, Port = 443, Proto = "tcp" };
-            return new RemoteInfo { Host = hint, Port = DefaultPort, Proto = "udp" };
+            return FromHint(profileId, hint);
         }
         catch { return null; }
+    }
+
+    // Endpoint to test for a profile whose only address is its Host (FortiClient, Sophos Connect,
+    // WatchGuard SSL VPN). "host:port" hints (SSL VPN gateways, WatchGuard Server entries) are
+    // TCP/HTTPS endpoints; FortiClient and WatchGuard hosts without a port use 443; anything else
+    // (e.g. a Sophos IPsec gateway) only gets the DNS + ping check.
+    internal static RemoteInfo FromHint(string profileId, string hint)
+    {
+        if (string.IsNullOrEmpty(hint)) return null;
+        hint = hint.Trim();
+        var colon = hint.LastIndexOf(':'); int port;
+        if (colon > 0 && hint.IndexOf(':') == colon && int.TryParse(hint.Substring(colon + 1), out port))
+            return new RemoteInfo { Host = hint.Substring(0, colon), Port = port, Proto = "tcp" };
+        var id = profileId ?? "";
+        if (id.StartsWith("forti-", StringComparison.Ordinal) || id.StartsWith(WatchGuardStore.IdPrefix, StringComparison.Ordinal))
+            return new RemoteInfo { Host = hint, Port = 443, Proto = "tcp" };
+        return new RemoteInfo { Host = hint, Port = DefaultPort, Proto = "udp" };
     }
 
     public static void CheckAll(IEnumerable<VpnProfile> profiles, bool force)

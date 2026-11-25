@@ -16,7 +16,8 @@ internal static class Demo
     public static int SettingsPage = -1;                // --demo-settings=<page 0..3>
     static readonly HashSet<string> pins = new HashSet<string>();
 
-    // name, host, user, kind (o = OpenVPN, f = FortiClient), minutes since last connection (0 = never), reachable
+    // name, host, user, kind (o = OpenVPN, f = FortiClient, s = Sophos Connect, w = WatchGuard SSL VPN),
+    // minutes since last connection (0 = never), reachable
     static readonly object[][] Rows = new object[][]
     {
         new object[] { "Acme Lojistik",           "vpn.acme-lojistik.example",   "ayse.demir",     'o', 35,      true  },
@@ -35,7 +36,25 @@ internal static class Demo
         new object[] { "Proseware Eğitim",        "vpn.proseware.example:4443",  "pinar.ates",     'f', 0,       true  },
         new object[] { "Woodgrove Finans",        "vpn.woodgrove.example",       "kerem.bulut",    'o', 0,       true  },
         new object[] { "Blue Yonder Havacılık",   "vpn.blue-yonder.example",     "naz.tuna",       'o', 0,       true  },
+        new object[] { "Fourth Coffee Gıda",      "gw.fourth-coffee.example",    "hakan.yilmaz",   's', 720,     true  },
+        new object[] { "Alpine Ski Turizm",       "sslvpn.alpine-ski.example:443","irem.koc",      's', 0,       false },
+        new object[] { "Margie Seyahat",          "ssl.margie-seyahat.example:443","tolga.sen",    'w', 4300,    true  },
+        new object[] { "Lucerne Yayıncılık",      "vpn.lucerne.example:4100",    "derya.uslu",     'w', 0,       true  },
     };
+
+    // Ids use the real provider prefixes (forti-ssl:, sophos:, watchguard-ssl:) so the app routes
+    // the rows like real ones; in demo mode Connect never reaches a client.
+    static string IdFor(object[] r)
+    {
+        var slug = Slug((string)r[0]);
+        switch ((char)r[3])
+        {
+            case 'f': return "forti-ssl:" + slug;
+            case 's': return SophosStore.IdPrefix + slug;
+            case 'w': return WatchGuardStore.IdPrefix + (string)r[1];
+            default: return "demo-" + slug;
+        }
+    }
 
     public static List<VpnProfile> Profiles()
     {
@@ -43,17 +62,17 @@ internal static class Demo
         var list = new List<VpnProfile>();
         foreach (var r in Rows)
         {
-            var name = (string)r[0]; var host = (string)r[1]; var forti = (char)r[3] == 'f';
-            var slug = new string(name.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray());
+            var name = (string)r[0]; var host = (string)r[1]; var ovpn = (char)r[3] == 'o';
+            var slug = Slug(name);
             var p = new VpnProfile
             {
-                Id = (forti ? "forti-ssl:" : "demo-") + slug,
+                Id = IdFor(r),
                 Name = name, Host = host, Username = (string)r[2],
-                Source = forti ? "" : slug + ".ovpn",
+                Source = ovpn ? slug + ".ovpn" : "",
                 LastConnected = (int)r[4] > 0 ? now - (long)(int)r[4] * 60000L : 0
             };
             p.Initials = ProfileStore.MakeInitials(p.Name);
-            p.Keys = new[] { ProfileStore.SearchKey(p.Name), ProfileStore.SearchKey(p.Host), ProfileStore.SearchKey(p.Username), ProfileStore.SearchKey(p.Source) };
+            p.Keys = new[] { ProfileStore.SearchKey(p.Name), ProfileStore.SearchKey(p.Host), ProfileStore.SearchKey(p.Username), ProfileStore.SearchKey(p.Source), ProfileStore.SearchKey(VpnProviders.Label(VpnProviders.KindOf(p))) };
             list.Add(p);
         }
         return list;
@@ -67,7 +86,7 @@ internal static class Demo
 
     public static ReachState Reach(string id)
     {
-        foreach (var r in Rows) if (id.EndsWith(Slug((string)r[0]), StringComparison.Ordinal)) return (bool)r[5] ? ReachState.Up : ReachState.Down;
+        foreach (var r in Rows) if (id == IdFor(r)) return (bool)r[5] ? ReachState.Up : ReachState.Down;
         return ReachState.Unknown;
     }
 

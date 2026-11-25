@@ -119,9 +119,11 @@ internal sealed class FortiCredentialForm : Form
     public FortiCredential Result { get; private set; }
     public bool Remember { get { return remember.Checked; } }
 
-    public FortiCredentialForm(string tunnel, FortiCredential current, bool saveOnly = false)
+    // provider / connectHint: other clients (Sophos Connect, WatchGuard) reuse the form with their own
+    // title and hint; FortiClient keeps the defaults.
+    public FortiCredentialForm(string tunnel, FortiCredential current, bool saveOnly = false, string provider = null, string connectHint = null)
     {
-        Text = "FortiClient · " + tunnel;
+        Text = (provider ?? "FortiClient") + " · " + tunnel;
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = true; TopMost = true;
@@ -131,7 +133,7 @@ internal sealed class FortiCredentialForm : Form
         var pad = Ui.S(20); var w = ClientSize.Width - pad * 2; var y = pad;
         var title = new Label { Text = tunnel, Font = Ui.NameFont, ForeColor = Ui.Text, AutoSize = false, AutoEllipsis = true };
         title.SetBounds(pad, y, w, Ui.S(22)); Controls.Add(title); y += Ui.S(26);
-        var hint = new Label { Text = saveOnly ? "Windows Kimlik Bilgileri'nde saklanır." : "Bağlanırken FortiClient'a bu bilgiler girilir.", ForeColor = Ui.Muted, AutoSize = false };
+        var hint = new Label { Text = saveOnly ? "Windows Kimlik Bilgileri'nde saklanır." : connectHint ?? "Bağlanırken FortiClient'a bu bilgiler girilir.", ForeColor = Ui.Muted, AutoSize = false };
         hint.SetBounds(pad, y, w, Ui.S(18)); Controls.Add(hint); y += Ui.S(28);
 
         y = Field("Kullanıcı adı", user, pad, y, w);

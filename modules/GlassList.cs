@@ -402,7 +402,8 @@ internal sealed class ProfileList : Control
         var connecting = id == connectingId; var disconnecting = id == disconnectingId;
         var success = id == successId ? (now - successT0) : -1F; var fail = id == failId ? (now - failT0) : -1F;
         var live = LiveText(p);
-        var forti = FortiStore.IsForti(p);
+        var providerIcon = VpnProviders.Asset(VpnProviders.KindOf(p));
+        var providerLabel = VpnProviders.RowLabel(p); // null for OpenVPN rows
         if (fail >= 0) rr.Offset((int)(Math.Sin(fail * 44) * S(6) * Math.Max(0F, 1 - fail / FailDuration)), 0);
         var active = selected || hover;
         var radius = S(12);
@@ -425,15 +426,15 @@ internal sealed class ProfileList : Control
         using (var b = new LinearGradientBrush(RectangleF.Inflate(av, 1, 1), Color.FromArgb((int)((Themes.IsLight ? 150 : 150) * appear), Ui.Blend(hue, Color.White, 0.1F)), Color.FromArgb((int)((Themes.IsLight ? 110 : 96) * appear), Ui.Blend(hue, Color.Black, 0.15F)), 90F)) g.FillPath(b, path);
         Glass.Paint(g, av, S(12), GlassKind.Secondary, 1.1F * appear);
         if (letters) GText.Draw(g, p.Initials, Ui.AvatarFont, Rectangle.Round(av), Fade(Themes.IsLight ? Ui.Blend(hue, Color.Black, 0.5F) : Ui.Blend(hue, Color.White, 0.62F), appear), true);
-        else Assets.Draw(g, forti ? "provider-forti" : "provider-openvpn", RectangleF.Inflate(av, -S(9), -S(9)), Fade(Ui.Blend(hue, Themes.IsLight ? Color.Black : Color.White, 0.5F), appear));
+        else Assets.Draw(g, providerIcon, RectangleF.Inflate(av, -S(9), -S(9)), Fade(Ui.Blend(hue, Themes.IsLight ? Color.Black : Color.White, 0.5F), appear));
         if (live != null)
             using (var pen = new Pen(Color.FromArgb(170, Ui.Success), 1F)) g.DrawPath(pen, Ui.Round(av, S(12)));
 
-        // provider badge (differs per provider: shield for FortiClient, tunnel ring for OpenVPN)
+        // provider badge (differs per provider: shield for FortiClient, tunnel ring for OpenVPN, S for Sophos, W for WatchGuard)
         var bd = S(15); var badge = new RectangleF(av.Right - bd + S(3), av.Bottom - bd + S(3), bd, bd);
         using (var b = new SolidBrush(Fade(Ui.Blend(Ui.GlassPrimary, Color.Black, 0.25F), appear))) g.FillEllipse(b, badge);
         using (var pen = new Pen(Color.FromArgb((int)(70 * appear), Themes.IsLight ? Color.Black : Color.White), 1F)) g.DrawEllipse(pen, badge.X + 0.5F, badge.Y + 0.5F, badge.Width - 1, badge.Height - 1);
-        Assets.Draw(g, forti ? "provider-forti" : "provider-openvpn", RectangleF.Inflate(badge, -S(3.2F), -S(3.2F)), Fade(Themes.IsLight ? Color.White : Ui.Muted, appear), 1.15F);
+        Assets.Draw(g, providerIcon, RectangleF.Inflate(badge, -S(3.2F), -S(3.2F)), Fade(Themes.IsLight ? Color.White : Ui.Muted, appear), 1.15F);
 
         if (connecting || disconnecting)
             using (var pen = new Pen(Fade(connecting ? Ui.Highlight : Ui.Warning, appear), 1.8F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
@@ -482,7 +483,7 @@ internal sealed class ProfileList : Control
         var x = (int)(av.Right + S(14));
         var textRight = right - sw - iconW - S(10);
         DrawHighlighted(g, p.Name, Ui.RowNameFont, Fade(Ui.Text, appear), new Rectangle(x, rr.Y + S(10), Math.Max(10, textRight - x), S(20)));
-        var sub = forti ? p.Source + (p.Host.Length > 0 ? "  ·  " + p.Host : "") : p.Host.Length > 0 ? p.Host : "Sunucu adresi yok";
+        var sub = providerLabel != null ? providerLabel + (p.Host.Length > 0 ? "  ·  " + p.Host : "") : p.Host.Length > 0 ? p.Host : "Sunucu adresi yok";
         if (p.Username.Length > 0) sub += "  ·  " + p.Username;
         var sx = x;
         var reach = ReachOf(p);
