@@ -553,6 +553,7 @@ internal sealed class SearchForm : Form
     {
         backgroundMode = background; openVpnPath = FindOpenVpnPath();
         settings = appSettings ?? AppSettings.Defaults();
+        taskbarButton = TaskbarWanted; // read by CreateParams when the handle is created below
         var area = Screen.PrimaryScreen.WorkingArea;
         AutoScaleMode = AutoScaleMode.None;
         Text = "OpenVPN Hızlı Arama"; StartPosition = FormStartPosition.Manual; BackColor = Color.Black; ForeColor = Ui.Text; Font = Ui.SubFont;
@@ -620,9 +621,27 @@ internal sealed class SearchForm : Form
         watcher.Start();
     }
 
+    // ShowInTaskbar stays false (changing it recreates the handle). The "Görev çubuğunda göster"
+    // setting is the WS_EX_APPWINDOW bit instead (modules\Glass.cs TaskbarButton): set here for the
+    // handle created at startup and for any WinForms style refresh, flipped live by ApplyTaskbarButton.
     protected override CreateParams CreateParams
     {
-        get { var cp = base.CreateParams; return cp; }
+        get { var cp = base.CreateParams; cp.ExStyle = TaskbarButton.ExStyle(cp.ExStyle, taskbarButton); return cp; }
+    }
+
+    bool taskbarButton;
+    bool TaskbarWanted { get { return TaskbarButton.Wanted(settings.ShowInTaskbar, Demo.On, !string.IsNullOrEmpty(SettingsStore.PathOverride)); } }
+
+    // After "Kaydet": same handle, so the hotkey, the WinEvent hooks and the DWM backdrop stay bound.
+    void ApplyTaskbarButton()
+    {
+        var want = TaskbarWanted;
+        if (want == taskbarButton) return;
+        taskbarButton = want;
+        if (!IsHandleCreated) return;
+        // a minimized window without a button would be left as a bare caption stub: bring it back first
+        if (!want && Visible && WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        TaskbarButton.Apply(Handle, want, Visible);
     }
 
     // ---------- Layout ----------
@@ -2022,6 +2041,7 @@ internal sealed class SearchForm : Form
                 if (r.LogEnabled) AppLog.Info("app", "logging turned on by the user");
             }
             if (r.Hotkey != old.Hotkey) { RegisterAppHotkey(true); search.Hotkey = r.Hotkey; }
+            if (r.ShowInTaskbar != old.ShowInTaskbar) ApplyTaskbarButton();
             ApplyTheme();
             if (r.DockSide != old.DockSide) { autoSide = 0; lastRect = new NativeMethods.RECT(); docked = false; Sync(true); }
             if (r.ReachabilityCheck && !old.ReachabilityCheck) Reachability.CheckAll(profiles, false);
@@ -2524,6 +2544,8 @@ internal sealed class SearchForm : Form
 
     void UpdateDockState()
     {
+        // minimized from its taskbar button: leave the restore bounds alone until it comes back
+        if (WindowState == FormWindowState.Minimized) return;
         var h = ovpnHwnd;
         var nowDocked = Visible && !userMoved && h != IntPtr.Zero && lastFound;
         NativeMethods.RECT r;

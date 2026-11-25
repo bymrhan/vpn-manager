@@ -84,6 +84,8 @@ static class Tests
         Run("GitHub gönderimi: anahtar temizleme", TokenSanitizing);
         Run("GitHub gönderimi: otomatik kip kararı", AutoModeDecision);
         Run("GitHub gönderimi: güvenlik incelemesi korumaları", IssueReviewGuards);
+        Run("Ayarlar: görev çubuğunda göster", TaskbarSetting);
+        Run("Görev çubuğu düğmesi kararları", TaskbarDecisions);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -449,6 +451,73 @@ static class Tests
         {
             SettingsStore.PathOverride = null;
             try { File.Delete(path); } catch { }
+        }
+    }
+
+    static void TaskbarSetting()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ovpnqs-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        SettingsStore.PathOverride = path;
+        try
+        {
+            Check(!AppSettings.Defaults().ShowInTaskbar, "varsayılan: görev çubuğunda yok");
+            Check(!SettingsStore.Load().ShowInTaskbar, "dosya yokken kapalı");
+            var s = SettingsStore.Load();
+            s.ShowInTaskbar = true;
+            Check(s.Clone().ShowInTaskbar, "Clone değeri taşır");
+            s.Normalize();
+            Check(s.ShowInTaskbar, "Normalize değeri korur");
+            SettingsStore.Save(s);
+            Check(SettingsStore.Load().ShowInTaskbar, "açık değer kaydedilip geri okunur");
+            Check(File.ReadAllText(path).Contains("\"ShowInTaskbar\":true"), "dosyada ShowInTaskbar anahtarı var");
+            s.ShowInTaskbar = false; SettingsStore.Save(s);
+            Check(!SettingsStore.Load().ShowInTaskbar, "kapalı değer kaydedilip geri okunur");
+            File.WriteAllText(path, "{\"Hotkey\":\"Ctrl+Alt+V\",\"AutoStart\":true}");
+            var old = SettingsStore.Load();
+            Check(!old.ShowInTaskbar && old.AutoStart, "anahtarı olmayan eski dosya: kapalı, diğerleri korunur");
+            File.WriteAllText(path, "{\"ShowInTaskbar\":\"evet\"}");
+            Check(!SettingsStore.Load().ShowInTaskbar, "yanlış türde değer (metin) kapalı");
+            File.WriteAllText(path, "{\"ShowInTaskbar\":1}");
+            Check(!SettingsStore.Load().ShowInTaskbar, "yanlış türde değer (sayı) kapalı");
+        }
+        finally
+        {
+            SettingsStore.PathOverride = null;
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    static void TaskbarDecisions()
+    {
+        const int APP = TaskbarButton.WS_EX_APPWINDOW, TOOL = TaskbarButton.WS_EX_TOOLWINDOW, OTHER = 0x100 | 0x8; // WS_EX_WINDOWEDGE | WS_EX_TOPMOST
+        Check(TaskbarButton.Wanted(true, false, false), "normal çalışma: ayar açıksa düğme var");
+        Check(!TaskbarButton.Wanted(false, false, true), "ayar kapalıysa düğme yok");
+        Check(!TaskbarButton.Wanted(true, true, false), "demo, ayar dosyası verilmeden: düğme yok");
+        Check(TaskbarButton.Wanted(true, true, true), "demo, --settings ile: ayar uygulanır");
+        Check(TaskbarButton.ExStyle(OTHER, true) == (OTHER | APP), "açmak APPWINDOW ekler, diğer bitler kalır");
+        Check(TaskbarButton.ExStyle(OTHER | TOOL, true) == (OTHER | APP), "açmak TOOLWINDOW'u kaldırır");
+        Check(TaskbarButton.ExStyle(OTHER | APP, false) == OTHER, "kapatmak yalnız APPWINDOW'u kaldırır");
+        Check(TaskbarButton.ExStyle(OTHER | TOOL | APP, false) == (OTHER | TOOL), "kapatmak TOOLWINDOW'a dokunmaz");
+        Check(TaskbarButton.ExStyle(TaskbarButton.ExStyle(OTHER, true), false) == OTHER, "aç / kapat başa döner");
+        Check(TaskbarButton.Plan(OTHER | APP, true, true) == TaskbarChange.None, "zaten açık: hiçbir şey yapılmaz");
+        Check(TaskbarButton.Plan(OTHER, false, true) == TaskbarChange.None, "zaten kapalı: hiçbir şey yapılmaz");
+        Check(TaskbarButton.Plan(OTHER, true, false) == TaskbarChange.StyleOnly, "gizli pencere: yalnız stil (yanıp sönme yok)");
+        Check(TaskbarButton.Plan(OTHER | APP, false, false) == TaskbarChange.StyleOnly, "gizli pencere kapatma: yalnız stil");
+        Check(TaskbarButton.Plan(OTHER, true, true) == TaskbarChange.Reshow, "görünür pencere: gizle / göster");
+        Check(TaskbarButton.Plan(OTHER | APP, false, true) == TaskbarChange.Reshow, "görünür pencere kapatma: gizle / göster");
+        Check(TaskbarButton.Apply(IntPtr.Zero, true, true) == TaskbarChange.None, "tutamaç yoksa hiçbir şey yapılmaz");
+
+        // A real (hidden, never shown) owned form: the handle survives several flips.
+        using (var f = new System.Windows.Forms.Form { ShowInTaskbar = false })
+        {
+            var h = f.Handle;
+            for (var i = 0; i < 4; i++)
+            {
+                var on = i % 2 == 0;
+                Check(TaskbarButton.Apply(h, on, false) == TaskbarChange.StyleOnly && TaskbarButton.Has(h) == on, "gizli formda bit " + (on ? "açıldı" : "kapandı") + " (" + (i + 1) + ")");
+            }
+            Check(f.Handle == h && f.IsHandleCreated && !f.RecreatingHandle, "tutamaç değişmedi");
+            Check(TaskbarButton.Apply(h, false, false) == TaskbarChange.None, "aynı değer ikinci kez: değişiklik yok");
         }
     }
 

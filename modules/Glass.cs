@@ -162,6 +162,69 @@ internal static class Backdrop
 }
 
 // ---------------------------------------------------------------------
+// Taskbar button ("Görev çubuğunda göster"). The main window keeps WinForms' ShowInTaskbar = false
+// (it is owned by WinForms' hidden taskbar-owner window, so it has no button). Instead of toggling
+// ShowInTaskbar, which destroys and recreates the window handle (hotkey, WinEvent hooks and the
+// DWM backdrop are bound to it), the WS_EX_APPWINDOW bit is flipped on the same handle: an owned
+// window with that bit gets a taskbar button and an Alt+Tab entry. The shell reads the bit when the
+// window is shown, so a visible window is hidden and shown again (without activation).
+// ---------------------------------------------------------------------
+internal enum TaskbarChange { None, StyleOnly, Reshow }
+
+internal static class TaskbarButton
+{
+    public const int WS_EX_TOOLWINDOW = 0x80, WS_EX_APPWINDOW = 0x40000;
+    const int GWL_EXSTYLE = -20, SW_HIDE = 0, SW_SHOW = 5, SW_SHOWNA = 8;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int GetWindowLong(IntPtr h, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] static extern int SetWindowLong(IntPtr h, int index, int value);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+
+    // Whether the window should have a button. A demo run follows the stored setting only when a
+    // settings file was passed (--settings=); otherwise it keeps today's behaviour (no button).
+    public static bool Wanted(bool setting, bool demo, bool settingsFilePassed)
+    {
+        return setting && (!demo || settingsFilePassed);
+    }
+
+    // Extended style with / without a button. A button also needs WS_EX_TOOLWINDOW off; turning the
+    // button off only drops WS_EX_APPWINDOW. Every other bit is kept.
+    public static int ExStyle(int current, bool button)
+    {
+        return button ? (current | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW : current & ~WS_EX_APPWINDOW;
+    }
+
+    // What a live change needs: nothing (style already right), the new style only (hidden window:
+    // the next Show picks it up), or the new style plus a hide / show cycle (visible window).
+    public static TaskbarChange Plan(int current, bool button, bool visible)
+    {
+        if (ExStyle(current, button) == current) return TaskbarChange.None;
+        return visible ? TaskbarChange.Reshow : TaskbarChange.StyleOnly;
+    }
+
+    // Applies the button state to an existing handle; the handle itself is never recreated.
+    // A window that was in the foreground is shown activated again, any other one without activation.
+    public static TaskbarChange Apply(IntPtr hwnd, bool button, bool visible)
+    {
+        if (hwnd == IntPtr.Zero) return TaskbarChange.None;
+        var current = GetWindowLong(hwnd, GWL_EXSTYLE);
+        var plan = Plan(current, button, visible);
+        if (plan == TaskbarChange.None) return plan;
+        var active = GetForegroundWindow() == hwnd;
+        if (plan == TaskbarChange.Reshow) ShowWindow(hwnd, SW_HIDE);
+        SetWindowLong(hwnd, GWL_EXSTYLE, ExStyle(current, button));
+        if (plan == TaskbarChange.Reshow) ShowWindow(hwnd, active ? SW_SHOW : SW_SHOWNA);
+        return plan;
+    }
+
+    public static bool Has(IntPtr hwnd)
+    {
+        return hwnd != IntPtr.Zero && (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_APPWINDOW) != 0;
+    }
+}
+
+// ---------------------------------------------------------------------
 // Glass material
 // ---------------------------------------------------------------------
 internal static class Glass
