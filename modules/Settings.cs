@@ -34,6 +34,7 @@ internal sealed class AppSettings
     public string SkippedVersion;       // "2.1.0" the user chose to skip; "" = none
     public bool LogEnabled;             // app log + crash / error records in %APPDATA%\OpenVpnQuickSearch\logs
     public string CrashPrompt;          // "ask" (offer the GitHub report after a crash), "auto" (send without asking; needs the embedded token), "never"
+    public bool CrashAutoConsent;       // the one-time public-issue warning for "auto" was confirmed
 
     public static AppSettings Defaults()
     {
@@ -56,7 +57,8 @@ internal sealed class AppSettings
             LastUpdateCheckUtc = DateTime.MinValue,
             SkippedVersion = "",
             LogEnabled = true,
-            CrashPrompt = "ask"
+            CrashPrompt = "ask",
+            CrashAutoConsent = false
         };
     }
 
@@ -87,6 +89,7 @@ internal sealed class AppSettings
         if (LastUpdateCheckUtc.Kind == DateTimeKind.Unspecified) LastUpdateCheckUtc = DateTime.SpecifyKind(LastUpdateCheckUtc, DateTimeKind.Utc);
         SkippedVersion = UpdateLogic.NormalizeTag(SkippedVersion) ?? "";
         if (CrashPrompt != "ask" && CrashPrompt != "auto" && CrashPrompt != "never") CrashPrompt = d.CrashPrompt;
+        if (CrashPrompt != "auto") CrashAutoConsent = false;   // the consent belongs to the auto mode only
     }
 }
 
@@ -135,6 +138,7 @@ internal static class SettingsStore
             s.SkippedVersion = Str(d, "SkippedVersion", s.SkippedVersion);
             s.LogEnabled = Bool(d, "LogEnabled", s.LogEnabled);
             s.CrashPrompt = Str(d, "CrashPrompt", s.CrashPrompt);
+            s.CrashAutoConsent = Bool(d, "CrashAutoConsent", s.CrashAutoConsent);
         }
         catch
         {
@@ -170,6 +174,7 @@ internal static class SettingsStore
         d["SkippedVersion"] = n.SkippedVersion;
         d["LogEnabled"] = n.LogEnabled;
         d["CrashPrompt"] = n.CrashPrompt;
+        d["CrashAutoConsent"] = n.CrashAutoConsent;
         var json = new JavaScriptSerializer().Serialize(d);
 
         var path = FilePath;

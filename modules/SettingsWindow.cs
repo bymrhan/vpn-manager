@@ -786,13 +786,29 @@ internal sealed class SettingsForm : Form
         // "Hata raporları ve günlükler"). Nothing is sent by the app; the report opens in the browser.
         var logToggle = new SToggle(); logToggle.SetInstant(work.LogEnabled);
         logToggle.CheckedChanged += delegate { work.LogEnabled = logToggle.Checked; Dirty(); };
+        // "Otomatik" only in a build with a token and after a one-time public-issue warning; a stored
+        // "auto" that no longer qualifies is shown (and kept) as "Sor".
         var promptModes = new[] { "ask", "auto", "never" };
+        if (work.CrashPrompt == "auto" && !(IssueToken.Available && work.CrashAutoConsent)) { work.CrashPrompt = original.CrashPrompt = "ask"; work.CrashAutoConsent = original.CrashAutoConsent = false; }
         var prompt = new SSegmented("Sor", "Otomatik", "Kapalı") { SelectedIndex = Math.Max(0, Array.IndexOf(promptModes, work.CrashPrompt)) };
         var promptRow = new SRow("Çökmeden sonra rapor", CrashPromptText(work.CrashPrompt), prompt, Glyph.Info);
         var note = new SNote(CrashReporter.SummaryText(work.CrashPrompt), Glyph.Lock);
+        var settingPrompt = false;
         prompt.Changed += delegate
         {
-            work.CrashPrompt = promptModes[prompt.SelectedIndex];
+            if (settingPrompt) return;
+            var picked = promptModes[prompt.SelectedIndex];
+            var confirmed = false;
+            if (picked == "auto" && !IssueToken.Available)
+                GlassDialog.Show(this, CrashReporter.NoTokenText + "\nSeçim \"Sor\" olarak kalır.", "Otomatik gönderim", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else if (picked == "auto")
+                confirmed = (work.CrashPrompt == "auto" && work.CrashAutoConsent) ||
+                    GlassDialog.Show(this, CrashReporter.AutoWarning + "\n\nOtomatik kipte rapor, çökmeden sonra size sorulmadan GitHub'da herkese açık bir kayıt olarak oluşturulur. " +
+                        "Bunu kabul ediyor musunuz?", "Otomatik gönderim", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.OK;
+            bool consent;
+            work.CrashPrompt = CrashPromptLogic.StoredMode(picked, IssueToken.Available, confirmed, out consent);
+            work.CrashAutoConsent = consent;
+            if (work.CrashPrompt != picked) { settingPrompt = true; prompt.SelectedIndex = Array.IndexOf(promptModes, work.CrashPrompt); settingPrompt = false; }
             promptRow.Description = CrashPromptText(work.CrashPrompt); promptRow.Invalidate();
             note.SetText(CrashReporter.SummaryText(work.CrashPrompt));
             Dirty();
@@ -951,7 +967,7 @@ internal sealed class SettingsForm : Form
                    work.Theme != original.Theme || work.ReachabilityCheck != original.ReachabilityCheck || work.ShowForti != original.ShowForti ||
                    work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard ||
                    work.UpdateMode != original.UpdateMode || work.UpdateInterval != original.UpdateInterval ||
-                   work.LogEnabled != original.LogEnabled || work.CrashPrompt != original.CrashPrompt;
+                   work.LogEnabled != original.LogEnabled || work.CrashPrompt != original.CrashPrompt || work.CrashAutoConsent != original.CrashAutoConsent;
         }
     }
 

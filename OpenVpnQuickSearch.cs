@@ -593,6 +593,7 @@ internal sealed class SearchForm : Form
         CrashReporter.Profiles = () => profiles;
         CrashReporter.PromptMode = () => settings.CrashPrompt;
         CrashReporter.Status = SetStatus;   // result of a direct GitHub send
+        CrashReporter.AutoConsent = () => settings.CrashAutoConsent;
         CrashReporter.NeverAsk = delegate { UiInvoke(delegate { settings.CrashPrompt = "never"; SaveSettings(); }); };
         Shown += delegate { BeginInvoke(new Action(delegate { CrashReporter.OfferPendingCrash(this); })); };
 
@@ -2009,7 +2010,7 @@ internal sealed class SearchForm : Form
             var r = f.Result;
             r.LastBackupUtc = settings.LastBackupUtc; // a backup may have run while the window was open
             r.LastUpdateCheckUtc = settings.LastUpdateCheckUtc; r.SkippedVersion = settings.SkippedVersion; // same for an update check
-            if (settings.CrashPrompt != promptBefore && r.CrashPrompt == promptBefore) r.CrashPrompt = settings.CrashPrompt; // kept, not undone by the window's copy
+            if (settings.CrashPrompt != promptBefore && r.CrashPrompt == promptBefore) { r.CrashPrompt = settings.CrashPrompt; r.CrashAutoConsent = settings.CrashAutoConsent; } // kept, not undone by the window's copy
             var old = settings;
             settings = r;
             SaveSettings();

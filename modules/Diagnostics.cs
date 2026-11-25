@@ -929,6 +929,23 @@ internal static class CrashPromptLogic
     public const string MarkerName = "crash-pending.txt";
     public static readonly TimeSpan MaxAge = TimeSpan.FromDays(30);
 
+    // Sends without a dialog only when every condition holds: mode "auto", the one-time public-issue
+    // warning confirmed (CrashAutoConsent), a token in this build, not demo, logging on.
+    public static bool AutoSend(string mode, bool consent, bool tokenAvailable, bool demo, bool logEnabled)
+    {
+        return mode == "auto" && consent && tokenAvailable && !demo && logEnabled;
+    }
+
+    // What the settings keep when the user picks a mode: "auto" needs a token and the confirmed
+    // warning, else it falls back to "ask" (and the consent is dropped whenever the mode is not auto).
+    public static string StoredMode(string picked, bool tokenAvailable, bool confirmed, out bool consent)
+    {
+        consent = false;
+        if (picked == "never") return "never";
+        if (picked == "auto" && tokenAvailable && confirmed) { consent = true; return "auto"; }
+        return "ask";
+    }
+
     // "Sonra" keeps the marker: the next start asks again, at most MaxOffers times in all.
     public const int MaxOffers = 3;
 
@@ -1218,7 +1235,8 @@ internal static class CrashReporter
 
     public static Action<string> Status;                    // short status / toast text in the main window
     public static Func<IEnumerable<VpnProfile>> Profiles;   // set by the main window (read only, may run on any thread)
-    public static Func<string> PromptMode;                  // settings.CrashPrompt ("ask" / "never")
+    public static Func<string> PromptMode;                  // settings.CrashPrompt ("ask" / "auto" / "never")
+    public static Func<bool> AutoConsent;                   // settings.CrashAutoConsent (confirmed public-issue warning)
     public static Action NeverAsk;                          // "Bir daha sorma": settings.CrashPrompt = "never" + save
     static readonly object gate = new object();
     static readonly List<string> users = new List<string>();
@@ -1385,6 +1403,7 @@ internal static class CrashReporter
         catch { }
         // The app keeps running (as WinForms' own "Continue"); ask once per run.
         if (r == null || Demo.On || Mode() == "never") return;
+        if (!AppLog.Enabled) return;   // "Hata kaydı tut" off: no record, no prompt, nothing is sent
         lock (gate) { if (promptedThisRun) return; promptedThisRun = true; }
         try
         {
@@ -1429,7 +1448,9 @@ internal static class CrashReporter
     enum Choice { Open, Later, Never }
 
     // "auto" sends without a dialog, but only with an embedded token (else it behaves like "ask").
-    static bool SendsAutomatically { get { return Mode() == "auto" && IssueToken.Available && !Demo.On; } }
+    static bool SendsAutomatically { get { return CrashPromptLogic.AutoSend(Mode(), Consent(), IssueToken.Available, Demo.On, AppLog.Enabled); } }
+
+    static bool Consent() { try { return AutoConsent != null && AutoConsent(); } catch { return false; } }
 
     public const string SendLabel = "Raporu GitHub'a gönder", ShowLabel = "Raporu göster";
 
