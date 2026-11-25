@@ -14,6 +14,7 @@ internal static class Demo
     public static string ConnectedName;                 // --demo-connected=<name part>
     public static string Query;                         // --demo-search=<text>
     public static int SettingsPage = -1;                // --demo-settings=<page 0..3>
+    public static bool Empty;                           // --demo-empty: no profiles, "unknown layout" empty state
     static readonly HashSet<string> pins = new HashSet<string>();
 
     // name, host, user, kind (o = OpenVPN, f = FortiClient, s = Sophos Connect, w = WatchGuard SSL VPN),

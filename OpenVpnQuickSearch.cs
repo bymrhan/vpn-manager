@@ -508,6 +508,10 @@ internal sealed class SearchForm : Form
     uint hookedPid;
     DateTime configStamp = DateTime.MinValue;
     string loadError, subtitle = "", status, profileSignature = "";
+    ProfileLoadReport profileReport;           // last OpenVPN profile read (source, reason); null in demo mode
+    string profileSourceKey = "";              // logged source, to log a change once
+    DateTime fallbackRetryUtc = DateTime.MinValue; // degraded source: next automatic rescan (rate limit)
+    const int FallbackRetrySeconds = 30;
     int tick, shownCount, dockSide = 1, floatHeight;
     bool manualOverride, lastFound, userMoved, exiting, allowVisible, noActivate, placed, hotkeyRegistered, docked, busy;
     AppSettings settings;
@@ -557,7 +561,8 @@ internal sealed class SearchForm : Form
         list.ReachOf = p => Demo.On ? Demo.Reach(p.Id) : settings.ReachabilityCheck ? Reachability.Get(p.Id) : ReachState.Unknown;
         list.LiveText = LiveTextFor;
         list.AllowAmbient = () => Watched;
-        monitor = new ConnectionMonitor(() => profiles);
+        list.EmptyActionClicked += delegate(int i) { BeginInvoke(new Action(delegate { if (i == 0) PickProfileFolder(); else PickProfileFiles(); })); };
+        monitor =new ConnectionMonitor(() => profiles);
         monitor.Changed += delegate { OnConnectionChanged(); };
         AllowDrop = true; list.AllowDrop = true;
         DragEnter += OnDragEnter; list.DragEnter += OnDragEnter;
@@ -1694,6 +1699,39 @@ internal sealed class SearchForm : Form
             if (dlg.ShowDialog(this) == DialogResult.OK) RestoreBackup(dlg.FileName);
     }
 
+    // Manual profile sources (empty state and Settings › Genel › Profil kaynağı). The folder is
+    // scanned on every reload (one level of subfolders); the files are kept in ExtraProfileFiles.
+    void PickProfileFolder()
+    {
+        using (var dlg = new FolderBrowserDialog { Description = ".ovpn profillerinin bulunduğu klasörü seçin (bir alt klasör düzeyi de taranır).", ShowNewFolderButton = false })
+        {
+            if (!string.IsNullOrEmpty(settings.ProfileFolder) && Directory.Exists(settings.ProfileFolder)) dlg.SelectedPath = settings.ProfileFolder;
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            settings.ProfileFolder = dlg.SelectedPath;
+        }
+        SaveSettings();
+        ReloadProfiles(true);
+        if (profileReport != null) SetStatus(ProfileSources.StatusText(profileReport));
+    }
+
+    // The picked files are listed at once ("elle eklenen"); then the existing import flow offers
+    // to add them to OpenVPN Connect too (it asks first), so "--connect-shortcut" can find them.
+    void PickProfileFiles()
+    {
+        string[] files;
+        using (var dlg = new OpenFileDialog { Filter = "OpenVPN profili (*.ovpn)|*.ovpn", Multiselect = true, Title = "Listeye eklenecek .ovpn dosyalarını seçin" })
+        {
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            files = dlg.FileNames;
+        }
+        if (settings.ExtraProfileFiles == null) settings.ExtraProfileFiles = new List<string>();
+        foreach (var f in files) if (!settings.ExtraProfileFiles.Contains(f, StringComparer.OrdinalIgnoreCase)) settings.ExtraProfileFiles.Add(f);
+        SaveSettings();
+        ReloadProfiles(true);
+        SetStatus(files.Length + " dosya listeye eklendi");
+        if (!Demo.On && files.Length > 0) ImportOvpns(files, null, null);
+    }
+
     void PickAndImport()
     {
         using (var dlg = new OpenFileDialog { Filter = "OpenVPN profili (*.ovpn)|*.ovpn", Multiselect = true, Title = ".ovpn dosyası içe aktar" })
@@ -1715,7 +1753,8 @@ internal sealed class SearchForm : Form
     void ImportOvpns(IList<string> files, string tempDir, List<string> pinnedNames, IDictionary<string, string> usernames)
     {
         if (busy) { if (tempDir != null) ImportService.CleanupTemp(tempDir); return; }
-        var existing = new HashSet<string>(OpenVpnProfiles.Select(p => p.Name), StringComparer.CurrentCultureIgnoreCase);
+        // Files picked by hand ("elle eklenen") are listed by this app only, not known to be in OpenVPN Connect.
+        var existing = new HashSet<string>(OpenVpnProfiles.Where(p => p.Origin != "manual").Select(p => p.Name), StringComparer.CurrentCultureIgnoreCase);
         var fresh = files.Count(f => !existing.Contains(Path.GetFileNameWithoutExtension(f)));
         if (fresh == 0)
         {
@@ -1776,6 +1815,15 @@ internal sealed class SearchForm : Form
 
     void DeleteProfile(VpnProfile p)
     {
+        // Read from a .ovpn file: the id is a guess (file name), and "--remove-profile" also takes a
+        // name, so a guessed id could remove another profile. Not removed from here.
+        if (p.EstimatedId)
+        {
+            GlassDialog.Show(this, "\"" + p.Name + "\" bir .ovpn dosyasından okundu; kimliği tahmini olduğu için buradan silinmez.\n" +
+                (p.Origin == "manual" ? "Listeden çıkarmak için: Ayarlar › Genel › Profil kaynağı › Kaynağı sıfırla." : "OpenVPN Connect'in kendi penceresinden silin."),
+                "Profili sil", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         if (GlassDialog.Show(this, "\"" + p.Name + "\" profili OpenVPN Connect'ten kalıcı olarak silinecek.\nBu işlem geri alınamaz (yedeğiniz varsa geri yükleyebilirsiniz).\n\nDevam edilsin mi?",
             "Profili sil", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
         var err = RemoveProfile(p);
@@ -2017,6 +2065,20 @@ internal sealed class SearchForm : Form
             f.CheckUpdates = delegate { CheckForUpdates(true); };
             f.OpenLogFolder = CrashReporter.OpenLogFolder;
             f.ReportLastError = CrashReporter.ReportLatest;
+            // Profile source block: demo mode reads nothing from OpenVPN Connect.
+            f.SetProfileSourceStatus(Demo.On ? "Demo kipi: örnek profiller (OpenVPN Connect okunmaz)" : ProfileSources.StatusText(profileReport));
+            f.RescanProfiles = delegate(AppSettings w)
+            {
+                if (Demo.On) return "Demo kipi: örnek profiller (OpenVPN Connect okunmaz)";
+                ProfileLoadReport scan; ProfileSources.Load(w, out scan);
+                ReloadProfiles(true);
+                return ProfileSources.StatusText(scan);
+            };
+            f.ProfileDiagnostic = delegate(AppSettings w)
+            {
+                if (Demo.On) return "Demo kipi: tanı bilgisi yok (OpenVPN Connect okunmaz).";
+                return CrashReporter.NewSanitizer().Sanitize(ProfileSources.Diagnostic(w));
+            };
             if (updateRelease != null) f.ReleaseNotesUrl = updateRelease.HtmlUrl;
             f.Icon = Icon;
             openSettings = f;
@@ -2050,6 +2112,7 @@ internal sealed class SearchForm : Form
                 if (!r.ShowWatchGuard) ForgetExt(watchGuard);
                 ReloadProfiles(true);
             }
+            if (r.ProfileFolder != old.ProfileFolder || !r.ExtraProfileFiles.SequenceEqual(old.ExtraProfileFiles)) ReloadProfiles(true);
             list.Invalidate();
             SetStatus("Ayarlar kaydedildi");
         }
@@ -2292,9 +2355,23 @@ internal sealed class SearchForm : Form
         DateTime stamp;
         try { stamp = File.GetLastWriteTimeUtc(ProfileStore.ConfigPath); } catch { stamp = DateTime.MinValue; }
         List<VpnProfile> loaded;
+        ProfileLoadReport report = null;
         try
         {
-            loaded = Demo.On ? Demo.Profiles() : ProfileStore.Load();
+            if (Demo.On)
+            {
+                loaded = Demo.Empty ? new List<VpnProfile>() : Demo.Profiles();
+                if (Demo.Empty) report = new ProfileLoadReport { PrimaryExists = true, PrimaryReason = ProfileReadReason.UnknownLayout };
+            }
+            else
+            {
+                // config.json, its other locations, OpenVPN Connect's profiles folder, the manual sources (never throws)
+                loaded = ProfileSources.Load(settings, out report);
+                // Probably a half-written config.json: keep the list read from it; configStamp is not
+                // updated, so the next check retries (as before 2.1.2).
+                if (report.Transient && profiles.Any(p => VpnProviders.IsOpenVpn(p) && !p.EstimatedId && p.Origin == null))
+                    throw new InvalidDataException(ProfileSources.ReasonText(report.PrimaryReason));
+            }
             if (!Demo.On && settings.ShowForti)
             {
                 var forti = FortiStore.Load();
@@ -2334,6 +2411,7 @@ internal sealed class SearchForm : Form
             return;
         }
         configStamp = stamp; loadError = null;
+        NoteProfileSource(report, loaded.Count);
         var signature = string.Join("\u0002", loaded.Select(p => p.Id + "\u0001" + p.Name + "\u0001" + p.Host + "\u0001" + p.Username + "\u0001" + p.Source + "\u0001" + p.LastConnected).ToArray());
         if (!force && signature == profileSignature) { if (installChanged) { RefreshSegments(); ApplyFilter(list.SelectedProfile != null ? list.SelectedProfile.Id : null); } return; }
         profileSignature = signature; profiles = loaded;
@@ -2343,12 +2421,34 @@ internal sealed class SearchForm : Form
         if (settings.ReachabilityCheck) Reachability.CheckAll(profiles, false);
     }
 
+    // Remembers the OpenVPN profile source; logs a change of source once. While a fallback (or a
+    // manual source) is in use, the sources are read again every FallbackRetrySeconds even when
+    // config.json did not change (CheckConfigChanged), so a fixed or new source is picked up.
+    void NoteProfileSource(ProfileLoadReport r, int total)
+    {
+        profileReport = r;
+        if (r == null) { fallbackRetryUtc = DateTime.MaxValue; return; }
+        fallbackRetryUtc = r.Degraded || r.ManualConfigured ? DateTime.UtcNow.AddSeconds(FallbackRetrySeconds) : DateTime.MaxValue;
+        var key = r.Source + "|" + r.SourceLabel + "|" + r.PrimaryReason;
+        if (key == profileSourceKey) return;
+        var first = profileSourceKey.Length == 0;
+        profileSourceKey = key;
+        if (r.Degraded || !first)
+            AppLog.Info("profiles", "source " + (r.Source == "none" ? "none" : r.SourceLabel) + " (" + r.Count + " profiles, manual " + r.ManualCount + ", primary " + r.PrimaryReason + ")");
+        // Other providers fill the list, so the empty state would not say why OpenVPN profiles are missing.
+        if (r.PrimaryExists && r.Count + r.ManualCount == 0 && total > 0) SetStatus("OpenVPN profilleri okunamadı — Ayarlar › Genel › Profil kaynağı");
+    }
+
     void CheckConfigChanged()
     {
         DateTime stamp;
         try { stamp = File.GetLastWriteTimeUtc(ProfileStore.ConfigPath); } catch { return; }
-        if (stamp != configStamp) ReloadProfiles();
+        if (stamp != configStamp || DateTime.UtcNow >= fallbackRetryUtc) ReloadProfiles();
     }
+
+    // The OpenVPN profiles could not be read from any source (the empty state says why).
+    bool OpenVpnUnread { get { return profileReport != null && profileReport.Source == "none" && profileReport.ManualCount == 0; } }
+    static readonly string[] ManualSourceActions = { "Profil klasörünü seç…", "Dosya seç…" };
 
     static void AddGroup(List<ListRow> rows, string title, IEnumerable<VpnProfile> items, Glyph icon = Glyph.Layers)
     {
@@ -2393,18 +2493,28 @@ internal sealed class SearchForm : Form
             shownCount = hits.Count;
         }
 
-        string title = "", hint = "";
+        string title = "", hint = ""; var actions = new string[0];
         var emptySegment = VpnProviders.EmptySegmentText(segment);
         if (rows.Count == 0)
         {
+            const string manualHint = " Profilleri elle göstermek için .ovpn dosyalarının bulunduğu klasörü ya da dosyaları seçin.";
             if (pool.Count == 0 && emptySegment != null) { title = emptySegment[0]; hint = emptySegment[1]; }
-            else if (loadError != null) { title = "Profiller okunamadı"; hint = loadError; }
-            else if (profiles.Count == 0) { title = "Kayıtlı profil yok"; hint = "OpenVPN Connect'e profil ekleyin; liste kendiliğinden güncellenir."; }
+            else if (loadError != null) { title = "Profiller okunamadı"; hint = loadError; actions = ManualSourceActions; }
+            else if (pool.Count == 0 && OpenVpnUnread && (!segment.HasValue || segment.Value == VpnKind.OpenVpn))
+            {
+                // why the OpenVPN list is empty: file missing / unreadable / unknown layout / 0 profiles
+                var r = profileReport.PrimaryReason;
+                title = r == ProfileReadReason.NoProfiles || r == ProfileReadReason.FileMissing ? "Kayıtlı profil yok" : "Profiller okunamadı";
+                hint = ProfileSources.ReasonText(r) + (r == ProfileReadReason.NoProfiles || r == ProfileReadReason.FileMissing ? " OpenVPN Connect'e profil ekleyin; liste kendiliğinden güncellenir." : "") + manualHint;
+                actions = ManualSourceActions;
+            }
+            else if (profiles.Count == 0) { title = "Kayıtlı profil yok"; hint = "OpenVPN Connect'e profil ekleyin; liste kendiliğinden güncellenir."; actions = ManualSourceActions; }
             else { title = "Sonuç bulunamadı"; hint = Input.Text.Trim().Length > 0 ? "\"" + Input.Text.Trim() + "\" ile eşleşen profil yok. Farklı bir kelime deneyin." : "Bu filtrede profil yok."; }
         }
+        list.EmptyActions = actions;
         list.SetRows(rows, terms, title, hint, keepId);
 
-        subtitle = loadError != null && profiles.Count == 0 ? "profil okunamadı"
+        subtitle = (loadError != null || (OpenVpnUnread && profileReport.PrimaryExists)) && profiles.Count == 0 ? "profil okunamadı"
             : terms.Length == 0 ? pool.Count + " profil"
             : shownCount + " / " + pool.Count;
         InvalidateHeader();
@@ -2487,9 +2597,12 @@ internal sealed class SearchForm : Form
         }
         if (connectingProfileId != null && (DateTime.UtcNow - connectStarted).TotalSeconds > ConnectTimeoutSeconds)
         {
-            AppLog.Warn("openvpn", "connect outcome: not confirmed in " + ConnectTimeoutSeconds + " s");
+            var cp = profiles.FirstOrDefault(x => x.Id == connectingProfileId);
+            var estimated = cp != null && cp.EstimatedId;   // id guessed from a .ovpn file name (ProfileSources)
+            AppLog.Warn("openvpn", "connect outcome: not confirmed in " + ConnectTimeoutSeconds + " s" + (estimated ? " (estimated profile id)" : ""));
             list.ConnectFailed(connectingProfileId); connectingProfileId = null;
-            SetStatus("Bağlantı doğrulanamadı — OpenVPN Connect penceresini kontrol edin");
+            SetStatus(estimated ? "Bağlantı doğrulanamadı — profil kimliği tahmini: OpenVPN Connect'ten bağlanın ya da dosyayı içe aktarın"
+                                : "Bağlantı doğrulanamadı — OpenVPN Connect penceresini kontrol edin");
         }
         if (disconnectStarted != DateTime.MinValue && (DateTime.UtcNow - disconnectStarted).TotalSeconds > 20) { disconnectStarted = DateTime.MinValue; list.EndDisconnect(); }
     }
@@ -2710,6 +2823,7 @@ internal static class Program
             else if (a.StartsWith("--demo-connected=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.ConnectedName = a.Substring(17); }
             else if (a.StartsWith("--demo-search=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.Query = a.Substring(14); }
             else if (a.StartsWith("--demo-settings=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; int.TryParse(a.Substring(16), out Demo.SettingsPage); }
+            else if (a.Equals("--demo-empty", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.Empty = true; }
             else if (a.StartsWith("--scale=", StringComparison.OrdinalIgnoreCase)) float.TryParse(a.Substring(8), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out devScale);
         }
         try
