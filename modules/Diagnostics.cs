@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -150,54 +151,146 @@ internal sealed class LogRateLimiter
 }
 
 // Removes what must never reach the public issue tracker. Two passes:
-//  (a) values known from memory (profile names, hosts, usernames, server entries, saved credential
-//      usernames, Windows user / machine / domain names, user folders) -> stable placeholders;
-//  (b) patterns: PEM and inline OpenVPN key blocks, password= / token= / Authorization / -p <value>,
-//      URL credentials, GitHub tokens, e-mail, UNC hosts, C:\Users\<name>, IPv4, IPv6, long hex /
-//      base64 blobs, host-like tokens (name.tld).
+//  (a) values known from memory (profile names and .ovpn file / folder names, hosts, usernames,
+//      server entries, saved credential usernames, Windows user / machine / domain names, user
+//      folders) -> stable placeholders. Matching ignores case the Turkish way too (i I İ ı, ş Ş s S,
+//      ğ g, ü u, ö o, ç c are one letter each) and any run of blanks;
+//  (b) patterns: PEM and inline OpenVPN key blocks, password / token / cookie / Authorization values,
+//      command-line secrets (-p, -u user:pass), URL credentials, GitHub tokens, e-mail, user@host,
+//      DOMAIN\user, UNC hosts and shares, C:\Users\<name>, .ovpn names, IPv4 (leading zeros too),
+//      IPv6, long hex / base64 blobs, host-like tokens (name.tld, any letter case).
+// Every line is cut to MaxLine characters first and every pattern has a match timeout, so a hostile
+// or huge line costs milliseconds; a line that still times out becomes <satir-kisaltildi>.
 // Placeholders are numbered per instance and stable inside one report (<profil-1>, <sunucu-2>,
 // <ip-1>). Text inside our own placeholders is never matched again, so Sanitize is idempotent.
 // Over-redaction is preferred to a leak.
 internal sealed class LogSanitizer
 {
-    public const int MinKnownLength = 3;
+    public const int MinKnownLength = 4;   // shorter names are not seeds (they would garble ordinary words)
+    public const int MaxLine = 1000;       // longer lines / messages are cut before any pattern runs
+    public const string LineDropped = "<satir-kisaltildi>";
+    static readonly TimeSpan Budget = TimeSpan.FromMilliseconds(250);
+    const RegexOptions CI = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    const RegexOptions CS = RegexOptions.CultureInvariant;
+
+    static Regex R(string pattern, RegexOptions o) { return new Regex(pattern, o, Budget); }
+
     // Our placeholders (never rewritten), and the path roots we put in.
-    static readonly Regex Protected = new Regex(@"<(?:profil|sunucu|ip|kullanici|makine|alan|eposta|gizli|pem|anahtar|blob|metin|dosya)(?:-\d+)?>|%(?:APPDATA|LOCALAPPDATA|TEMP)%", RegexOptions.CultureInvariant);
+    static readonly Regex Protected = R(@"<(?:profil|sunucu|ip|kullanici|makine|alan|eposta|gizli|pem|anahtar|blob|metin|dosya|yol|satir-kisaltildi)(?:-\d+)?>|%(?:APPDATA|LOCALAPPDATA|TEMP)%", CS);
 
-    static readonly Regex Pem = new Regex(@"-----BEGIN [A-Z0-9 ]{1,40}-----[\s\S]*?(?:-----END [A-Z0-9 ]{1,40}-----|$)", RegexOptions.CultureInvariant);
-    static readonly Regex InlineKey = new Regex(@"<(ca|cert|key|tls-auth|tls-crypt|tls-crypt-v2|secret|pkcs12|extra-certs|dh|auth-user-pass)>[\s\S]*?(?:</\1>|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex AuthHeader = new Regex(@"\b(authorization|proxy-authorization)(\s*[:=]\s*)\S[^\r\n]*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex Bearer = new Regex(@"\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex KeyValue = new Regex(@"\b(password|passwd|passphrase|pwd|pass|parola|şifre|sifre|token|access_token|refresh_token|id_token|secret|client_secret|api[_-]?key|apikey|auth|cookie|session(?:id)?)(\s*[:=]\s*)(""[^""\r\n]*""|'[^'\r\n]*'|[^\s,;&""']+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex CliSecret = new Regex(@"(^|[\s""'])(-p|-pw|-pass|--pass|--password|--token|--secret|/p|/password)(\s+|[:=])(""[^""\r\n]*""|'[^'\r\n]*'|[^\s""']+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex UrlCredentials = new Regex(@"\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex GitHubToken = new Regex(@"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b", RegexOptions.CultureInvariant);
-    static readonly Regex Email = new Regex(@"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}", RegexOptions.CultureInvariant);
-    static readonly Regex Unc = new Regex(@"\\\\([^\\/\s]+)\\", RegexOptions.CultureInvariant);
-    static readonly Regex UserFolder = new Regex(@"\b[a-z]:[\\/](?:users|documents and settings)[\\/][^\\/:*?""<>|\r\n]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex Ipv4 = new Regex(@"(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?!\d|\.\d)", RegexOptions.CultureInvariant);
-    static readonly Regex Ipv6 = new Regex(@"(?<![0-9a-f:.])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?)(?:%[0-9a-z]+)?(?![0-9a-f:])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex HexBlob = new Regex(@"(?<![0-9a-z])[0-9a-f]{32,}(?![0-9a-z])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex Base64Blob = new Regex(@"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/_-]{40,}={0,2}(?![A-Za-z0-9+/=_-])", RegexOptions.CultureInvariant);
-    // name.tld: the last label is lowercase letters (so .NET names like System.IO.File stay).
-    static readonly Regex Host = new Regex(@"(?<![\w.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([a-z][a-z0-9-]{0,22}[a-z0-9])(?![\w-])", RegexOptions.CultureInvariant);
-    static readonly Regex OvpnFile = new Regex(@"[^\\/:*?""<>|\s']+\.ovpn\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex Quoted = new Regex(@"'[^'\r\n]{1,300}'|""[^""\r\n]{1,300}""|“[^”\r\n]{1,300}”|‘[^’\r\n]{1,300}’", RegexOptions.CultureInvariant);
+    static readonly Regex Pem = R(@"-----BEGIN [A-Z0-9 ]{1,40}-----[\s\S]*?(?:-----END [A-Z0-9 ]{1,40}-----|$)", CS);
+    static readonly Regex InlineKey = R(@"<(ca|cert|key|tls-auth|tls-crypt|tls-crypt-v2|secret|pkcs12|extra-certs|dh|auth-user-pass)>[\s\S]*?(?:</\1>|$)", CI);
+    // Values that may contain blanks: everything to the end of the line goes.
+    static readonly Regex AuthHeader = R(@"\b(authorization|proxy-authorization|cookie|set-cookie)(\s*[:=]\s*)\S[^\r\n]*", CI);
+    static readonly Regex LongSecret = R(@"\b(password|passwd|passphrase|pwd|secret|client_secret|parola|şifre|sifre)(\s*[:=]\s*)\S[^\r\n]*", CI);
+    static readonly Regex Bearer = R(@"\b(bearer|basic|token|negotiate|ntlm)(\s+)[A-Za-z0-9._~+/=-]{8,}", CI);
+    static readonly Regex KeyValue = R(@"\b(pass|token|access_token|refresh_token|id_token|api[_-]?key|apikey|key|auth|session(?:id)?|svpncookie)(\s*[:=]\s*)(""[^""\r\n]*""|'[^'\r\n]*'|[^\s,;&""']+)", CI);
+    static readonly Regex XHeader = R(@"\b(x-[\w-]*(?:token|key|secret|auth)[\w-]*)(\s*[:=]?\s*)([^\s,;&""']+)", CI);
+    static readonly Regex UserValue = R(@"\b(user|username|user_name|login|uid)(\s*[:=]\s*)(""[^""\r\n]*""|'[^'\r\n]*'|[^\s,;&""']+)", CI);
+    static readonly Regex CliSecret = R(@"(^|[\s""'])(-p|-pw|-pass|--pass|--password|--token|--secret|/p|/password)(\s+|[:=])(""[^""\r\n]*""|'[^'\r\n]*'|[^\s""']+)", CI);
+    static readonly Regex CliUser = R(@"(^|[\s""'])(-u|--user|--username|/u|/user)(\s+|[:=])(""[^""\r\n]*""|'[^'\r\n]*'|[^\s""']+)", CI);
+    static readonly Regex CliName = R(@"(^|[\s""'])(-n|--name|--connection)(\s+|[:=])(""[^""\r\n]*""|'[^'\r\n]*'|[^\s""']+)", CI);
+    static readonly Regex CliHost = R(@"(^|[\s""'])(-h|--host|-s|--server|--gateway)(\s+|[:=])(""[^""\r\n]*""|'[^'\r\n]*'|[^\s""']+)", CI);
+    static readonly Regex UrlCredentials = R(@"\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@", CI);
+    static readonly Regex GitHubToken = R(@"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b", CS);
+    static readonly Regex Email = R(@"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}", CS);
+    // user@host where host has no dot or is an address (ssh admin@10.0.0.1, mehmet@intranet)
+    static readonly Regex UserAtHost = R(@"(?<![\w.-])([\w.-]+)@([\w.-]+)", CS);
+    // DOMAIN\user, not a path segment (the left side must not follow \ / : and must not be a folder name)
+    static readonly Regex DomainUser = R(@"(?<![\\/:\w.$-])([A-Za-z0-9-]{2,15})\\([\w.$-]+)", CS);
+    static readonly HashSet<string> NotDomains = new HashSet<string>(new[] {
+        "users", "windows", "program", "programdata", "appdata", "system32", "syswow64", "documents", "desktop", "downloads",
+        "temp", "tmp", "microsoft", "local", "roaming", "logs", "config", "profiles", "openvpn", "fortinet" }, StringComparer.OrdinalIgnoreCase);
+    static readonly Regex Unc = R(@"\\\\([^\\/\s]+)\\([^\\/\s]*)", CS);
+    static readonly Regex UserFolder = R(@"\b[a-z]:[\\/](?:users|documents and settings)[\\/][^\\/:*?""<>|\r\n]+", CI);
+    // Folders of any other absolute path (customer folders): only the file name stays.
+    static readonly Regex AbsPath = R(@"\b[A-Za-z]:[\\/](?:[^\\/:*?""<>|\r\n]+[\\/])+", CS);
+    static readonly Regex Ipv4 = R(@"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?!\d|\.\d)", CS);
+    static readonly Regex VersionBefore = R(@"(?:\bv|\bver|\bversion|\bsürüm|\bsurum|\brelease|\bbuild|\bclr)\s*[:=]?\s*$", CI);
+    static readonly Regex Ipv6 = R(@"(?<![0-9a-f:.])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?)(?:%[0-9a-z]+)?(?![0-9a-f:])", CI);
+    static readonly Regex HexBlob = R(@"(?<![0-9a-z])[0-9a-f]{32,}(?![0-9a-z])", CI);
+    static readonly Regex Base64Blob = R(@"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/_-]{40,}={0,2}(?![A-Za-z0-9+/=_-])", CS);
+    // name.tld in any letter case ("VPN.CORP.EXAMPLE.COM", "gw.example.ZIP")
+    static readonly Regex Host = R(@"(?<![\w.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([A-Za-z][A-Za-z0-9-]{0,22}[A-Za-z0-9])(?![\w-])", CS);
+    static readonly Regex OvpnFile = R(@"(?<![^\\/:*?""<>|\s'])[^\\/:*?""<>|\s']+\.ovpn\b", CI);
+    static readonly Regex Quoted = R(@"'[^'\r\n]{1,300}'|""[^""\r\n]{1,300}""|“[^”\r\n]{1,300}”|‘[^’\r\n]{1,300}’", CS);
+    // A .NET type at the start of an exception line ("    System.IO.IOException: ..."): kept.
+    static readonly Regex TypePrefix = R(@"^(\s*(?:--- iç hata: )?[A-Za-z_][\w.`+]*(?:Exception|Error)):", CS);
 
-    // File extensions that look like a TLD ("Connection.cs", "app-20261125.log").
+    // File extensions that look like a TLD; only a single-dot token ("Connection.cs") is kept.
     static readonly HashSet<string> FileExtensions = new HashSet<string>(new[] {
         "cs", "exe", "dll", "log", "txt", "json", "xml", "config", "ini", "ps1", "psm1", "psd1", "cmd", "bat", "pdb", "ovpn",
-        "zip", "sha256", "md", "yml", "yaml", "png", "svg", "ico", "tmp", "bak", "old", "lnk", "msi", "reg", "dat", "db",
+        "sha256", "yml", "yaml", "png", "svg", "ico", "tmp", "bak", "old", "lnk", "msi", "reg", "dat", "db",
         "sqlite", "cer", "crt", "pem", "key", "p12", "pfx", "html", "htm", "js", "css", "csv", "resources", "manifest", "sys" }, StringComparer.Ordinal);
     // Public hosts of this project that may appear in a report.
     static readonly HashSet<string> AllowedHosts = new HashSet<string>(new[] { "github.com", "api.github.com", "objects.githubusercontent.com", "codeload.github.com" }, StringComparer.OrdinalIgnoreCase);
+    // Words of the app's own log lines: never seeds, or every report line would be garbled.
+    static readonly HashSet<string> CommonWords = new HashSet<string>(new[] {
+        "info", "warn", "warning", "error", "user", "users", "admin", "vpn", "connect", "connected", "disconnect", "disconnected",
+        "state", "poll", "update", "forti", "fortinet", "sophos", "watchguard", "openvpn", "openvpn connect", "crash", "report", "start",
+        "exit", "test", "default", "client", "server", "local", "true", "false", "null", "outcome", "requested", "failed", "profile",
+        "profiles", "config", "temp", "desktop", "documents", "downloads", "public", "guest", "administrator", "system" }, StringComparer.OrdinalIgnoreCase);
 
-    readonly Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);   // Fold(value) -> placeholder
     readonly List<string> known = new List<string>();
     int profiles, hosts, ips;
     Regex knownRegex;
 
     public int KnownCount { get { return known.Count; } }
+
+    // One comparison key for all Turkish / ASCII case variants and blank runs.
+    public static string Fold(string s)
+    {
+        if (s == null) return "";
+        var sb = new StringBuilder(s.Length); var blank = false;
+        foreach (var ch in s)
+        {
+            if (char.IsWhiteSpace(ch)) { if (!blank) sb.Append(' '); blank = true; continue; }
+            blank = false;
+            sb.Append(FoldChar(ch));
+        }
+        return sb.ToString().Trim();
+    }
+
+    static char FoldChar(char ch)
+    {
+        switch (ch)
+        {
+            case 'İ': case 'I': case 'ı': return 'i';
+            case 'Ş': case 'ş': return 's';
+            case 'Ğ': case 'ğ': return 'g';
+            case 'Ü': case 'ü': return 'u';
+            case 'Ö': case 'ö': return 'o';
+            case 'Ç': case 'ç': return 'c';
+            default: return char.ToLowerInvariant(ch);
+        }
+    }
+
+    // Regex for one known value: every letter as the class of its case / Turkish variants.
+    static string Pattern(string value)
+    {
+        var sb = new StringBuilder(); var blank = false;
+        foreach (var ch in value)
+        {
+            if (char.IsWhiteSpace(ch)) { if (!blank) sb.Append(@"\s+"); blank = true; continue; }
+            blank = false;
+            switch (FoldChar(ch))
+            {
+                case 'i': sb.Append("[iIİı]"); break;
+                case 's': sb.Append("[sSşŞ]"); break;
+                case 'g': sb.Append("[gGğĞ]"); break;
+                case 'u': sb.Append("[uUüÜ]"); break;
+                case 'o': sb.Append("[oOöÖ]"); break;
+                case 'c': sb.Append("[cCçÇ]"); break;
+                default:
+                    var lo = char.ToLowerInvariant(ch); var up = char.ToUpperInvariant(ch);
+                    if (lo != up) sb.Append('[').Append(Regex.Escape(lo.ToString())).Append(Regex.Escape(up.ToString())).Append(']');
+                    else sb.Append(Regex.Escape(ch.ToString()));
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
 
     string Next(string kind)
     {
@@ -209,24 +302,30 @@ internal sealed class LogSanitizer
     // Placeholder for a value found by a pattern: the known one when it is known, else a new number.
     string Number(string kind, string value)
     {
-        string ph;
-        if (map.TryGetValue(value, out ph)) return ph;
-        ph = Next(kind); map[value] = ph;
+        string ph; var key = Fold(value);
+        if (map.TryGetValue(key, out ph)) return ph;
+        ph = Next(kind); map[key] = ph;
         return ph;
+    }
+
+    static bool Seedable(string value)
+    {
+        return value != null && value.Trim().Length >= MinKnownLength && !CommonWords.Contains(Fold(value)) && !Protected.IsMatch(value);
     }
 
     bool Remember(string value, string placeholder)
     {
-        if (value == null) return false;
+        if (!Seedable(value)) return false;
         value = value.Trim();
-        if (value.Length < MinKnownLength || Protected.IsMatch(value) || map.ContainsKey(value)) return false;
-        map[value] = placeholder; known.Add(value); knownRegex = null;
+        var key = Fold(value);
+        if (map.ContainsKey(key)) return false;
+        map[key] = placeholder; known.Add(value); knownRegex = null;
         return true;
     }
 
     public void AddProfileName(string value)
     {
-        if (value == null || value.Trim().Length < MinKnownLength || map.ContainsKey(value.Trim())) return;
+        if (!Seedable(value) || map.ContainsKey(Fold(value))) return;
         Remember(value, Next("profil"));
     }
 
@@ -240,9 +339,9 @@ internal sealed class LogSanitizer
             var bare = full;
             if (bare.StartsWith("[") && bare.IndexOf(']') > 0) bare = bare.Substring(1, bare.IndexOf(']') - 1);
             else if (bare.Count(c => c == ':') == 1) bare = bare.Substring(0, bare.IndexOf(':'));
-            if (bare.Length < MinKnownLength) continue;
+            if (!Seedable(bare)) continue;
             string ph;
-            if (!map.TryGetValue(bare, out ph))
+            if (!map.TryGetValue(Fold(bare), out ph))
             {
                 IPAddress ip;
                 ph = Next(IPAddress.TryParse(bare, out ip) ? "ip" : "sunucu");
@@ -252,7 +351,19 @@ internal sealed class LogSanitizer
         }
     }
 
-    public void AddUser(string value) { Remember(value, "<kullanici>"); }
+    // "ACME\jdoe" and "jdoe@corp.example" also register "jdoe" (and the domain part).
+    public void AddUser(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return;
+        Remember(value, "<kullanici>");
+        var v = value.Trim();
+        var slash = v.LastIndexOf('\\');
+        if (slash > 0) { AddDomain(v.Substring(0, slash)); v = v.Substring(slash + 1); }
+        var at = v.IndexOf('@');
+        if (at > 0) v = v.Substring(0, at);
+        Remember(v, "<kullanici>");
+    }
+
     public void AddMachine(string value) { Remember(value, "<makine>"); }
     public void AddDomain(string value) { Remember(value, "<alan>"); }
 
@@ -265,30 +376,45 @@ internal sealed class LogSanitizer
         Remember(p.Replace('\\', '/'), placeholder);
     }
 
-    // Name, host, username of a loaded profile (and the provider's credential key / server entry).
+    // Name, host, username of a loaded profile, and its .ovpn file name and folder (named after customers).
     public void AddProfile(VpnProfile p)
     {
         if (p == null) return;
         AddProfileName(p.Name);
         AddHost(p.Host);
         AddUser(p.Username);
+        if (!string.IsNullOrEmpty(p.Source))
+        {
+            try
+            {
+                var src = p.Source.Replace('/', '\\');
+                var i = src.LastIndexOf('\\');
+                var file = i >= 0 ? src.Substring(i + 1) : src;
+                var dot = file.LastIndexOf('.');
+                AddProfileName(dot > 0 ? file.Substring(0, dot) : file);
+                if (i > 0)
+                {
+                    var dir = src.Substring(0, i); var j = dir.LastIndexOf('\\');
+                    var parent = j >= 0 ? dir.Substring(j + 1) : dir;
+                    if (parent.IndexOf(':') < 0) AddProfileName(parent);
+                }
+            }
+            catch { }
+        }
     }
 
     Regex KnownRegex()
     {
         if (knownRegex != null || known.Count == 0) return knownRegex;
-        var parts = known.OrderByDescending(k => k.Length).Select(k =>
-            k.Length >= 4 ? Regex.Escape(k) : @"(?<![\p{L}\p{N}])" + Regex.Escape(k) + @"(?![\p{L}\p{N}])").ToArray();
-        knownRegex = new Regex(string.Join("|", parts), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var parts = known.OrderByDescending(k => k.Length).Select(Pattern).ToArray();
+        knownRegex = R(string.Join("|", parts), CS);
         return knownRegex;
     }
 
     string KnownPlaceholder(string value)
     {
         string ph;
-        if (map.TryGetValue(value, out ph)) return ph;
-        foreach (var k in known) if (string.Equals(k, value, StringComparison.InvariantCultureIgnoreCase) || string.Equals(k, value, StringComparison.CurrentCultureIgnoreCase)) return map[k];
-        return "<gizli>";
+        return map.TryGetValue(Fold(value), out ph) ? ph : "<gizli>";
     }
 
     // Applies f to the text between our placeholders only.
@@ -309,25 +435,43 @@ internal sealed class LogSanitizer
 
     // A stack frame line as this app writes it ("at Type.Method in File.cs:line 12"): identifiers
     // only, left as is so a profile named like a code word ("Form") cannot garble the stack.
-    static readonly Regex FrameLine = new Regex(@"^\s*at\s+[\w.+<>`\[\],|$-]+(?:\s+in\s+[\w.-]+(?::line\s+\d+)?)?\s*$", RegexOptions.CultureInvariant);
+    static readonly Regex FrameLine = R(@"^\s*at\s+[\w.+<>`\[\],|$-]+(?:\s+in\s+[\w.-]+(?::line\s+\d+)?)?\s*$", CS);
+
+    public static string Cut(string line)
+    {
+        if (line == null) return "";
+        return line.Length <= MaxLine ? line : line.Substring(0, MaxLine) + "…";
+    }
 
     public string Sanitize(string text)
     {
         if (string.IsNullOrEmpty(text)) return text ?? "";
-        var t = Pem.Replace(text, "<pem>");
-        t = InlineKey.Replace(t, "<anahtar>");
-        var lines = t.Split('\n');
+        var lines = text.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var cr = lines[i].EndsWith("\r", StringComparison.Ordinal);
+            lines[i] = Cut(cr ? lines[i].Substring(0, lines[i].Length - 1) : lines[i]) + (cr ? "\r" : "");
+        }
+        string t;
+        try { t = InlineKey.Replace(Pem.Replace(string.Join("\n", lines), "<pem>"), "<anahtar>"); }
+        catch (RegexMatchTimeoutException) { return LineDropped; }
+        lines = t.Split('\n');
         for (var i = 0; i < lines.Length; i++)
         {
             var cr = lines[i].EndsWith("\r", StringComparison.Ordinal);
             var body = cr ? lines[i].Substring(0, lines[i].Length - 1) : lines[i];
-            if (body.Length > 0 && !FrameLine.IsMatch(body)) lines[i] = Line(body) + (cr ? "\r" : "");
+            if (body.Length == 0) continue;
+            try { if (!FrameLine.IsMatch(body)) lines[i] = Line(body) + (cr ? "\r" : ""); }
+            catch (RegexMatchTimeoutException) { lines[i] = LineDropped + (cr ? "\r" : ""); }
         }
         return string.Join("\n", lines);
     }
 
     string Line(string t)
     {
+        // A leading exception type stays readable; the rest of the line is sanitized.
+        var tp = TypePrefix.Match(t);
+        if (tp.Success) return tp.Groups[1].Value + ":" + Line(t.Substring(tp.Length));
         // URL credentials, then e-mail, before the known values: a known username inside an
         // address must not leave the domain (or the password) behind
         t = Outside(t, s => UrlCredentials.Replace(s, "$1<gizli>@"));
@@ -335,21 +479,42 @@ internal sealed class LogSanitizer
         var kr = KnownRegex();
         if (kr != null) t = Outside(t, s => kr.Replace(s, m => KnownPlaceholder(m.Value)));
         t = Outside(t, s => AuthHeader.Replace(s, "$1$2<gizli>"));
-        t = Outside(t, s => Bearer.Replace(s, "$1 <gizli>"));
+        t = Outside(t, s => LongSecret.Replace(s, "$1$2<gizli>"));
+        t = Outside(t, s => Bearer.Replace(s, "$1$2<gizli>"));
+        t = Outside(t, s => XHeader.Replace(s, "$1$2<gizli>"));
         t = Outside(t, s => KeyValue.Replace(s, "$1$2<gizli>"));
+        t = Outside(t, s => UserValue.Replace(s, "$1$2<kullanici>"));
         t = Outside(t, s => CliSecret.Replace(s, "$1$2$3<gizli>"));
+        t = Outside(t, s => CliUser.Replace(s, "$1$2$3<kullanici>"));
+        t = Outside(t, s => CliName.Replace(s, "$1$2$3<profil>"));
+        t = Outside(t, s => CliHost.Replace(s, "$1$2$3<sunucu>"));
         t = Outside(t, s => GitHubToken.Replace(s, "<gizli>"));
-        t = Outside(t, s => Unc.Replace(s, m => "\\\\" + Number("sunucu", m.Groups[1].Value) + "\\"));
+        t = Outside(t, s => UserAtHost.Replace(s, m =>
+        {
+            var host = m.Groups[2].Value;
+            return "<kullanici>@" + (host.IndexOf('.') >= 0 ? host : Number("sunucu", host));
+        }));
+        t = Outside(t, s => Unc.Replace(s, m => "\\\\" + Number("sunucu", m.Groups[1].Value) + "\\" + (m.Groups[2].Length > 0 ? "<metin>" : "")));
         t = Outside(t, s => UserFolder.Replace(s, "~"));
+        t = Outside(t, s => AbsPath.Replace(s, "<yol>\\"));
         t = Outside(t, s => OvpnFile.Replace(s, "<dosya>.ovpn"));   // profile files are named after customers
-        t = Outside(t, s => Ipv4.Replace(s, m => Number("ip", m.Value)));
+        t = Outside(t, s => DomainUser.Replace(s, m => NotDomains.Contains(m.Groups[1].Value) ? m.Value : "<alan>\\<kullanici>"));
+        t = Outside(t, s => Ipv4.Replace(s, m =>
+        {
+            if (m.Value.Split('.').Any(o => int.Parse(o, CultureInfo.InvariantCulture) > 255)) return m.Value;
+            if (VersionBefore.IsMatch(s.Substring(Math.Max(0, m.Index - 12), Math.Min(12, m.Index)))) return m.Value;   // "version 2.1.0.5"
+            return Number("ip", m.Value);
+        }));
         t = Outside(t, s => Ipv6.Replace(s, m => m.Value.Trim(':').Length == 0 ? m.Value : Number("ip", m.Value)));
         t = Outside(t, s => HexBlob.Replace(s, "<blob>"));
         t = Outside(t, s => Base64Blob.Replace(s, m => m.Value.Any(char.IsDigit) ? "<blob>" : m.Value));
         t = Outside(t, s => Host.Replace(s, m =>
         {
-            if (AllowedHosts.Contains(m.Value) || FileExtensions.Contains(m.Groups[1].Value)) return m.Value;
-            return Number("sunucu", m.Value);
+            var v = m.Value;
+            if (AllowedHosts.Contains(v)) return v;
+            if (v.StartsWith("System.", StringComparison.Ordinal) || v.StartsWith("Microsoft.", StringComparison.Ordinal)) return v;   // .NET names
+            if (v.IndexOf('.') == v.LastIndexOf('.') && FileExtensions.Contains(m.Groups[1].Value.ToLowerInvariant())) return v;   // "Connection.cs"
+            return Number("sunucu", v);
         }));
         return t;
     }
@@ -358,13 +523,15 @@ internal sealed class LogSanitizer
     public string SanitizeMessage(string text)
     {
         if (string.IsNullOrEmpty(text)) return text ?? "";
-        return Sanitize(Quoted.Replace(text, "'<metin>'"));
+        try { return Sanitize(Quoted.Replace(Cut(text), "'<metin>'")); }
+        catch (RegexMatchTimeoutException) { return LineDropped; }
     }
 
     public static string StripQuoted(string text)
     {
         if (string.IsNullOrEmpty(text)) return text ?? "";
-        return Quoted.Replace(text, "'…'");
+        try { return Quoted.Replace(Cut(text), "'…'"); }
+        catch (RegexMatchTimeoutException) { return LineDropped; }
     }
 }
 
@@ -761,12 +928,23 @@ internal static class CrashPromptLogic
     public const string MarkerName = "crash-pending.txt";
     public static readonly TimeSpan MaxAge = TimeSpan.FromDays(30);
 
-    public static string MarkerText(string recordName, DateTime utc)
+    // "Sonra" keeps the marker: the next start asks again, at most MaxOffers times in all.
+    public const int MaxOffers = 3;
+
+    public static string MarkerText(string recordName, DateTime utc) { return MarkerText(recordName, utc, 0); }
+
+    public static string MarkerText(string recordName, DateTime utc, int offers)
     {
-        return recordName + "\n" + utc.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture) + "\n";
+        return recordName + "\n" + utc.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture) + "\noffers=" + offers.ToString(CultureInfo.InvariantCulture) + "\n";
     }
 
-    // Record to offer, or null: no / broken / old marker, "never", demo mode.
+    static int Offers(string[] lines)
+    {
+        int n;
+        return lines.Length > 2 && lines[2].StartsWith("offers=", StringComparison.Ordinal) && int.TryParse(lines[2].Substring(7), NumberStyles.None, CultureInfo.InvariantCulture, out n) ? n : 0;
+    }
+
+    // Record to offer, or null: no / broken / old marker, offered MaxOffers times, "never", demo mode.
     public static string ShouldOffer(string markerText, string crashPromptMode, bool demo, DateTime nowUtc)
     {
         if (demo || crashPromptMode == "never" || string.IsNullOrEmpty(markerText)) return null;
@@ -777,10 +955,22 @@ internal static class CrashPromptLogic
         DateTime when;
         if (!DateTime.TryParseExact(lines[1].Trim(), "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out when)) return null;
         if (when > nowUtc.AddDays(1) || nowUtc - when > MaxAge) return null;
+        if (Offers(lines) >= MaxOffers) return null;
         return name;
     }
-}
 
+    // Marker after one more "Sonra": the count goes up; null (drop the marker) once MaxOffers is reached.
+    public static string AfterLater(string markerText)
+    {
+        if (string.IsNullOrEmpty(markerText)) return null;
+        var lines = markerText.Replace("\r\n", "\n").Split('\n');
+        if (lines.Length < 2) return null;
+        DateTime when;
+        if (!DateTime.TryParseExact(lines[1].Trim(), "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out when)) return null;
+        var n = Offers(lines) + 1;
+        return n >= MaxOffers ? null : MarkerText(lines[0].Trim(), when, n);
+    }
+}
 // Buffered, thread-safe log file writer. Write never throws and never touches the disk on the
 // calling thread (a pool thread drains the buffer; Flush() drains synchronously, e.g. on exit or crash).
 internal sealed class LogWriter
@@ -850,19 +1040,24 @@ internal sealed class LogWriter
         catch { }
     }
 
+    // Drain (pool thread) and Flush (caller) both take the buffer while holding fileGate, so chunks
+    // reach the file in the order they were written.
     void Drain()
     {
         try
         {
             while (true)
             {
-                string chunk;
-                lock (gate)
+                lock (fileGate)
                 {
-                    if (pending.Length == 0) { draining = false; return; }
-                    chunk = pending.ToString(); pending.Length = 0;
+                    string chunk;
+                    lock (gate)
+                    {
+                        if (pending.Length == 0) { draining = false; return; }
+                        chunk = pending.ToString(); pending.Length = 0;
+                    }
+                    WriteChunk(chunk);
                 }
-                WriteChunk(chunk);
             }
         }
         catch { lock (gate) draining = false; }
@@ -872,41 +1067,42 @@ internal sealed class LogWriter
     {
         try
         {
-            string chunk;
-            lock (gate) { chunk = pending.ToString(); pending.Length = 0; }
-            if (chunk.Length > 0) WriteChunk(chunk);
+            lock (fileGate)
+            {
+                string chunk;
+                lock (gate) { chunk = pending.ToString(); pending.Length = 0; }
+                if (chunk.Length > 0) WriteChunk(chunk);
+            }
         }
         catch { }
     }
 
+    // Caller holds fileGate.
     void WriteChunk(string chunk)
     {
-        lock (fileGate)
+        try
         {
-            try
+            Directory.CreateDirectory(dir);
+            var now = Clock();
+            if (current == null || currentDay != now.Date || currentSize >= MaxBytes) Rotate(now);
+            var bytes = Utf8.GetBytes(chunk);
+            // A reader that holds the file without write sharing (an editor, a copy) fails the open
+            // for a moment: retry a few times instead of losing the chunk. AppendData rights make every
+            // write an atomic append, also when two instances (--instance) share the folder.
+            for (var attempt = 0; ; attempt++)
             {
-                Directory.CreateDirectory(dir);
-                var now = Clock();
-                if (current == null || currentDay != now.Date || currentSize >= MaxBytes) Rotate(now);
-                var bytes = Utf8.GetBytes(chunk);
-                // A reader that holds the file without write sharing (an editor, a copy) fails the open
-                // for a moment: retry a few times instead of losing the chunk.
-                for (var attempt = 0; ; attempt++)
+                try
                 {
-                    try
-                    {
-                        using (var fs = new FileStream(Path.Combine(dir, current), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
-                            fs.Write(bytes, 0, bytes.Length);
-                        break;
-                    }
-                    catch (IOException) { if (attempt >= 4) throw; Thread.Sleep(15); }
+                    using (var fs = new FileStream(Path.Combine(dir, current), FileMode.Append, FileSystemRights.AppendData, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.None))
+                        fs.Write(bytes, 0, bytes.Length);
+                    break;
                 }
-                currentSize += bytes.Length;
+                catch (IOException) { if (attempt >= 4) throw; Thread.Sleep(15); }
             }
-            catch { current = null; }
+            currentSize += bytes.Length;
         }
+        catch { current = null; }
     }
-
     void Rotate(DateTime now)
     {
         var existing = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
@@ -993,14 +1189,15 @@ internal static class CrashReporter
     // Shown before any report is opened: exactly what it contains and what it leaves out.
     public const string ReportContents =
         "Rapor şunları içerir: uygulama sürümü, Windows ve .NET sürümü, ekran ölçeği, hangi VPN istemcilerinin kurulu olduğu (yalnızca var/yok), " +
-        "hatanın türü ve kod satırları (sınıf ve yöntem adları), son 60 günlük satırı.\n" +
+        "hatanın türü ve kod konumları (sınıf ve yöntem adları), son 60 günlük satırı.\n" +
         "Çıkarılanlar: parolalar ve anahtarlar, kullanıcı adları, profil ve müşteri adları, sunucu adresleri, IP ve e-posta adresleri, " +
         "makine adı, Windows kullanıcı adı ve kişisel klasör yolları.\n" +
-        "Uygulama hiçbir şey göndermez: rapor tarayıcınızda GitHub'ın yeni kayıt sayfasında açılır; okuyup düzenleyebilir, isterseniz Gönder'e (Submit) basarsınız. GitHub hesabı gerekir.";
+        "Uygulama raporu kendisi göndermez: rapor, tarayıcınızda açılan GitHub yeni kayıt sayfasının adresiyle GitHub'a ulaşır " +
+        "ama siz Gönder'e (Submit) basana kadar yayınlanmaz; önce okuyup düzenleyebilirsiniz. GitHub hesabı gerekir.";
     public const string ReportSummary =
-        "Hata raporu: sürüm, Windows/.NET, kurulu VPN istemcileri (var/yok), hata türü ve kod satırları, son 60 günlük satırı. " +
+        "Hata raporu: sürüm, Windows/.NET, kurulu VPN istemcileri (var/yok), hata türü ve kod konumları, son 60 günlük satırı. " +
         "Parolalar, kullanıcı/profil/sunucu adları, IP ve e-posta adresleri, makine adı ve kişisel yollar çıkarılır. " +
-        "Uygulama hiçbir şey göndermez; rapor tarayıcınızda açılır, Gönder'e siz basarsınız.";
+        "Rapor sayfa adresiyle GitHub'a ulaşır ama siz Gönder'e basana kadar yayınlanmaz.";
 
     public static Func<IEnumerable<VpnProfile>> Profiles;   // set by the main window (read only, may run on any thread)
     public static Func<string> PromptMode;                  // settings.CrashPrompt ("ask" / "never")
@@ -1104,6 +1301,22 @@ internal static class CrashReporter
         try { File.WriteAllText(Path.Combine(LogDir, CrashPromptLogic.MarkerName), CrashPromptLogic.MarkerText(recordName, DateTime.UtcNow)); } catch { }
     }
 
+    static string ReadMarker()
+    {
+        if (LogDir == null) return null;
+        try { var p = Path.Combine(LogDir, CrashPromptLogic.MarkerName); return File.Exists(p) ? File.ReadAllText(p) : null; } catch { return null; }
+    }
+
+    // After the prompt: "Sonra" keeps the marker (asked again at the next start, MaxOffers in all),
+    // "Raporu aç" and "Bir daha sorma" remove it.
+    static void SettleMarker(Choice choice)
+    {
+        if (choice != Choice.Later) { ClearMarker(); return; }
+        var next = CrashPromptLogic.AfterLater(ReadMarker());
+        if (next == null || LogDir == null) { ClearMarker(); return; }
+        try { File.WriteAllText(Path.Combine(LogDir, CrashPromptLogic.MarkerName), next); } catch { }
+    }
+
     static void ClearMarker()
     {
         if (LogDir == null) return;
@@ -1141,9 +1354,12 @@ internal static class CrashReporter
         ErrorReport r = null;
         try
         {
+            // fingerprint first: a repeating exception (e.g. in a paint handler) costs no report work
+            var fp = ErrorFingerprint.Of(ErrorInfo.From(e.Exception));
+            AppLog.Limited(LogLevel.Error, "crash:" + fp, "crash", "unhandled UI-thread exception (" + fp + ")", e.Exception);
+            if (!FirstOfRun(fp)) return;
             r = Capture("crash", e.Exception);
-            AppLog.Limited(LogLevel.Error, "crash:" + r.Fingerprint, "crash", "unhandled UI-thread exception (" + r.Fingerprint + ")", e.Exception);
-            if (FirstOfRun(r.Fingerprint)) WriteMarker(WriteRecord(r, "crash"));
+            WriteMarker(WriteRecord(r, "crash"));
             AppLog.Flush();
         }
         catch { }
@@ -1154,7 +1370,7 @@ internal static class CrashReporter
         {
             var owner = Form.ActiveForm;
             var choice = Ask(owner, "Beklenmeyen bir hata oluştu; uygulama çalışmaya devam ediyor.\nHata raporunu GitHub'da açmak ister misiniz?");
-            ClearMarker();
+            SettleMarker(choice);
             Act(owner, choice, r);
         }
         catch { }
@@ -1206,7 +1422,7 @@ internal static class CrashReporter
             try { if (NeverAsk != null) NeverAsk(); } catch { }
             return;
         }
-        AppLog.Info("report", "report postponed");
+        AppLog.Info("report", "report postponed (asked again at the next start, at most " + CrashPromptLogic.MaxOffers.ToString(CultureInfo.InvariantCulture) + " times)");
     }
 
     static ErrorReport LoadRecord(string name)
@@ -1227,17 +1443,17 @@ internal static class CrashReporter
     public static void OfferPendingCrash(IWin32Window owner)
     {
         if (LogDir == null || Demo.On) return;
-        string text = null;
-        try { var p = Path.Combine(LogDir, CrashPromptLogic.MarkerName); if (File.Exists(p)) text = File.ReadAllText(p); } catch { }
+        var text = ReadMarker();
         if (text == null) return;
         var name = CrashPromptLogic.ShouldOffer(text, Mode(), Demo.On, DateTime.UtcNow);
-        ClearMarker();
-        if (name == null) return;
+        if (name == null) { ClearMarker(); return; }
         var r = LoadRecord(name);
-        if (r == null) return;
+        if (r == null) { ClearMarker(); return; }
         lock (gate) promptedThisRun = true;
         AppLog.Info("report", "offering the report of the previous session's crash (" + (r.Fingerprint ?? "-") + ")");
-        Act(owner, Ask(owner, "Önceki oturum beklenmedik şekilde kapandı. Hata raporunu GitHub'da açmak ister misiniz?"), r);
+        var choice = Ask(owner, "Önceki oturum beklenmedik şekilde kapandı. Hata raporunu GitHub'da açmak ister misiniz?");
+        SettleMarker(choice);
+        Act(owner, choice, r);
     }
 
     // Settings > Hakkında > "Son hatayı bildir": the newest crash / error record, else a report with
@@ -1263,15 +1479,21 @@ internal static class CrashReporter
 
     // Duplicate check on a pool thread (read-only search for the fingerprint; failure = skip),
     // then the browser on the UI thread.
+    static volatile bool checking;   // a duplicate check is running: further clicks are ignored
+
     static void OpenReport(IWin32Window owner, ErrorReport r)
     {
-        if (Demo.On || r == null) return;
+        if (Demo.On || r == null || checking) return;
         var ctx = SynchronizationContext.Current;
         if (ctx == null || r.Fingerprint == null) { FinishOpen(owner, r, null); return; }
+        checking = true;
+        try { Application.UseWaitCursor = true; } catch { }
         ThreadPool.QueueUserWorkItem(delegate
         {
             var dup = IssueLink.CheckDuplicate(r.Fingerprint, UpdateClient.GetText);
-            ctx.Post(delegate { FinishOpen(owner, r, dup); }, null);
+            // the UI may be gone by now (the app closed while the check ran)
+            try { ctx.Post(delegate { FinishOpen(owner, r, dup); }, null); }
+            catch { checking = false; }
         });
     }
 
@@ -1283,6 +1505,8 @@ internal static class CrashReporter
 
     static void FinishOpen(IWin32Window owner, ErrorReport r, IssueRef dup)
     {
+        checking = false;
+        try { Application.UseWaitCursor = false; } catch { }
         try
         {
             owner = Alive(owner);

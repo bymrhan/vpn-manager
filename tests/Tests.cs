@@ -68,7 +68,16 @@ static class Tests
         Run("Tanılama: sıklık sınırı", RateLimit);
         Run("Tanılama: çökme işareti", CrashMarker);
         Run("Tanılama: günlük dosyası", LogWriterFile);
-        Run("Ayarlar: tanılama", DiagnosticsSettings);        Console.WriteLine();
+        Run("Ayarlar: tanılama", DiagnosticsSettings);
+        Run("Tanılama: Türkçe büyük/küçük harf", SanitizerTurkishCase);
+        Run("Tanılama: kullanıcı ve alan adları", SanitizerUsersAndDomains);
+        Run("Tanılama: her harf büyüklüğünde sunucu adı", SanitizerHostsAnyCase);
+        Run("Tanılama: çok uzun satırlar", SanitizerLongLines);
+        Run("Tanılama: diğer gizli değerler", SanitizerMoreSecrets);
+        Run("Tanılama: aşırı temizleme sınırı", SanitizerNoOverRedaction);
+        Run("Tanılama: çökme işareti, Sonra", CrashMarkerLater);
+        Run("Sağlayıcı bölümü görünürlüğü", ProviderSegmentVisibility);
+        Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
     }
@@ -744,7 +753,7 @@ static class Tests
         var p = new LogSanitizer(); p.AddProfileName("Omega"); p.AddProfileName("Omega Lojistik"); p.AddProfileName("ab");
         Check(p.Sanitize("Omega Lojistik ve Omega ve ab") == "<profil-2> ve <profil-1> ve ab", "uzun ad önce; 3 karakterden kısa değerler yok sayılır");
         var u = new LogSanitizer(); u.AddUser("ali");
-        Check(u.Sanitize("ali ve Kalinin ve ALI") == "<kullanici> ve Kalinin ve <kullanici>", "kısa değerler yalnızca tam kelime olarak");
+        Check(u.Sanitize("ali ve Kalinin ve ALI") == "ali ve Kalinin ve ALI" && u.KnownCount == 0, "4 karakterden kısa değerler tohum olmaz");
     }
 
     static void SanitizerKeepsCode()
@@ -902,6 +911,14 @@ static class Tests
         Check(CrashPromptLogic.ShouldOffer("..\\..\\settings.json\n2026-11-25T08:00:00Z\n", "ask", false, now) == null && CrashPromptLogic.ShouldOffer("error-20261125-085959.txt\n2026-11-25T08:00:00Z\n", "ask", false, now) == null && CrashPromptLogic.ShouldOffer("", "ask", false, now) == null && CrashPromptLogic.ShouldOffer("crash-20261125-085959.txt\nbozuk", "ask", false, now) == null, "bozuk işaret, yol, işlenmiş hata: sorulmaz");
     }
 
+    // Reads a log file the writer may hold open (File.ReadAllLines would refuse to share it).
+    static string[] ReadShared(string path)
+    {
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        using (var sr = new StreamReader(fs, Encoding.UTF8))
+            return sr.ReadToEnd().Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
+    }
+
     static void LogWriterFile()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-log-" + Guid.NewGuid().ToString("N"));
@@ -931,9 +948,9 @@ static class Tests
             var threads = new List<Thread>();
             for (var k = 0; k < 4; k++) { var id = k; var th = new Thread(() => { for (var i = 0; i < 50; i++) a.Write(LogLevel.Info, "w" + id, "line " + i, null); }); threads.Add(th); th.Start(); }
             foreach (var th in threads) th.Join();
-            for (var wait = 0; wait < 50 && (!File.Exists(Path.Combine(dir + "-async", "app-20261125.log")) || File.ReadAllLines(Path.Combine(dir + "-async", "app-20261125.log")).Length < 200); wait++) { a.Flush(); Thread.Sleep(50); }
+            for (var wait = 0; wait < 50 && (!File.Exists(Path.Combine(dir + "-async", "app-20261125.log")) || ReadShared(Path.Combine(dir + "-async", "app-20261125.log")).Length < 200); wait++) { a.Flush(); Thread.Sleep(50); }
             a.Flush();
-            var asyncLines = File.ReadAllLines(Path.Combine(dir + "-async", "app-20261125.log")).Length;
+            var asyncLines = ReadShared(Path.Combine(dir + "-async", "app-20261125.log")).Length;
             Check(asyncLines == 200, "4 iş parçacığından 200 satır, kayıpsız (" + asyncLines + ")");
 
             var bad = new LogWriter("Z:\\::yok\\<>|") { Async = false };
@@ -970,5 +987,122 @@ static class Tests
             SettingsStore.PathOverride = null;
             try { File.Delete(path); } catch { }
         }
+    }
+
+    // ---------- Diagnostics review fixes (fictional data only) ----------
+
+    static void SanitizerTurkishCase()
+    {
+        var s = new LogSanitizer();
+        foreach (var n in new[] { "KARŞIYAKA BELEDİYESİ", "İzmir Liman", "ışık enerji", "Çağ  Tekstil" }) s.AddProfileName(n);
+        var cases = new Dictionary<string, string> {
+            { "Karşıyaka Belediyesi", "<profil-1>" }, { "karşıyaka belediyesi", "<profil-1>" }, { "KARŞIYAKA BELEDİYESİ", "<profil-1>" }, { "KARSIYAKA BELEDIYESI", "<profil-1>" }, { "karsiyaka  belediyesi", "<profil-1>" },
+            { "izmir liman", "<profil-2>" }, { "İZMİR LİMAN", "<profil-2>" }, { "IZMIR LIMAN", "<profil-2>" }, { "İzmir Liman", "<profil-2>" }, { "izmir\tliman", "<profil-2>" },
+            { "IŞIK ENERJİ", "<profil-3>" }, { "Işık Enerji", "<profil-3>" }, { "ışık enerji", "<profil-3>" }, { "isik enerji", "<profil-3>" },
+            { "ÇAĞ TEKSTİL", "<profil-4>" }, { "çağ tekstil", "<profil-4>" }, { "Çağ Tekstil", "<profil-4>" }, { "Çağ  Tekstil", "<profil-4>" }, { "CAG TEKSTIL", "<profil-4>" } };
+        var bad = cases.Where(kv => s.Sanitize(kv.Key + " bağlandı") != kv.Value + " bağlandı").Select(kv => kv.Key + " -> " + s.Sanitize(kv.Key)).ToList();
+        Check(bad.Count == 0, "Türkçe büyük/küçük harf, ASCII karşılığı ve çift boşluk varyantları" + (bad.Count > 0 ? ": " + string.Join(" | ", bad) : ""));
+    }
+
+    static void SanitizerUsersAndDomains()
+    {
+        var s = new LogSanitizer(); s.AddUser(@"ACME\jdoe"); s.AddUser("veli.kaya@corp.example");
+        var a = s.Sanitize("jdoe logged; ACME\\JDOE; veli.kaya at work");
+        Check(a.IndexOf("jdoe", StringComparison.OrdinalIgnoreCase) < 0 && a.IndexOf("acme", StringComparison.OrdinalIgnoreCase) < 0 && a.IndexOf("veli", StringComparison.OrdinalIgnoreCase) < 0, "DOMAIN\\user ve user@alan: kullanıcı kısmı da tohum: " + a);
+        var b = new LogSanitizer().Sanitize("mehmet@intranet failed; ssh admin@10.0.0.1; CORP\\mehmet.yilmaz denied");
+        Check(b.IndexOf("mehmet", StringComparison.OrdinalIgnoreCase) < 0 && b.IndexOf("intranet", StringComparison.OrdinalIgnoreCase) < 0 && b.IndexOf("CORP") < 0 && !b.Contains("10.0.0.1") && b.Contains("<kullanici>@") && b.Contains("<alan>\\<kullanici>"), "noktasız user@host, user@IP ve DOMAIN\\user kalıpla: " + b);
+        var c = new LogSanitizer().Sanitize("see logs\\app.log and Users\\Public and %APPDATA%\\OpenVpnQuickSearch\\x");
+        Check(c == "see logs\\app.log and Users\\Public and %APPDATA%\\OpenVpnQuickSearch\\x", "klasör yolları DOMAIN\\user sanılmaz: " + c);
+        var d = new LogSanitizer().Sanitize("D:\\Musteriler\\Beta Gida\\conf and C:\\Program Files\\OpenVPN Connect\\x.exe");
+        Check(!d.Contains("Musteriler") && !d.Contains("Beta") && d.Contains("<yol>\\conf") && d.Contains("<yol>\\x.exe"), "mutlak yolların klasörleri çıkar, dosya adı kalır: " + d);
+    }
+
+    static void SanitizerHostsAnyCase()
+    {
+        var s = new LogSanitizer();
+        foreach (var h in new[] { "VPN.CORP.EXAMPLE.COM", "gw.example.ZIP", "portal.firma.md", "x.firma.zip", "Vpn.Firma.Com.Tr" })
+        {
+            var o = s.Sanitize("connect to " + h + " failed");
+            Check(o.StartsWith("connect to <sunucu-") && o.EndsWith("> failed"), "sunucu adı yakalanır: " + h + " -> " + o);
+        }
+        var keep = "System.Net.WebException in Connection.cs and app-20261125.log";
+        Check(new LogSanitizer().Sanitize(keep) == keep, ".NET adları ve tek noktalı dosya adları kalır");
+        var ex = "    System.IO.IOException: cannot reach vpn.kappa.example";
+        Check(new LogSanitizer().Sanitize(ex) == "    System.IO.IOException: cannot reach <sunucu-1>", "istisna satırının türü okunur kalır");
+    }
+
+    static void SanitizerLongLines()
+    {
+        var s = SeededSanitizer();
+        var inputs = new Dictionary<string, string> {
+            { "a-", "password=Hunter2!Gizli " + string.Concat(Enumerable.Repeat("a-", 25000)) },
+            { "email", "ayse.demir@acme-lojistik.example x@" + string.Concat(Enumerable.Repeat("ab.", 16700)) },
+            { "A", "token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 " + new string('A', 50000) },
+            { "dots", "203.0.113.45 " + string.Concat(Enumerable.Repeat("a.", 25000)) + "1" },
+            { "ovpn", "Acme Lojistik Merkez " + new string('b', 50000) + ".ovpn" } };
+        foreach (var kv in inputs)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var o = s.Sanitize(kv.Value);
+            var m = s.SanitizeMessage(kv.Value);
+            sw.Stop();
+            var leaked = Seeds.Where(x => o.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0 || m.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            Check(sw.ElapsedMilliseconds < 1000 && leaked.Count == 0 && o.Length <= LogSanitizer.MaxLine + 200, "50.000 karakterlik satır (" + kv.Key + "): " + sw.ElapsedMilliseconds + " ms, sızıntı yok" + (leaked.Count > 0 ? ": " + string.Join(",", leaked) : ""));
+        }
+    }
+
+    static void SanitizerMoreSecrets()
+    {
+        var cases = new[] {
+            new[] { "password: my secret phrase", "my secret", "secret phrase" }, new[] { "pwd=abc def", "abc", "def" },
+            new[] { "username=foo1; user: bar2", "foo1", "bar2" }, new[] { "X-Api-Token abcdEFGH1234", "abcdEFGH1234", "abcd" },
+            new[] { "token abcdefghijklmnop", "abcdefghijklmnop", "abcdefgh" }, new[] { "Cookie: SVPNCOOKIE=abc123", "abc123", "abc123" },
+            new[] { "SVPNCOOKIE=xyz987abc", "xyz987abc", "xyz987" }, new[] { "client.exe connect -h vpn:443 -u veli:Secr3t!", "veli", "Secr3t" },
+            new[] { "sccli enable -n Lambda -u ops1", "Lambda", "ops1" }, new[] { "key=AKIAABCDEFGHIJKLMNOP", "AKIAABCDEF", "AKIA" },
+            new[] { "ip 192.168.001.010 ok", "192.168.001.010", "168.001" }, new[] { "net use \\\\acmesrv01\\Muhasebe", "acmesrv01", "Muhasebe" } };
+        foreach (var c in cases)
+        {
+            var o = new LogSanitizer().SanitizeMessage(c[0]);
+            Check(o.IndexOf(c[1], StringComparison.OrdinalIgnoreCase) < 0 && o.IndexOf(c[2], StringComparison.OrdinalIgnoreCase) < 0, "gizli değer çıkar: " + c[0] + " -> " + o);
+        }
+        var v = new LogSanitizer().Sanitize("version 2.1.0.5 start, v2.1.0.6, sürüm 2.1.0.7, server 2.1.0.8");
+        Check(v == "version 2.1.0.5 start, v2.1.0.6, sürüm 2.1.0.7, server <ip-1>", "dört parçalı sürüm sürüm sözcüğünden sonra kalır: " + v);
+    }
+
+    static void SanitizerNoOverRedaction()
+    {
+        var s = new LogSanitizer();
+        s.AddProfileName("Info"); s.AddProfileName("Art"); s.AddUser("user"); s.AddUser("admin"); s.AddProfileName("VPN"); s.AddProfileName("Connect");
+        var t = "2026-11-25 14:03:11.123 INFO  openvpn connect requested by user admin, Smart art";
+        Check(s.Sanitize(t) == t && s.KnownCount == 0, "4 karakterden kısa ve sık günlük kelimeleri tohum olmaz");
+        var p = new LogSanitizer();
+        p.AddProfile(new VpnProfile { Name = "Zeta Merkez", Source = @"Kappa Gida\kappa gida.ovpn" });
+        var o = p.Sanitize("imported Kappa Gida / kappa gida failed");
+        Check(o.IndexOf("kappa", StringComparison.OrdinalIgnoreCase) < 0 && o.IndexOf("gida", StringComparison.OrdinalIgnoreCase) < 0, ".ovpn dosya ve klasör adı tohumdur: " + o);
+    }
+
+    static void CrashMarkerLater()
+    {
+        var now = new DateTime(2026, 11, 25, 9, 0, 0, DateTimeKind.Utc);
+        var m = CrashPromptLogic.MarkerText("crash-20261125-085959.txt", now.AddMinutes(-1));
+        var m1 = CrashPromptLogic.AfterLater(m);
+        Check(m1 != null && CrashPromptLogic.ShouldOffer(m1, "ask", false, now) == "crash-20261125-085959.txt", "\"Sonra\": işaret kalır, sonraki açılışta yine sorulur");
+        var m2 = CrashPromptLogic.AfterLater(m1);
+        Check(m2 != null && CrashPromptLogic.AfterLater(m2) == null, "en fazla " + CrashPromptLogic.MaxOffers + " kez sorulur, sonra işaret silinir");
+        Check(CrashPromptLogic.ShouldOffer(CrashPromptLogic.MarkerText("crash-20261125-085959.txt", now, CrashPromptLogic.MaxOffers), "ask", false, now) == null, "sınıra ulaşmış işaret sorulmaz");
+        Check(CrashPromptLogic.AfterLater("bozuk") == null && CrashPromptLogic.AfterLater(null) == null, "bozuk işaret: silinir");
+    }
+
+    static void ProviderSegmentVisibility()
+    {
+        Check(VpnProviders.ShowsExtSegment(true, true, 0), "kurulu ve açık, bağlantısı yok: bölüm görünür");
+        Check(!VpnProviders.ShowsExtSegment(true, false, 0), "kurulu değil, satır yok: bölüm yok");
+        Check(!VpnProviders.ShowsExtSegment(false, true, 3), "Ayarlar'da kapalı: bölüm yok");
+        Check(VpnProviders.ShowsExtSegment(true, false, 2), "kurulu değil ama satırı var (demo): bölüm görünür");
+        var so = VpnProviders.EmptySegmentText(VpnKind.Sophos); var wg = VpnProviders.EmptySegmentText(VpnKind.WatchGuard);
+        Check(so != null && so[1] == "Sophos Connect'te tanımlı bağlantı yok. .pro veya .ovpn dosyasını Sophos Connect'e ekleyin." && wg != null && wg[1] == "WatchGuard SSL VPN istemcisinde kayıtlı sunucu yok.", "boş bölüm metinleri");
+        Check(VpnProviders.EmptySegmentText(VpnKind.OpenVpn) == null && VpnProviders.EmptySegmentText(VpnKind.Forti) == null && VpnProviders.EmptySegmentText(null) == null, "OpenVPN, FortiClient ve Tümü için özel metin yok");
+        var segs = VpnProviders.Segments(true, VpnProviders.ShowsExtSegment(true, true, 0), VpnProviders.ShowsExtSegment(true, false, 0));
+        Check(string.Join(",", VpnProviders.SegmentNames(segs)) == "Tümü,OpenVPN,FortiClient,Sophos" && VpnProviders.IndexOf(segs, VpnKind.Sophos) == 3 && VpnProviders.SegmentAt(segs, 3) == VpnKind.Sophos, "boş Sophos bölümü Ctrl+4 ile seçilir");
     }
 }
