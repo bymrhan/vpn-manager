@@ -59,9 +59,29 @@ In `OpenVpnQuickSearch.cs` and the list/UI modules: merge `SophosStore.Load()` a
 Files: `OpenVpnQuickSearch.cs`, `modules\*.cs` as needed (`GlassList.cs`, `Settings.cs`, `SettingsWindow.cs`, `Demo.cs`), `tests\Tests.cs`.
 Done when: `tests\run-tests.ps1` passes; `build.ps1 -NoProfiles` builds; the app starts with `--demo` and with `--background` without errors; with real data it lists the WatchGuard profile and no Sophos rows.
 
-### Task 5: Docs
+### Task 5: Update check, update preferences, silent update
 
-Update `README.md` (Turkish, keep structure): supported clients table (OpenVPN Connect, FortiClient, Sophos Connect, WatchGuard SSL VPN) with what works per client and known limits (Sophos format unverified until a profile exists, WatchGuard single connection), settings, `forti.log`-style diagnostics, background-window behaviour. Add `paket\OpenVPN-Hizli-Arama-Kullanim.txt` notes only if a line is wrong now. No new screenshots.
+Users who installed the app (via `install.ps1`, GitHub release zip, install dir `%LOCALAPPDATA%\Programs\OpenVPN Hizli Arama`) get updates from GitHub Releases of `bymrhan/vpn-manager`.
+
+New `modules\Updater.cs` (pure, testable parts separate from UI/IO):
+- Current version from the assembly version (`modules\AssemblyInfo.cs`, 2.0.0).
+- Check: HTTPS GET `https://api.github.com/repos/bymrhan/vpn-manager/releases/latest` (TLS 1.2, 10 s timeout, generic User-Agent such as `VpnManager-Updater`, no user data in the request, never on the UI thread). Parse `tag_name` (`v2.1.0`), `html_url`, `body` (release notes), `prerelease`, assets `OpenVPN-Hizli-Arama-Kurulum.zip` and `OpenVPN-Hizli-Arama-Kurulum.zip.sha256`. Ignore prereleases and drafts. Compare versions numerically (`2.10.0` > `2.9.0`).
+- Settings (`modules\Settings.cs`, persisted in settings.json, backward compatible defaults): `UpdateMode` = `ask` (default: tell the user, they decide) | `auto` (download, verify and install on its own when the app is idle) | `off` (only manual "Şimdi denetle"); `UpdateInterval` = `startup` | `daily` (default) | `weekly`; `LastUpdateCheckUtcTicks`; `SkippedVersion`.
+- Schedule: first check about 30 s after start, then when due by interval; one timer in the existing watcher/tick loop (no new background polling thread). Never in demo mode. Network failure is silent (retry at the next due time, status text only for manual checks).
+- `ask` mode: a non-modal glass notice/toast style consistent with the existing toast/GlassDialog: "Sürüm X hazır — Şimdi güncelle / Sonra / Bu sürümü atla" plus a link/button for the release notes. "Bu sürümü atla" stores `SkippedVersion`.
+- `auto` mode ("sessiz yükleme"): download the zip to a temp folder, verify SHA-256 against the `.sha256` asset (mandatory: abort with a status message on mismatch or missing hash), and install only when the app is idle: main window hidden or no keyboard/mouse input for about 2 minutes (`GetLastInputInfo`), no connect/disconnect in progress, no dialog open. A connected VPN does not block an update (OpenVPN Connect/FortiClient run independently); the app restarts in background mode afterwards (`--background`).
+- Install mechanics: only when the running exe lives in the install dir; a portable copy elsewhere only notifies (opens the release page). Reuse the package's `kur.ps1` with a new quiet update switch (add it to `paket\kur.ps1` and keep the existing interactive behaviour unchanged): copy the new exe, keep settings, pins, history and profiles, no setup wizard, no admin rights, restart the app in background; if the copy fails the old exe stays (rollback). The running exe cannot overwrite itself: the app starts a hidden helper (PowerShell) then exits, or renames the running exe to `.old` first; pick the safest, document it in code.
+- Settings window: a "Güncelleme" block on the About or General page (match the existing glass settings style): current version, last check time, mode choice (3 options), interval choice, "Şimdi denetle" button with status text (up to date / new version / error), link to release notes.
+- `build.ps1`: also write `OpenVPN-Hizli-Arama-Kurulum.zip.sha256` next to each package zip (hash and file name, same format the existing release asset uses) so every release can carry it; add `docs\RELEASING.md` (how to cut a release: bump AssemblyInfo, `build.ps1 -NoProfiles`, `gh release create` with zip and sha256).
+- Security (binding): downloads only from the github.com release assets of this repo over HTTPS; SHA-256 verification mandatory before anything runs; never execute anything that failed verification; no credentials or profile data leave the machine.
+- Tests in `tests\Tests.cs`: version compare, tag parsing, release JSON fixture parsing (prerelease/draft ignored, missing asset), due-time decision for each interval, idle decision, settings round trip and defaults for an old settings.json without the new keys.
+
+Files: `modules\Updater.cs`, `modules\Settings.cs`, `modules\SettingsWindow.cs`, `OpenVpnQuickSearch.cs`, `paket\kur.ps1`, `build.ps1`, `docs\RELEASING.md`, `tests\Tests.cs`.
+Done when: tests pass; `build.ps1 -NoProfiles` builds; the check works against the real latest release (read-only GET; v2.0.0 equals current, so it reports up to date); the install path is exercised in a temp install dir with a fake package, never on the user's real install.
+
+### Task 6: Docs
+
+Update `README.md` (Turkish, keep structure) with every feature added since the first release: supported clients table (OpenVPN Connect, FortiClient, Sophos Connect, WatchGuard SSL VPN) with what works per client and known limits (Sophos format unverified until a profile exists, WatchGuard single connection), settings, the update system (check, ask/auto/off, interval, silent update when idle, release process), `forti.log`-style diagnostics, background-window behaviour. Add `paket\OpenVPN-Hizli-Arama-Kullanim.txt` notes only if a line is wrong now. No new screenshots.
 
 Files: `README.md`, `paket\OpenVPN-Hizli-Arama-Kullanim.txt`.
 Done when: the README mentions all four clients and no real host or user appears anywhere in the repo (`git grep` for the registry Server value is clean).
