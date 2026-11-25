@@ -93,6 +93,8 @@ internal sealed class SToggle : SControl
         var x = r.X + S(3) + (r.Width - d - S(6) - stretch) * pos.Value;
         using (var sh = new SolidBrush(Color.FromArgb(46, 0, 0, 0))) g.FillEllipse(sh, x, r.Y + S(4), d + stretch, d);
         using (var path = Ui.Round(new RectangleF(x, r.Y + S(3), d + stretch, d), d / 2F)) using (var b = new LinearGradientBrush(new RectangleF(x, r.Y + S(2), d, d + 2), Color.White, Color.FromArgb(226, 230, 240), 90F)) g.FillPath(b, path);
+        // disabled (e.g. the client is not installed): faded into the row surface
+        if (!Enabled) using (var path = Ui.Round(RectangleF.Inflate(r, 1, 1), (r.Height + 2) / 2F)) using (var b = new SolidBrush(Color.FromArgb(150, ParentBg))) g.FillPath(b, path);
         FocusRing(g, Rectangle.Round(r), r.Height / 2F);
     }
 }
