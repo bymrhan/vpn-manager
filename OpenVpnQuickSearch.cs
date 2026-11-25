@@ -1897,7 +1897,7 @@ internal sealed class SearchForm : Form
     // Auto mode: install only when idle (UpdateLogic.IsIdle), then restart with --background.
     void InstallPending()
     {
-        if (updatePackage == null || exiting) return;
+        if (updatePackage == null || exiting || updateInstalling) return;
         if (updateUserAsked)
         {
             if (UpdateBusy || UpdateDialogOpen) { ReportUpdate("Güncelleme, pencereler kapanınca kurulacak"); return; }
@@ -1909,19 +1909,34 @@ internal sealed class SearchForm : Form
         InstallUpdate(true);
     }
 
+    bool updateInstalling; // StartInstall is waiting for the helper on a worker thread
+
     void InstallUpdate(bool background)
     {
-        if (updatePackage == null || exiting) return;
+        if (updatePackage == null || exiting || updateInstalling) return;
         if (!IsInstalledCopy) { updatePackage = null; return; }   // guarded before download; never replace a portable copy
-        string err;
-        if (!UpdateClient.StartInstall(updatePackage, UpdateLogic.InstallDir, updateRelease != null ? updateRelease.Version : null, Process.GetCurrentProcess().Id, background, out err))
+        // StartInstall waits up to 10 s for kur.ps1 to report ready: off the UI thread.
+        updateInstalling = true;
+        var pkg = updatePackage; var version = updateRelease != null ? updateRelease.Version : null;
+        var pid = Process.GetCurrentProcess().Id;
+        ThreadPool.QueueUserWorkItem(delegate
         {
-            updatePackage = null; updateBadVersion = updateRelease != null ? updateRelease.Version : null;
-            SetStatus("Güncelleme başlatılamadı: " + err);
-            return;
-        }
-        // kur.ps1 -Update waits for this process to end, copies the new files and starts the app again.
-        ExitApp();
+            string err = null; var ok = false;
+            try { ok = UpdateClient.StartInstall(pkg, UpdateLogic.InstallDir, version, pid, background, out err); }
+            catch (Exception ex) { ok = false; err = ex.Message; }
+            UiInvoke(delegate
+            {
+                updateInstalling = false;
+                if (!ok)
+                {
+                    updatePackage = null; updateBadVersion = version;
+                    SetStatus("Güncelleme başlatılamadı: " + err);
+                    return;
+                }
+                // kur.ps1 -Update waits for this process to end, copies the new files and starts the app again.
+                ExitApp();
+            });
+        });
     }
 
     void ShowSettings()
