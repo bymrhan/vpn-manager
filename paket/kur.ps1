@@ -1,6 +1,7 @@
 # OpenVPN Hızlı Arama — kurulum (yönetici izni gerekmez; kullanıcı klasörüne kurar)
 #   Kur.cmd / install.ps1 : etkileşimli kurulum (aşağıdaki normal akış)
-#   -Update               : uygulamanın kendi sessiz güncellemesi (yalnızca uygulama çağırır)
+#   -Update               : sessiz guncelleme; uygulama (otomatik guncelleme) ya da install.ps1
+#                           (mevcut kurulum varsa; uygulamayi kendisi kapatir, -WaitPid vermez) cagirir
 param(
     [switch]$Update,        # quiet update: no wizard, no window, no Start menu change
     [string]$InstallDir,    # update target (default: the normal install dir)
@@ -12,7 +13,9 @@ $ErrorActionPreference = 'Stop'
 $src = [IO.Path]::GetDirectoryName($MyInvocation.MyCommand.Path)
 
 if ($Update) {
-    # Quiet update, started hidden by the app after it verified this package's SHA-256.
+    # Quiet update, started hidden by the app after it verified this package's SHA-256, or by
+    # install.ps1 (also after SHA-256) for an existing install: it stops the app itself first and
+    # passes no -WaitPid. Nothing below needs the app as caller (.bekliyor is then just unused).
     # Copies only the program files (uygulama\*, uninstaller). Settings, pins and history live in
     # %APPDATA%\OpenVpnQuickSearch and the profile pack in <dir>\profiller: none of them is touched.
     # Rollback: every file that is replaced is backed up first; if any copy fails, the backup is put
