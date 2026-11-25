@@ -14,6 +14,9 @@ try {
     if ($LASTEXITCODE -ne 0) { $out | Where-Object { $_ -match 'error' } | Write-Host; throw 'testler derlenemedi' }
     & $exe
     $code = $LASTEXITCODE
+    # install.ps1 update decision (offline, scratch folder in %TEMP%; runs in this process)
+    & (Join-Path $PSScriptRoot 'install-update.tests.ps1')
+    if ($LASTEXITCODE -ne 0 -and $code -eq 0) { $code = $LASTEXITCODE }
 }
 finally { Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue }
 exit $code
