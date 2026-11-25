@@ -7,8 +7,8 @@ the README section *Hata raporları ve günlükler*.
 
 - After a crash (or any time via *Ayarlar > Hakkında > Son hatayı bildir*) the app opens
   `https://github.com/bymrhan/vpn-manager/issues/new?template=hata-raporu.yml&labels=hata&title=…&rapor=…`
-  in the user's browser. The user reads the report and presses *Submit new issue*. The app itself
-  never uploads anything: there is no token in the app (it would be extracted from a public binary
+  in the user's browser. The sanitized report is inside that URL, so GitHub receives it when the page loads,
+  but it is published only when the user presses *Submit new issue*. The app creates nothing itself: there is no token in the app (it would be extracted from a public binary
   at once) and the reports come from customer VPN work, so the user must see what leaves the PC.
 - The issue form `.github/ISSUE_TEMPLATE/hata-raporu.yml` applies the `hata` label even when the
   reporter has no triage rights (a `labels=` URL parameter alone is ignored for them).
@@ -17,8 +17,8 @@ the README section *Hata raporları ve günlükler*.
   and have no fingerprint.
 - The report body: environment (app version, Windows build, CLR / .NET release, scale, which VPN
   clients are installed), the exception chain (type, sanitized message, frames as
-  `at Type.Method in File.cs:line N`), the last 60 sanitized log lines.
-- Release builds are compiled without a PDB, so frames normally have no file / line part.
+  `at Type.Method`, plus ` in File.cs:line N` only when a PDB was present), the last 60 sanitized log lines.
+- Release builds are compiled without a PDB, so their frames have no file / line part; the README says the same.
 
 ## Fingerprint
 

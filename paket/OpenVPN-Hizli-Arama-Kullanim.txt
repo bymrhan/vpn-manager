@@ -166,8 +166,10 @@ Hata raporları:
 Beklenmedik bir hatadan sonraki açılışta uygulama, temizlenmiş bir hata raporunu GitHub'da
 açmayı önerir ("Raporu aç" / "Sonra" / "Bir daha sorma"). Ayarlar > Hakkında > "Son hatayı
 bildir" ile istediğiniz zaman açabilirsiniz. Rapor parola, kullanıcı / profil / sunucu adı,
-IP ve e-posta adresi, makine adı ve kişisel klasör yolu içermez. Uygulama hiçbir şey
-göndermez: rapor tarayıcıda açılır, göndermeyi siz yaparsınız (GitHub hesabı gerekir).
+IP ve e-posta adresi, makine adı ve kişisel klasör yolu içermez. Rapor tarayıcıda açılan
+GitHub sayfasının adresiyle GitHub'a ulaşır ama siz Gönder'e basana kadar yayınlanmaz
+(GitHub hesabı gerekir). "Sonra" sonraki açılışta yeniden sorar (en fazla 3 kez).
+Günlük dosyaları (logs\app-*.log) temizlenmez; paylaşmadan önce okuyun.
 Kurulum paketleri:
 "OpenVPN-Hizli-Arama-PROFILLI-PAYLASMAYIN.zip" bu bilgisayarın OpenVPN profillerini (özel
 anahtarlarla) içerir; yalnızca kendi bilgisayarlarınıza taşımak için kullanın, PAYLAŞMAYIN.
