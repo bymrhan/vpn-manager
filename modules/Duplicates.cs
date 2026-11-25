@@ -362,14 +362,13 @@ internal sealed class DuplicateListView : Control
 
 internal sealed class DuplicatesForm : Form
 {
-    static readonly Color Danger = Color.FromArgb(214, 62, 74), DangerHover = Color.FromArgb(232, 84, 96);
 
     readonly List<DuplicateGroup> groups = new List<DuplicateGroup>();
     readonly Func<VpnProfile, string> remove;
     readonly DuplicateListView list = new DuplicateListView();
     readonly Label summary = new Label();
     readonly Panel footer = new Panel();
-    readonly Button deleteButton = new Button(), closeButton = new Button();
+    readonly SButton deleteButton = new SButton("", SButtonKind.Danger), closeButton = new SButton("", SButtonKind.Secondary);
     int removedCount;
 
     static int S(float v) { return Ui.S(v); }
@@ -424,10 +423,9 @@ internal sealed class DuplicatesForm : Form
         };
         footer.Resize += delegate { LayoutFooter(); };
 
-        StyleButton(deleteButton, Danger, DangerHover, Color.White, Ui.NameFont, S(180));
+        StyleButton(deleteButton, S(180));
         deleteButton.Click += delegate { DeleteChecked(); };
-        StyleButton(closeButton, Ui.Surface, Ui.SurfaceHover, Ui.Text, Ui.MenuFont, S(96));
-        closeButton.FlatAppearance.BorderColor = Ui.BorderStrong;
+        StyleButton(closeButton, S(96));
         closeButton.Text = "Kapat";
         closeButton.Click += delegate { Close(); };
         footer.Controls.Add(deleteButton);
@@ -453,17 +451,10 @@ internal sealed class DuplicatesForm : Form
         catch { }
     }
 
-    static void StyleButton(Button b, Color back, Color hover, Color fore, Font font, int width)
+    // glass pill buttons (SButton), the same as in Settings and the glass dialogs
+    static void StyleButton(SButton b, int width)
     {
-        b.FlatStyle = FlatStyle.Flat;
-        b.FlatAppearance.BorderSize = 1;
-        b.FlatAppearance.BorderColor = back;
-        b.FlatAppearance.MouseOverBackColor = hover;
-        b.FlatAppearance.MouseDownBackColor = hover;
-        b.BackColor = back; b.ForeColor = fore; b.Font = font;
         b.Size = new Size(width, S(34));
-        b.Cursor = Cursors.Hand;
-        b.TabStop = true;
     }
 
     void LayoutFooter()
@@ -484,9 +475,7 @@ internal sealed class DuplicatesForm : Form
             groups.Count + " grup, " + total + " yinelenen profil bulundu. Her grupta en son kullanılan profil korunur.";
         deleteButton.Text = "Seçilenleri sil (" + selected + ")";
         deleteButton.Enabled = selected > 0;
-        deleteButton.BackColor = selected > 0 ? Danger : Ui.Surface;
-        deleteButton.FlatAppearance.BorderColor = selected > 0 ? Danger : Ui.Border;
-        deleteButton.ForeColor = selected > 0 ? Color.White : Ui.Faint;
+        deleteButton.Invalidate();
     }
 
     static bool IsRemoved(DuplicateEntry e) { return e.Removed; }

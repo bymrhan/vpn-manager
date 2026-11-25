@@ -456,8 +456,8 @@ internal sealed class HistoryForm : Form
     readonly ListView list = new ListView();
     readonly ImageList rowHeight = new ImageList();
     readonly Label empty = new Label();
-    readonly Button exportButton = new Button();
-    readonly Button closeButton = new Button();
+    readonly SButton exportButton = new SButton("", SButtonKind.Secondary);
+    readonly SButton closeButton = new SButton("", SButtonKind.Primary);
 
     public HistoryForm()
     {
@@ -572,14 +572,10 @@ internal sealed class HistoryForm : Form
         closeButton.SetBounds(ClientSize.Width - pad - bw, btnTop, bw, btnH);
     }
 
-    void StyleButton(Button b, string text, bool primary)
+    // glass pill buttons, the same as in Settings and the glass dialogs
+    void StyleButton(SButton b, string text, bool primary)
     {
-        b.Text = text; b.FlatStyle = FlatStyle.Flat; b.Font = Ui.SubFont; b.Cursor = Cursors.Hand;
-        b.BackColor = primary ? Ui.Brand : Ui.Surface; b.ForeColor = Ui.Text;
-        b.FlatAppearance.BorderColor = primary ? Ui.Accent2 : Ui.BorderStrong;
-        b.FlatAppearance.MouseOverBackColor = primary ? Ui.Accent : Ui.SurfaceHover;
-        b.FlatAppearance.MouseDownBackColor = Ui.SelectedFill;
-        b.UseVisualStyleBackColor = false;
+        b.Text = text; b.Kind = primary ? SButtonKind.Primary : SButtonKind.Secondary;
     }
 
     void PaintTotals(object sender, PaintEventArgs e)

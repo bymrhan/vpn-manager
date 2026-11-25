@@ -47,6 +47,7 @@ static class Tests
         Run("Erişim testi uç noktası", ReachabilityEndpoints);
         Run("Ayarlar: sağlayıcı anahtarları", ProviderSettings);
         Run("Demo sağlayıcı satırları", DemoProviders);
+        Run("Diyalog düğmeleri (SButton)", DialogButtons);
         Run("Güncelleme: sürüm karşılaştırma", UpdateVersions);
         Run("Güncelleme: sürüm JSON'u", UpdateReleaseJson);
         Run("Güncelleme: SHA-256 dosyası", UpdateSha256);
@@ -568,6 +569,25 @@ static class Tests
                 Check(TaskbarButton.HasMinimizeBox(h) == on, "küçültme kutusu " + (on ? "açıldı" : "kapandı") + " (" + (i + 1) + ")");
             }
             Check(f.Handle == h && !TaskbarButton.Iconic(h), "küçültme kutusu tutamacı değiştirmez; gizli form küçültülmüş değil");
+        }
+    }
+
+    // Dialog buttons are glass SButtons: they must still work as AcceptButton / CancelButton (no window is shown).
+    static void DialogButtons()
+    {
+        using (var f = new System.Windows.Forms.Form())
+        {
+            var cancel = new SButton("Vazgeç", SButtonKind.Secondary) { DialogResult = System.Windows.Forms.DialogResult.Cancel };
+            var ok = new SButton("Bağlan", SButtonKind.Primary); var clicks = 0; ok.Click += delegate { clicks++; };
+            f.Controls.Add(cancel); f.Controls.Add(ok);
+            f.AcceptButton = ok; f.CancelButton = cancel;
+            Check(f.AcceptButton == ok && f.CancelButton == cancel, "SButton Enter / Esc düğmesi olabilir");
+            cancel.PerformClick();
+            Check(f.DialogResult == System.Windows.Forms.DialogResult.Cancel, "DialogResult olan düğme formu kapatır");
+            ok.PerformClick();
+            Check(clicks == 1, "PerformClick Click olayını çalıştırır");
+            ok.Enabled = false; ok.PerformClick();
+            Check(clicks == 1, "devre dışı düğme tıklanmaz");
         }
     }
 

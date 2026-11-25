@@ -124,7 +124,7 @@ internal sealed class FortiCredentialForm : Form
 {
     readonly TextBox user = new TextBox(), pass = new TextBox();
     readonly CheckBox remember = new CheckBox();
-    readonly Button ok = new Button(), cancel = new Button();
+    readonly SButton ok = new SButton("", SButtonKind.Primary), cancel = new SButton("", SButtonKind.Secondary);
 
     public FortiCredential Result { get; private set; }
     public bool Remember { get { return remember.Checked; } }
@@ -181,13 +181,10 @@ internal sealed class FortiCredentialForm : Form
         return y + Ui.S(56);
     }
 
-    static void Style(Button b, string text, bool primary)
+    // glass pill buttons, the same as in Settings and the glass dialogs
+    static void Style(SButton b, string text, bool primary)
     {
-        b.Text = text; b.FlatStyle = FlatStyle.Flat; b.Font = Ui.SubFont; b.Cursor = Cursors.Hand;
-        b.BackColor = primary ? Ui.Brand : Ui.Surface; b.ForeColor = Ui.Text;
-        b.FlatAppearance.BorderColor = primary ? Ui.Accent2 : Ui.BorderStrong;
-        b.FlatAppearance.MouseOverBackColor = primary ? Ui.Accent : Ui.SurfaceHover;
-        b.UseVisualStyleBackColor = false;
+        b.Text = text; b.Kind = primary ? SButtonKind.Primary : SButtonKind.Secondary;
     }
 
     protected override void OnHandleCreated(EventArgs e)
