@@ -10,10 +10,71 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 // =====================================================================
-// First-run setup: detects OpenVPN Connect / FortiClient on this PC, optionally imports the
-// bundled profile pack (profiller\ next to the exe), and sets the start-up options.
-// Shown when no settings file exists yet, or with --setup.
+// First-run setup: detects OpenVPN Connect, FortiClient, Sophos Connect and WatchGuard SSL VPN on
+// this PC, optionally imports the bundled profile pack (profiller\ next to the exe; OpenVPN and
+// FortiClient only), and sets the start-up options, provider toggles and theme (previewed live).
+// Shown when no settings file exists yet, or with --setup. Demo mode (--demo) shows fictional
+// counts and reads, starts or writes nothing outside the settings file.
 // =====================================================================
+
+// Pure helpers for the wizard (unit-tested): status texts, toggle defaults, theme index.
+internal static class WizardLogic
+{
+    public static readonly string[] ThemeKeys = { "dark", "light", "system" };
+    public const string NotFound = "Bulunamadı (isteğe bağlı)";
+
+    public static int ThemeIndex(string theme) { var i = Array.IndexOf(ThemeKeys, theme); return i < 0 ? 0 : i; }
+    public static string ThemeKey(int index) { return index >= 0 && index < ThemeKeys.Length ? ThemeKeys[index] : ThemeKeys[0]; }
+
+    // Provider toggle as first shown: off for a client that is not installed; otherwise the saved
+    // choice, or on for a first run (no settings file yet).
+    public static bool ToggleOn(bool hadSettings, bool saved, bool installed) { return installed && (!hadSettings || saved); }
+    // Value written back: a disabled toggle (client not installed) keeps the saved choice.
+    public static bool SavedShow(bool saved, bool toggle, bool installed) { return installed ? toggle : saved; }
+
+    // "3.5.1 (1234)" / "3.5.1.4321" -> "3.5.1"; "" when unknown.
+    public static string ShortVersion(string v)
+    {
+        if (string.IsNullOrEmpty(v)) return "";
+        v = v.Trim(); var sp = v.IndexOfAny(new[] { ' ', '(', '-', '+' }); if (sp > 0) v = v.Substring(0, sp);
+        var parts = v.Split('.'); if (parts.Length > 3) v = string.Join(".", parts, 0, 3);
+        return v.Trim('.');
+    }
+
+    public static string OpenVpnStatus(bool installed, string version, int profiles)
+    {
+        if (!installed) return "Bulunamadı — openvpn.net/client adresinden kurabilirsiniz";
+        var ver = ShortVersion(version);
+        return "Kurulu" + (ver.Length > 0 ? " · sürüm " + ver : "") + " · bu cihazda " + profiles + " profil";
+    }
+
+    public static string FortiStatus(bool installed, int tunnels)
+    {
+        return installed ? "Kurulu · bu cihazda " + tunnels + " tünel" : NotFound;
+    }
+
+    // connections < 0: still scanning (sccli runs off the UI thread).
+    public static string SophosStatus(bool installed, int connections)
+    {
+        if (!installed) return NotFound;
+        if (connections < 0) return "Kurulu · taranıyor…";
+        if (connections == 0) return "Kurulu · bağlantı yok: .pro/.ovpn dosyasını Sophos Connect'e ekleyin";
+        return "Kurulu · bu cihazda " + connections + " bağlantı";
+    }
+
+    public static string WatchGuardStatus(bool installed, int servers)
+    {
+        if (!installed) return NotFound;
+        if (servers <= 0) return "Kurulu · istemcide sunucu kayıtlı değil";
+        return "Kurulu · " + servers + " kayıtlı sunucu";
+    }
+
+    // Description under a provider toggle.
+    public static string ShowDescription(string client, string whenInstalled, bool installed)
+    {
+        return installed ? whenInstalled : client + " bu cihazda bulunamadı.";
+    }
+}
 
 internal static class ProfilePack
 {
@@ -84,39 +145,52 @@ internal sealed class SetupWizard : Form
     readonly bool hadSettings = File.Exists(SettingsStore.FilePath);
     readonly SPage page;
     readonly SButton finish = new SButton("Kurulumu tamamla", SButtonKind.Primary), skip = new SButton("Atla", SButtonKind.Ghost);
-    readonly SToggle importOvpn = new SToggle(), importForti = new SToggle(), autoStart = new SToggle(), desktop = new SToggle(), showForti = new SToggle(), deletePack = new SToggle();
+    readonly SToggle importOvpn = new SToggle(), importForti = new SToggle(), autoStart = new SToggle(), desktop = new SToggle(), deletePack = new SToggle();
+    readonly SToggle showForti = new SToggle(), showSophos = new SToggle(), showWatchGuard = new SToggle();
     readonly SSegmented theme = new SSegmented("Koyu", "Açık", "Sistem");
-    string progress = ""; float progressValue = -1; bool running;
+    string progress = ""; float progressValue = -1; bool running, saved;
     readonly List<string> packOvpn = ProfilePack.OpenVpnNames(), packForti = ProfilePack.FortiNames();
     List<string> missingOvpn = new List<string>(), missingForti = new List<string>();
-    readonly bool ovpnInstalled, fortiInstalled;
+    readonly bool ovpnInstalled, fortiInstalled, sophosInstalled, watchGuardInstalled;
+    readonly string originalTheme;
+    readonly SRow sophosRow;
 
     public SetupWizard()
     {
+        originalTheme = settings.Theme;
+        Themes.Apply(settings.Theme); // the stored choice (first run: the default), "system" follows Windows
         AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.CenterScreen;
         Text = "OpenVPN Hızlı Arama — Kurulum"; DoubleBuffered = true; KeyPreview = true; BackColor = Ui.Bg;
         Size = new Size(S(640), Math.Min(S(700), Screen.PrimaryScreen.WorkingArea.Height - S(40)));
         Icon = IconArt.Load(new Size(32, 32)) ?? Icon;
         SetStyle(ControlStyles.ResizeRedraw, true);
 
-        ovpnInstalled = File.Exists(OpenVpnExe);
-        fortiInstalled = FortiStore.IsInstalled;
-        var existingOvpn = ExistingOpenVpnNames();
-        var existingForti = new HashSet<string>(FortiStore.Load().Where(p => p.Id.StartsWith(FortiStore.IdPrefixSsl)).Select(p => p.Name), StringComparer.CurrentCultureIgnoreCase);
+        // Demo: every client "installed" with the fictional demo rows; nothing is read from this PC.
+        var demo = Demo.On ? Demo.Profiles() : null;
+        ovpnInstalled = demo != null || File.Exists(OpenVpnExe);
+        fortiInstalled = demo != null || FortiStore.IsInstalled;
+        sophosInstalled = demo != null || SophosStore.IsInstalled;
+        watchGuardInstalled = demo != null || WatchGuardStore.IsInstalled;
+        var existingOvpn = demo != null ? new HashSet<string>(demo.Where(p => VpnProviders.KindOf(p) == VpnKind.OpenVpn).Select(p => p.Name)) : ExistingOpenVpnNames();
+        var fortiAll = demo != null ? demo.Where(FortiStore.IsForti).ToList() : FortiStore.Load();
+        var existingForti = new HashSet<string>(fortiAll.Where(p => p.Id.StartsWith(FortiStore.IdPrefixSsl)).Select(p => p.Name), StringComparer.CurrentCultureIgnoreCase);
         missingOvpn = packOvpn.Where(n => !existingOvpn.Contains(n)).ToList();
         missingForti = packForti.Where(n => !existingForti.Contains(n)).ToList();
+        // WatchGuard: registry only, cheap. Sophos: sccli, so counted off the UI thread (OnShown).
+        var wgServers = demo != null ? demo.Count(WatchGuardStore.IsWatchGuard) : watchGuardInstalled ? WatchGuardStore.Load().Count : 0;
 
-        page = new SPage("Hoş geldiniz", "Bu cihazdaki VPN uygulamaları tarandı. Ayarları seçip kurulumu tamamlayın.") { BackColor = Ui.Bg };
+        page = new SPage("Hoş geldiniz", "OpenVPN, FortiClient, Sophos ve WatchGuard tarandı. Ayarları seçip tamamlayın.") { BackColor = Ui.Bg };
         page.SetBounds(0, S(64), Width, Height - S(64) - S(72));
         page.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(page);
 
         // detected apps
-        var ovpnProfiles = existingOvpn.Count;
-        var fortiTunnels = FortiStore.Load().Count;
+        sophosRow = new SRow("Sophos Connect", WizardLogic.SophosStatus(sophosInstalled, -1), null, Glyph.ShieldLock);
         page.Add(new SCard(), caption: "ALGILANAN VPN UYGULAMALARI")
-            .Add(new SRow("OpenVPN Connect", ovpnInstalled ? "Kurulu · bu cihazda " + ovpnProfiles + " profil" : "Bulunamadı — openvpn.net/client adresinden kurabilirsiniz", null, Glyph.Server))
-            .Add(new SRow("FortiClient VPN", fortiInstalled ? "Kurulu · bu cihazda " + fortiTunnels + " tünel" : "Bulunamadı (isteğe bağlı)", null, Glyph.ShieldLock));
+            .Add(new SRow("OpenVPN Connect", WizardLogic.OpenVpnStatus(ovpnInstalled, demo != null ? "" : OpenVpnVersion(), existingOvpn.Count), null, Glyph.Server))
+            .Add(new SRow("FortiClient VPN", WizardLogic.FortiStatus(fortiInstalled, fortiAll.Count), null, Glyph.ShieldLock))
+            .Add(sophosRow)
+            .Add(new SRow(WatchGuardStore.DisplayName, WizardLogic.WatchGuardStatus(watchGuardInstalled, wgServers), null, Glyph.ShieldLock));
 
         // bundled profile pack
         if (packOvpn.Count > 0 || packForti.Count > 0)
@@ -137,13 +211,22 @@ internal sealed class SetupWizard : Form
         }
 
         // options
-        autoStart.SetInstant(hadSettings ? AutoStart.IsEnabled() : true); desktop.SetInstant(!hadSettings); showForti.SetInstant(hadSettings ? settings.ShowForti : fortiInstalled);
-        theme.SelectedIndex = Math.Max(0, Array.IndexOf(new[] { "dark", "light", "system" }, settings.Theme));
+        autoStart.SetInstant(hadSettings ? AutoStart.IsEnabled() : true); desktop.SetInstant(!hadSettings);
+        // Provider toggles: on for an installed client (or the saved choice); greyed out when the client is missing.
+        showForti.SetInstant(WizardLogic.ToggleOn(hadSettings, settings.ShowForti, fortiInstalled)); showForti.Enabled = fortiInstalled;
+        showSophos.SetInstant(WizardLogic.ToggleOn(hadSettings, settings.ShowSophos, sophosInstalled)); showSophos.Enabled = sophosInstalled;
+        showWatchGuard.SetInstant(WizardLogic.ToggleOn(hadSettings, settings.ShowWatchGuard, watchGuardInstalled)); showWatchGuard.Enabled = watchGuardInstalled;
+        theme.SelectedIndex = WizardLogic.ThemeIndex(settings.Theme);
+        // Live preview: the wizard recolors at once; Atla / Kurulumu tamamla keep it, closing otherwise restores it.
+        theme.Changed += delegate { Themes.Apply(WizardLogic.ThemeKey(theme.SelectedIndex)); ApplyColors(); };
         page.Add(new SCard(), caption: "AYARLAR")
             .Add(new SRow("Windows açılışında başlat", "OpenVPN açılınca panel kendiliğinden yanına gelir.", autoStart, Glyph.Power))
             .Add(new SRow("Masaüstü kısayolu", "\"OpenVPN Hızlı Arama\" kısayolu oluşturulur.", desktop, Glyph.Open))
-            .Add(new SRow("FortiClient profillerini göster", null, showForti, Glyph.ShieldLock))
+            .Add(new SRow("FortiClient profillerini göster", WizardLogic.ShowDescription("FortiClient", "FortiClient VPN tünellerini de listele.", fortiInstalled), showForti, Glyph.ShieldLock))
+            .Add(new SRow("Sophos Connect profillerini göster", WizardLogic.ShowDescription("Sophos Connect", "Sophos Connect bağlantılarını da listele.", sophosInstalled), showSophos, Glyph.ShieldLock))
+            .Add(new SRow("WatchGuard SSL VPN profillerini göster", WizardLogic.ShowDescription("WatchGuard SSL VPN", "WatchGuard sunucularını da listele.", watchGuardInstalled), showWatchGuard, Glyph.ShieldLock))
             .Add(new SRow("Tema", null, theme, Glyph.Palette));
+        FormClosed += delegate { if (!saved) Themes.Apply(originalTheme); };
 
         finish.Width = Math.Max(finish.Width, S(170));
         finish.Location = new Point(Width - S(24) - finish.Width, Height - S(72) + (S(72) - finish.Height) / 2);
@@ -163,7 +246,52 @@ internal sealed class SetupWizard : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        try { var c = 2; NativeMethods.DwmSetWindowAttribute(Handle, 33, ref c, 4); var b = Ui.BorderStrong.R | (Ui.BorderStrong.G << 8) | (Ui.BorderStrong.B << 16); NativeMethods.DwmSetWindowAttribute(Handle, 34, ref b, 4); } catch { }
+        ApplyFrame();
+    }
+
+    // DWM frame in the current palette: dark/light mode, rounded corners, border color.
+    void ApplyFrame()
+    {
+        if (!IsHandleCreated) return;
+        try
+        {
+            var d = Themes.IsLight ? 0 : 1; NativeMethods.DwmSetWindowAttribute(Handle, 20, ref d, 4);
+            var c = 2; NativeMethods.DwmSetWindowAttribute(Handle, 33, ref c, 4);
+            var b = Ui.BorderStrong.R | (Ui.BorderStrong.G << 8) | (Ui.BorderStrong.B << 16); NativeMethods.DwmSetWindowAttribute(Handle, 34, ref b, 4);
+        }
+        catch { }
+    }
+
+    // Recolors the wizard after Themes.Apply (same steps as SettingsForm.ApplyColors).
+    void ApplyColors()
+    {
+        BackColor = Ui.Bg; page.BackColor = Ui.Bg;
+        foreach (Control c in page.Controls) if (c is Panel) c.BackColor = Ui.Bg;
+        ApplyFrame();
+        Invalidate(true);
+    }
+
+    // Sophos Connect is listed through sccli (one process per call, 10 s timeout each), so the count
+    // is fetched on a worker thread; the row shows "taranıyor…" until then. Only "list"/"get" run.
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        if (!sophosInstalled) return;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            var n = 0;
+            try { n = Demo.On ? Demo.Profiles().Count(SophosStore.IsSophos) : SophosStore.Load().Count; } catch { }
+            try
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke(new Action(delegate
+                {
+                    if (IsDisposed) return;
+                    sophosRow.Description = WizardLogic.SophosStatus(true, n); sophosRow.Invalidate();
+                }));
+            }
+            catch { } // closed meanwhile
+        });
     }
 
     protected override void WndProc(ref Message m)
@@ -213,6 +341,12 @@ internal sealed class SetupWizard : Form
         }
     }
 
+    static string OpenVpnVersion()
+    {
+        try { var exe = OpenVpnExe; return exe.Length > 0 ? FileVersionInfo.GetVersionInfo(exe).ProductVersion : ""; }
+        catch { return ""; }
+    }
+
     static HashSet<string> ExistingOpenVpnNames()
     {
         try { return new HashSet<string>(ProfileStore.Load().Select(p => p.Name), StringComparer.CurrentCultureIgnoreCase); }
@@ -221,10 +355,15 @@ internal sealed class SetupWizard : Form
 
     void SaveBasics()
     {
-        settings.Theme = new[] { "dark", "light", "system" }[theme.SelectedIndex];
-        settings.ShowForti = showForti.Checked;
+        settings.Theme = WizardLogic.ThemeKey(theme.SelectedIndex);
+        settings.ShowForti = WizardLogic.SavedShow(settings.ShowForti, showForti.Checked, fortiInstalled);
+        settings.ShowSophos = WizardLogic.SavedShow(settings.ShowSophos, showSophos.Checked, sophosInstalled);
+        settings.ShowWatchGuard = WizardLogic.SavedShow(settings.ShowWatchGuard, showWatchGuard.Checked, watchGuardInstalled);
         settings.AutoStart = autoStart.Checked;
+        saved = true;
+        Themes.Apply(settings.Theme); // the main window is created after the wizard with this palette
         try { SettingsStore.Save(settings); } catch { }
+        if (Demo.On) return; // demo: no Startup or desktop shortcut
         try { AutoStart.SetEnabled(autoStart.Checked); } catch { }
         if (desktop.Checked) try { CreateDesktopShortcut(); } catch { }
     }
@@ -238,7 +377,7 @@ internal sealed class SetupWizard : Form
         lt.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, lnk, new object[] { Application.ExecutablePath });
         lt.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, lnk, new object[] { Path.GetDirectoryName(Application.ExecutablePath) });
         lt.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, lnk, new object[] { Application.ExecutablePath + ",0" });
-        lt.InvokeMember("Description", System.Reflection.BindingFlags.SetProperty, null, lnk, new object[] { "OpenVPN ve FortiClient profillerini hızlıca ara ve bağlan" });
+        lt.InvokeMember("Description", System.Reflection.BindingFlags.SetProperty, null, lnk, new object[] { "OpenVPN, FortiClient, Sophos ve WatchGuard bağlantılarını hızlıca ara ve yönet" });
         lt.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, lnk, null);
     }
 
@@ -247,8 +386,8 @@ internal sealed class SetupWizard : Form
         if (running) return;
         running = true; finish.Enabled = false; skip.Enabled = false; finish.Invalidate(); skip.Invalidate();
         SaveBasics();
-        var doOvpn = importOvpn.Checked && missingOvpn.Count > 0;
-        var doForti = importForti.Checked && missingForti.Count > 0;
+        var doOvpn = !Demo.On && importOvpn.Checked && missingOvpn.Count > 0;   // demo: never imports
+        var doForti = !Demo.On && importForti.Checked && missingForti.Count > 0;
         var removePack = deletePack.Checked;
         ThreadPool.QueueUserWorkItem(delegate
         {

@@ -86,6 +86,7 @@ static class Tests
         Run("GitHub gönderimi: güvenlik incelemesi korumaları", IssueReviewGuards);
         Run("Ayarlar: uygulama nerede görünsün (Presence, eski anahtar)", TaskbarSetting);
         Run("Tepsi / görev çubuğu kararları", TaskbarDecisions);
+        Run("Kurulum yardımcısı: dört istemci, anahtarlar, tema", WizardLogicRules);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -580,6 +581,33 @@ static class Tests
         var reach = 0;
         foreach (var p in rows) if (Demo.Reach(p.Id) != ReachState.Unknown) reach++;
         Check(reach == rows.Count, "her demo satırının erişim durumu var");
+    }
+
+    // First-run wizard: status texts for the four clients, provider toggle defaults, theme index.
+    static void WizardLogicRules()
+    {
+        Check(WizardLogic.OpenVpnStatus(true, "3.5.1 (4321)", 7) == "Kurulu · sürüm 3.5.1 · bu cihazda 7 profil", "OpenVPN: sürüm ve profil sayısı");
+        Check(WizardLogic.OpenVpnStatus(true, "", 0) == "Kurulu · bu cihazda 0 profil", "OpenVPN: sürüm bilinmiyorsa yazılmaz");
+        Check(WizardLogic.OpenVpnStatus(false, "3.5.1", 3).StartsWith("Bulunamadı", StringComparison.Ordinal), "OpenVPN: kurulu değil");
+        Check(WizardLogic.ShortVersion("3.4.2.4547") == "3.4.2" && WizardLogic.ShortVersion(null) == "" && WizardLogic.ShortVersion(" 3.5 ") == "3.5", "sürüm kısaltma");
+        Check(WizardLogic.FortiStatus(true, 4) == "Kurulu · bu cihazda 4 tünel" && WizardLogic.FortiStatus(false, 4) == WizardLogic.NotFound, "FortiClient metni");
+        Check(WizardLogic.SophosStatus(true, -1) == "Kurulu · taranıyor…", "Sophos: taranırken yer tutucu");
+        Check(WizardLogic.SophosStatus(true, 2) == "Kurulu · bu cihazda 2 bağlantı", "Sophos: bağlantı sayısı");
+        Check(WizardLogic.SophosStatus(true, 0).Contains(".pro/.ovpn"), "Sophos: bağlantı yoksa ipucu");
+        Check(WizardLogic.SophosStatus(false, 5) == WizardLogic.NotFound, "Sophos: kurulu değil");
+        Check(WizardLogic.WatchGuardStatus(true, 3) == "Kurulu · 3 kayıtlı sunucu", "WatchGuard: sunucu sayısı");
+        Check(WizardLogic.WatchGuardStatus(true, 0).Contains("sunucu kayıtlı değil"), "WatchGuard: sunucu yoksa ipucu");
+        Check(WizardLogic.WatchGuardStatus(false, 1) == WizardLogic.NotFound, "WatchGuard: kurulu değil");
+
+        Check(WizardLogic.ToggleOn(false, false, true) && !WizardLogic.ToggleOn(false, true, false), "ilk kurulum: kuruluysa açık, değilse kapalı");
+        Check(WizardLogic.ToggleOn(true, true, true) && !WizardLogic.ToggleOn(true, false, true) && !WizardLogic.ToggleOn(true, true, false), "ayar varsa kayıtlı seçim (kurulu değilse kapalı)");
+        Check(WizardLogic.SavedShow(true, false, true) == false && WizardLogic.SavedShow(true, false, false) == true && WizardLogic.SavedShow(false, true, false) == false, "kurulu olmayan istemcinin ayarı değişmez");
+        Check(WizardLogic.ShowDescription("Sophos Connect", "x", false) == "Sophos Connect bu cihazda bulunamadı." && WizardLogic.ShowDescription("Sophos Connect", "x", true) == "x", "anahtar açıklaması");
+
+        var ok = true;
+        for (var i = 0; i < 3; i++) if (WizardLogic.ThemeIndex(WizardLogic.ThemeKey(i)) != i) ok = false;
+        Check(ok && WizardLogic.ThemeKey(1) == "light" && WizardLogic.ThemeKey(2) == "system", "tema dizini <-> anahtar");
+        Check(WizardLogic.ThemeIndex("bilinmeyen") == 0 && WizardLogic.ThemeIndex(null) == 0 && WizardLogic.ThemeKey(9) == "dark", "geçersiz tema koyuya döner");
     }
 
     // Load() reads the registry only: as many profiles as Server entries, and no client process.

@@ -2776,7 +2776,7 @@ internal static class Program
                     var firstRun = !File.Exists(SettingsStore.FilePath) || args.Any(a => a.Equals("--setup", StringComparison.OrdinalIgnoreCase));
                     if (firstRun && !background)
                     {
-                        Themes.Apply("dark");
+                        Themes.Apply(SettingsStore.Load().Theme); // stored theme (first run: default); the wizard previews changes live
                         using (var wizard = new SetupWizard()) Application.Run(wizard);
                     }
                     var settings = SettingsStore.Load();
