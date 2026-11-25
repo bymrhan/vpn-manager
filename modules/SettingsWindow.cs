@@ -428,6 +428,7 @@ internal sealed class SNote : SControl
 {
     public string Text2; public Glyph Glyph;
     public SNote(string text, Glyph glyph) { Text2 = text; Glyph = glyph; Height = S(50); }
+    public void SetText(string text) { Text2 = text; OnSizeChanged(EventArgs.Empty); Invalidate(); }
     // Height follows the wrapped text at the current width (theme, DPI and font can change it).
     protected override void OnSizeChanged(EventArgs e)
     {
@@ -785,18 +786,27 @@ internal sealed class SettingsForm : Form
         // "Hata raporları ve günlükler"). Nothing is sent by the app; the report opens in the browser.
         var logToggle = new SToggle(); logToggle.SetInstant(work.LogEnabled);
         logToggle.CheckedChanged += delegate { work.LogEnabled = logToggle.Checked; Dirty(); };
-        var askToggle = new SToggle(); askToggle.SetInstant(work.CrashPrompt != "never");
-        askToggle.CheckedChanged += delegate { work.CrashPrompt = askToggle.Checked ? "ask" : "never"; Dirty(); };
+        var promptModes = new[] { "ask", "auto", "never" };
+        var prompt = new SSegmented("Sor", "Otomatik", "Kapalı") { SelectedIndex = Math.Max(0, Array.IndexOf(promptModes, work.CrashPrompt)) };
+        var promptRow = new SRow("Çökmeden sonra rapor", CrashPromptText(work.CrashPrompt), prompt, Glyph.Info);
+        var note = new SNote(CrashReporter.SummaryText(work.CrashPrompt), Glyph.Lock);
+        prompt.Changed += delegate
+        {
+            work.CrashPrompt = promptModes[prompt.SelectedIndex];
+            promptRow.Description = CrashPromptText(work.CrashPrompt); promptRow.Invalidate();
+            note.SetText(CrashReporter.SummaryText(work.CrashPrompt));
+            Dirty();
+        };
         var openLogs = new SButton("Aç", SButtonKind.Secondary, Glyph.Folder);
         openLogs.Click += delegate { if (OpenLogFolder != null) OpenLogFolder(); };
         var report = new SButton("Aç", SButtonKind.Secondary, Glyph.Open);
         report.Click += delegate { if (ReportLastError != null) ReportLastError(this); };
         page.Add(new SCard(), caption: "TANILAMA")
             .Add(new SRow("Hata kaydı tut", "Uygulama günlüğü ve hata kayıtları; parola yazılmaz", logToggle, Glyph.History))
-            .Add(new SRow("Çökmeden sonra rapor öner", "Sonraki açılışta GitHub'da rapor açmayı sorar", askToggle, Glyph.Info))
+            .Add(promptRow)
             .Add(new SRow("Günlük klasörünü aç", ShortPath(CrashReporter.DefaultLogDir), openLogs, Glyph.Folder))
-            .Add(new SRow("Son hatayı bildir", "Temizlenmiş raporu tarayıcıda GitHub'da açar", report, Glyph.Open));
-        page.Add(new SNote(CrashReporter.ReportSummary, Glyph.Lock));
+            .Add(new SRow("Son hatayı bildir", IssueToken.Available ? "Temizlenmiş raporu GitHub'a gönderir (önce gösterir)" : "Temizlenmiş raporu tarayıcıda GitHub'da açar", report, Glyph.Open));
+        page.Add(note);
 
         var dataDir = Path.GetDirectoryName(SettingsStore.FilePath);
         var openData = new SButton("Aç", SButtonKind.Secondary, Glyph.Folder);
@@ -835,6 +845,14 @@ internal sealed class SettingsForm : Form
     public string ReleaseNotesUrl = UpdateLogic.ReleasesPage;      // newest release page once a check found one
     public Action OpenLogFolder;                                  // diagnostics: open %APPDATA%\OpenVpnQuickSearch\logs
     public Action<IWin32Window> ReportLastError;                  // diagnostics: "Son hatayı bildir" (owner = this window)
+
+    // One line under "Çökmeden sonra rapor"; the note below carries the full warning.
+    static string CrashPromptText(string mode)
+    {
+        if (mode == "auto") return IssueToken.Available ? "Otomatik: sormadan gönderir (herkese açık)" : "Otomatik: anahtar yok, Sor gibi";
+        if (mode == "never") return "Kapalı: sormaz";
+        return "Sor: göndermeden önce sorar";
+    }
 
     static string ModeText(string mode)
     {

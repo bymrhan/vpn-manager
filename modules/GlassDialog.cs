@@ -27,11 +27,6 @@ internal sealed class GlassDialog : Form
         AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.CenterParent;
         KeyPreview = true; DoubleBuffered = true; BackColor = Ui.Bg; ForeColor = Ui.Text; Font = SFonts.Nav;
 
-        var width = S(440); var textW = width - S(96);
-        var textH = Math.Min(S(360), Math.Max(S(24), TextRenderer.MeasureText(this.text, bodyFont, new Size(textW, 1000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height));
-        textRect = new Rectangle(S(76), S(66), textW, textH);
-        Size = new Size(width, textRect.Bottom + S(84));
-
         string[] labels; DialogResult[] results;
         switch (kind)
         {
@@ -44,6 +39,12 @@ internal sealed class GlassDialog : Form
         {
             labels = custom; results = ChoiceResults.Take(custom.Length).ToArray();
         }
+        // Wide enough for all buttons (custom labels can be long), at least 440.
+        var need = S(44) + (labels.Length - 1) * S(8) + labels.Sum(l => Math.Max(S(92), TextRenderer.MeasureText(l, SFonts.Button).Width + S(32)));
+        var width = Math.Max(S(440), need); var textW = width - S(96);
+        var textH = Math.Min(S(420), Math.Max(S(24), TextRenderer.MeasureText(this.text, bodyFont, new Size(textW, 1000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height));
+        textRect = new Rectangle(S(76), S(66), textW, textH);
+        Size = new Size(width, textRect.Bottom + S(84));
         var x = Width - S(22);
         for (var i = labels.Length - 1; i >= 0; i--)
         {

@@ -592,6 +592,7 @@ internal sealed class SearchForm : Form
         // offer of last session's crash report the first time the panel is shown
         CrashReporter.Profiles = () => profiles;
         CrashReporter.PromptMode = () => settings.CrashPrompt;
+        CrashReporter.Status = SetStatus;   // result of a direct GitHub send
         CrashReporter.NeverAsk = delegate { UiInvoke(delegate { settings.CrashPrompt = "never"; SaveSettings(); }); };
         Shown += delegate { BeginInvoke(new Action(delegate { CrashReporter.OfferPendingCrash(this); })); };
 

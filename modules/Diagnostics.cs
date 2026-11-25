@@ -1187,19 +1187,36 @@ internal static class AppLog
 internal static class CrashReporter
 {
     public const string Caption = "Hata raporu";
-    // Shown before any report is opened: exactly what it contains and what it leaves out.
+    // Shown before any report goes out: exactly what it contains and what it leaves out, then how it travels.
     public const string ReportContents =
         "Rapor şunları içerir: uygulama sürümü, Windows ve .NET sürümü, ekran ölçeği, hangi VPN istemcilerinin kurulu olduğu (yalnızca var/yok), " +
         "hatanın türü ve kod konumları (sınıf ve yöntem adları), son 60 günlük satırı.\n" +
         "Çıkarılanlar: parolalar ve anahtarlar, kullanıcı adları, profil ve müşteri adları, sunucu adresleri, IP ve e-posta adresleri, " +
-        "makine adı, Windows kullanıcı adı ve kişisel klasör yolları.\n" +
-        "Uygulama raporu kendisi göndermez: rapor, tarayıcınızda açılan GitHub yeni kayıt sayfasının adresiyle GitHub'a ulaşır " +
-        "ama siz Gönder'e (Submit) basana kadar yayınlanmaz; önce okuyup düzenleyebilirsiniz. GitHub hesabı gerekir.";
-    public const string ReportSummary =
-        "Hata raporu: sürüm, Windows/.NET, kurulu VPN istemcileri (var/yok), hata türü ve kod konumları, son 60 günlük satırı. " +
-        "Parolalar, kullanıcı/profil/sunucu adları, IP ve e-posta adresleri, makine adı ve kişisel yollar çıkarılır. " +
-        "Rapor sayfa adresiyle GitHub'a ulaşır ama siz Gönder'e basana kadar yayınlanmaz.";
+        "makine adı, Windows kullanıcı adı ve kişisel klasör yolları.";
+    public const string SendText =
+        "\"Raporu GitHub'a gönder\" ile uygulama raporu kendisi gönderir ve GitHub'da HERKESE AÇIK bir kayıt (issue) oluşturur; tarayıcı açılmaz. " +
+        "Göndermeden önce \"Raporu göster\" ile okuyun. Uygulamadaki anahtar yalnızca bu depoda kayıt açmaya yeter.";
+    public const string BrowserText =
+        "Rapor tarayıcınızda GitHub'ın yeni kayıt sayfasında açılır; sayfa adresiyle GitHub'a ulaşır ama siz Gönder'e (Submit) basana kadar " +
+        "yayınlanmaz, önce okuyup düzenleyebilirsiniz. GitHub hesabı gerekir.";
+    public const string AutoWarning =
+        "Uyarı: Otomatik kipte rapor sormadan HERKESE AÇIK bir GitHub kaydı olarak gönderilir; temizleme kalıp tabanlıdır ve bir müşteri adını kaçırabilir.";
+    public const string NoTokenText =
+        "Bu sürümde gönderme anahtarı yok: Otomatik, Sor gibi çalışır ve rapor tarayıcıda açılır.";
 
+    public static string DeliveryText { get { return IssueToken.Available ? SendText : BrowserText; } }
+
+    // Settings note for the chosen CrashPrompt mode.
+    public static string SummaryText(string mode)
+    {
+        var s = "Hata raporu: sürüm, Windows/.NET, kurulu VPN istemcileri (var/yok), hata türü ve kod konumları, son 60 günlük satırı. " +
+                "Parolalar, kullanıcı/profil/sunucu adları, IP ve e-posta adresleri, makine adı ve kişisel yollar çıkarılır. ";
+        s += IssueToken.Available ? "Rapor GitHub'da herkese açık bir kayıt olarak gönderilir." : "Rapor tarayıcıda açılır; Gönder'e siz basarsınız.";
+        if (mode == "auto") s += "\n" + (IssueToken.Available ? AutoWarning : NoTokenText);
+        return s;
+    }
+
+    public static Action<string> Status;                    // short status / toast text in the main window
     public static Func<IEnumerable<VpnProfile>> Profiles;   // set by the main window (read only, may run on any thread)
     public static Func<string> PromptMode;                  // settings.CrashPrompt ("ask" / "never")
     public static Action NeverAsk;                          // "Bir daha sorma": settings.CrashPrompt = "never" + save
@@ -1372,7 +1389,8 @@ internal static class CrashReporter
         try
         {
             var owner = Form.ActiveForm;
-            var choice = Ask(owner, "Beklenmeyen bir hata oluştu; uygulama çalışmaya devam ediyor.\nHata raporunu GitHub'da açmak ister misiniz?");
+            if (SendsAutomatically) { SettleMarker(Choice.Open); AppLog.Info("report", "sending the report automatically"); Deliver(owner, r, true); return; }
+            var choice = Ask(owner, "Beklenmeyen bir hata oluştu; uygulama çalışmaya devam ediyor.\nHata raporunu GitHub'a göndermek ister misiniz?", r);
             SettleMarker(choice);
             Act(owner, choice, r);
         }
@@ -1410,15 +1428,25 @@ internal static class CrashReporter
 
     enum Choice { Open, Later, Never }
 
-    static Choice Ask(IWin32Window owner, string question)
+    // "auto" sends without a dialog, but only with an embedded token (else it behaves like "ask").
+    static bool SendsAutomatically { get { return Mode() == "auto" && IssueToken.Available && !Demo.On; } }
+
+    public const string SendLabel = "Raporu GitHub'a gönder", ShowLabel = "Raporu göster";
+
+    static Choice Ask(IWin32Window owner, string question, ErrorReport r)
     {
-        var i = GlassDialog.ShowChoice(owner, question + "\n\n" + ReportContents, Caption, new[] { "Bir daha sorma", "Sonra", "Raporu aç" }, 2, 1, MessageBoxIcon.Warning);
-        return i == 2 ? Choice.Open : i == 0 ? Choice.Never : Choice.Later;
+        while (true)
+        {
+            var i = GlassDialog.ShowChoice(owner, question + "\n\n" + ReportContents + "\n" + DeliveryText, Caption,
+                new[] { "Bir daha sorma", "Sonra", ShowLabel, SendLabel }, 3, 1, MessageBoxIcon.Warning);
+            if (i == 2) { ReportPreview.Show(owner, r); continue; }
+            return i == 3 ? Choice.Open : i == 0 ? Choice.Never : Choice.Later;
+        }
     }
 
     static void Act(IWin32Window owner, Choice choice, ErrorReport r)
     {
-        if (choice == Choice.Open) { OpenReport(owner, r); return; }
+        if (choice == Choice.Open) { Deliver(owner, r, false); return; }
         if (choice == Choice.Never)
         {
             AppLog.Info("report", "crash prompt turned off by the user");
@@ -1453,8 +1481,15 @@ internal static class CrashReporter
         var r = LoadRecord(name);
         if (r == null) { ClearMarker(); return; }
         lock (gate) promptedThisRun = true;
+        if (SendsAutomatically)
+        {
+            ClearMarker();
+            AppLog.Info("report", "sending the previous session's crash report automatically (" + (r.Fingerprint ?? "-") + ")");
+            Deliver(owner, r, true);
+            return;
+        }
         AppLog.Info("report", "offering the report of the previous session's crash (" + (r.Fingerprint ?? "-") + ")");
-        var choice = Ask(owner, "Önceki oturum beklenmedik şekilde kapandı. Hata raporunu GitHub'da açmak ister misiniz?");
+        var choice = Ask(owner, "Önceki oturum beklenmedik şekilde kapandı. Hata raporunu GitHub'a göndermek ister misiniz?", r);
         SettleMarker(choice);
         Act(owner, choice, r);
     }
@@ -1475,9 +1510,107 @@ internal static class CrashReporter
         }
         catch { }
         if (r == null) r = ErrorReport.Build("manual", null, Env, AppLog.Recent(ErrorReport.LogLines), NewSanitizer(), DateTime.UtcNow);
-        var intro = r.Kind == "manual" ? "Kayıtlı bir hata bulunamadı. Son günlük satırlarıyla bir hata raporu açılacak." : "Son kaydedilen hata:\n" + r.Title;
-        if (GlassDialog.Show(owner, intro + "\n\n" + ReportContents + "\n\nDevam edilsin mi?", Caption, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
-        OpenReport(owner, r);
+        var intro = r.Kind == "manual" ? "Kayıtlı bir hata bulunamadı. Son günlük satırlarıyla bir hata raporu hazırlandı." : "Son kaydedilen hata:\n" + r.Title;
+        while (true)
+        {
+            var i = GlassDialog.ShowChoice(owner, intro + "\n\n" + ReportContents + "\n" + DeliveryText, Caption, new[] { "İptal", ShowLabel, SendLabel }, 2, 0, MessageBoxIcon.Question);
+            if (i == 1) { ReportPreview.Show(owner, r); continue; }
+            if (i == 2) Deliver(owner, r, false);
+            return;
+        }
+    }
+
+    // ---------- Direct send with the embedded token (modules\IssueSender.cs) ----------
+
+    static readonly object limitsGate = new object();
+    static string LimitsPath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenVpnQuickSearch", "issue-limits.json"); } }
+
+    static IssueLimitState LoadLimits()
+    {
+        try { var p = LimitsPath; return File.Exists(p) ? IssueLimits.FromJson(File.ReadAllText(p)) : new IssueLimitState(); }
+        catch { return new IssueLimitState(); }
+    }
+
+    static void SaveLimits(IssueLimitState s)
+    {
+        try { var p = LimitsPath; Directory.CreateDirectory(Path.GetDirectoryName(p)); File.WriteAllText(p, IssueLimits.ToJson(s)); } catch { }
+    }
+
+    // Title and body exactly as they go out: sanitized again with the names loaded now (idempotent),
+    // body cut to 60 KB. "Raporu göster" shows the same text.
+    public static void Outgoing(ErrorReport r, out string title, out string body)
+    {
+        var s = NewSanitizer();
+        title = s.Sanitize(r.Title ?? "");
+        body = GitHubIssueClient.Truncate(s.Sanitize(r.Body ?? ""));
+    }
+
+    static void Say(string text) { try { if (Status != null) Status(text); } catch { } }
+
+    // Creates the issue (or one comment on an open duplicate) off the UI thread. Without a token, or
+    // when sending fails / is limited: the browser flow (automatic sends only show a notice instead).
+    // Logs status codes and issue numbers only: never the token, the request or the report.
+    static void Deliver(IWin32Window owner, ErrorReport r, bool automatic)
+    {
+        if (Demo.On || r == null) return;
+        var token = IssueToken.Value;
+        if (token == null) { if (!automatic) OpenReport(owner, r); return; }
+        if (checking) return;
+        var ctx = SynchronizationContext.Current;
+        string title, body;
+        Outgoing(r, out title, out body);
+        var env = Env;
+        checking = true;
+        try { Application.UseWaitCursor = true; } catch { }
+        Say("Hata raporu GitHub'a gönderiliyor…");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            SendResult res;
+            lock (limitsGate)
+            {
+                var limits = LoadLimits();
+                res = GitHubIssueClient.Send(title, body, r.Fingerprint, env, token, GitHubIssueClient.HttpTransport, limits, DateTime.UtcNow);
+                SaveLimits(limits);
+            }
+            Action done = delegate { Delivered(owner, r, res, automatic); };
+            if (ctx == null) { checking = false; return; }
+            try { ctx.Post(delegate { done(); }, null); } catch { checking = false; }
+        });
+    }
+
+    static void Delivered(IWin32Window owner, ErrorReport r, SendResult res, bool automatic)
+    {
+        checking = false;
+        try { Application.UseWaitCursor = false; } catch { }
+        try
+        {
+            owner = Alive(owner);
+            var num = "#" + res.Number.ToString(CultureInfo.InvariantCulture);
+            if (res.Sent)
+            {
+                AppLog.Info("report", (res.Outcome == SendOutcome.Created ? "issue created " : "repeat comment on ") + num + " (status " + res.Status.ToString(CultureInfo.InvariantCulture) + ")");
+                var text = res.Outcome == SendOutcome.Created ? "Hata kaydı " + num + " GitHub'da oluşturuldu." : "Bu hata zaten bildirilmiş (" + num + "); kayda bir \"tekrar\" notu eklendi.";
+                Say(text);
+                IssueNotice.Show(text, res.Url);
+                return;
+            }
+            AppLog.Warn("report", "send not done: " + res.Outcome + (res.Status > 0 ? " (status " + res.Status.ToString(CultureInfo.InvariantCulture) + ")" : ""));
+            string why;
+            switch (res.Outcome)
+            {
+                case SendOutcome.Unauthorized: why = "Gönderme anahtarı geçersiz ya da iptal edilmiş; 24 saat denenmeyecek."; break;
+                case SendOutcome.Stopped: why = "Gönderme 24 saatliğine durduruldu (anahtar reddedildi)."; break;
+                case SendOutcome.Forbidden: why = "GitHub isteği reddetti ya da sınır aşıldı."; break;
+                case SendOutcome.DailyLimit: why = "Bu bilgisayardan bugün en fazla " + IssueLimits.PerDay + " rapor gönderilebilir."; break;
+                case SendOutcome.FingerprintLimit: why = "Bu hata son 24 saatte zaten gönderildi."; break;
+                default: why = "GitHub'a ulaşılamadı."; break;
+            }
+            if (automatic) { Say("Hata raporu gönderilemedi: " + why); IssueNotice.Show("Hata raporu gönderilemedi. " + why + " Ayarlar › Hakkında › Son hatayı bildir ile tarayıcıdan açabilirsiniz.", null); return; }
+            Say("Hata raporu gönderilemedi; tarayıcıda açılıyor");
+            GlassDialog.Show(owner, why + "\nRapor bunun yerine tarayıcıda açılacak; Gönder'e siz basarsınız.", Caption, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            OpenReport(owner, r);
+        }
+        catch { }
     }
 
     // Duplicate check on a pool thread (read-only search for the fingerprint; failure = skip),
