@@ -1,9 +1,9 @@
 # VPN Manager — OpenVPN Hızlı Arama
 
-OpenVPN Connect ve FortiClient VPN profillerinizi **tek bir cam (Liquid Glass) panelden** arayın, sabitleyin ve tek tıkla bağlanın.
+OpenVPN Connect, FortiClient VPN, Sophos Connect ve WatchGuard Mobile VPN with SSL profillerinizi **tek bir cam (Liquid Glass) panelden** arayın, sabitleyin ve tek tıkla bağlanın.
 Yüzlerce profil arasında firma adı, sunucu adresi, kullanıcı adı veya `.ovpn` dosya adıyla anında filtreler; Windows 10/11, tek `exe`, yönetici izni gerektirmez.
 
-> **English summary:** A small Windows (WinForms/GDI+, .NET Framework 4.8) companion for OpenVPN Connect and FortiClient VPN. Instant fuzzy search over all saved profiles, one-click connect, pinning, live connection state, server reachability dots, backups, duplicate cleanup, connection history, light/dark/system themes. Install with one PowerShell line (below). Screenshots use fictional sample companies (`--demo` mode).
+> **English summary:** A small Windows (WinForms/GDI+, .NET Framework 4.8) companion for OpenVPN Connect, FortiClient VPN, Sophos Connect and WatchGuard Mobile VPN with SSL. Instant fuzzy search over all saved profiles, one-click connect/disconnect, pinning, live connection state, server reachability dots, backups, duplicate cleanup, connection history, light/dark/system themes. Connecting runs in the background (client windows are not brought to the front; they appear only when you must act). Optional self-update from GitHub Releases (ask / automatic / off, SHA-256 verified, rollback). The app is unsigned. The Sophos list/state output format was verified only against an empty profile list, and WatchGuard (single connection, driven through its dialog) was not exercised against a live tunnel. Install with one PowerShell line (below). Screenshots use fictional sample companies (`--demo` mode).
 
 ## Kurulum (tek komut)
 
@@ -20,7 +20,9 @@ Betik son sürümün paketini [Releases](https://github.com/bymrhan/vpn-manager/
 - Elle kurulum: [Releases](https://github.com/bymrhan/vpn-manager/releases) → `OpenVPN-Hizli-Arama-Kurulum.zip` → çıkarın → `Kur.cmd`.
 - Kaldırma: `%LOCALAPPDATA%\Programs\OpenVPN Hizli Arama\Kaldir.cmd` (VPN uygulamalarındaki profillere dokunmaz).
 
-**Gereksinimler:** Windows 10/11 (.NET Framework 4.8 Windows ile gelir) · OpenVPN Connect 3.x · FortiClient VPN 7.x (isteğe bağlı).
+**Gereksinimler:** Windows 10/11 (.NET Framework 4.8 Windows ile gelir) · OpenVPN Connect 3.x · FortiClient VPN 7.x, Sophos Connect ve WatchGuard Mobile VPN with SSL (hepsi isteğe bağlı; yalnızca kurulu olanlar listelenir).
+
+Kurulu kopya kendini de güncelleyebilir; bkz. [Güncelleme](#güncelleme).
 
 ## Ekran görüntüleri
 
@@ -46,14 +48,33 @@ Görüntülerdeki tüm firmalar, sunucular ve kullanıcılar **uydurmadır** (`.
 |:--:|:--:|
 | ![Görünüm](docs/screenshots/settings-appearance.png) | ![Hakkında](docs/screenshots/settings-about.png) |
 
+## Desteklenen istemciler
+
+| | OpenVPN Connect | FortiClient VPN | Sophos Connect | WatchGuard Mobile VPN with SSL |
+|---|---|---|---|---|
+| Profil listeleme | OpenVPN Connect'in profil deposundan | FortiClient'taki SSL VPN ve IPsec tünelleri | `sccli list` ile | Kayıt defterindeki sunucu girdileri |
+| Bağlan | `--connect-shortcut` ile | SSL VPN: tünel seçilir, *Connect*'e uygulama basar; IPsec: yalnızca açılır | `sccli enable` | İstemcinin giriş penceresi arka planda doldurulur ve *Connect*'e basılır |
+| Bağlantıyı kes | Evet | Evet | `sccli disable` | Evet (istemcinin menü komutu; olmazsa istemci kapatılır) |
+| Durum izleme | Evet | Evet | `sccli get` ve Sophos ağ bağdaştırıcısı | İstemci günlüğü ve TAP bağdaştırıcısı |
+| Kayıtlı parola (uygulamada) | Yok; OpenVPN Connect kendi parolasını tutar | Windows Kimlik Bilgileri (`OpenVpnQuickSearch:forti:<tünel>`) | Windows Kimlik Bilgileri (`OpenVpnQuickSearch:sophos:<bağlantı>`) | Windows Kimlik Bilgileri (`OpenVpnQuickSearch:watchguard:<sunucu>`) |
+| Yedek, dışa aktarma, silme, yinelenenler | Evet | Hayır | Hayır | Hayır |
+
+Her istemci yalnızca bilgisayarınızda kuruluysa ve Ayarlar'da açıksa listelenir (bkz. [Ayarlar](#ayarlar)).
+
+**Bilinen sınırlar (istemciye göre)**
+- **Sophos Connect:** `sccli list` / `get` çıktı biçimi bu geliştirme bilgisayarında yalnızca **boş profil listesiyle** doğrulandı (`Connections:` / `None`). Gerçek bir profil varken liste, bağlantı durumu ve sunucu adresi ayrıştırması denenmedi; biçim beklenenden farklıysa liste boş veya durum "bağlı değil" görünebilir. `sccli enable` parolayı kısa süre komut satırı argümanı olarak taşır.
+- **WatchGuard Mobile VPN with SSL:** istemcinin komut satırında bağlan/kes anahtarı olmadığından uygulama onun penceresini sürer (Win32 mesajları). Tek seferde **tek bağlantı** vardır. Bağlan/kes akışı **canlı bir tünele karşı denenmedi**; ilk gerçek kullanımı izleyin. Parola uygulamada kayıtlı değilse ve istemci de hatırlamıyorsa pencere size gösterilir. Ayrıntılar: [`docs/providers/watchguard-ssl.md`](docs/providers/watchguard-ssl.md).
+- **FortiClient:** bkz. [Bilinen sınırlar](#bilinen-sınırlar).
+
 ## Özellikler
 
 ### Arama ve liste
 - **Anında filtre:** firma adı, sunucu adresi, kullanıcı adı veya kaynak dosya adı. Birden çok kelime desteklenir (`firma 10.0`): her kelime en az bir alanla eşleşmelidir. Türkçe karakter ve aksan farkı yok sayılır (`İklim` = `iklim`).
 - **Kalite sıralaması:** sonuçlar eşleşme kalitesine göre dizilir, eşleşen harfler vurgulanır.
 - **Gruplu görünüm:** arama boşken *Bağlı* · *Sabitlenenler* · *Son kullanılanlar* (5) · *Tüm profiller* (A–Z).
-- **Sağlayıcı filtresi:** *Tümü / OpenVPN / FortiClient* kapsül kontrolü.
-- **Kompakt satır:** baş harf avatarı (ada göre sabit renk), sağlayıcı rozeti, sunucu · kullanıcı, son bağlantı zamanı, sabitleme yıldızı, bağlan düğmesi.
+- **Sağlayıcı filtresi:** *Tümü / OpenVPN / FortiClient / Sophos / WatchGuard* kapsül kontrolü; Sophos ve WatchGuard bölümleri yalnızca ilgili istemci kuruluysa, Ayarlar'da açıksa ve en az bir profili varsa görünür. `Ctrl+1` … `Ctrl+5` bölümü seçer.
+- **Gruplar:** *OpenVPN profilleri*, *FortiClient VPN*, *Sophos Connect*, *WatchGuard SSL VPN*.
+- **Kompakt satır:** baş harf avatarı (ada göre sabit renk), sağlayıcı rozeti (Sophos ve WatchGuard için ayrı simgeler), sunucu · kullanıcı, son bağlantı zamanı, sabitleme yıldızı, bağlan düğmesi.
 - **Durum renkle değil, ikonla da** verilir: erişilebilir ✓, erişilemiyor ✕, kontrol ediliyor ◔; renk körü kullanıcılar için ayırt edilebilir.
 - Akıcı kaydırma, koyu kaydırma çubuğu, satır yeniden dizilirken (sabitleme/filtre) kayan geçiş animasyonu.
 
@@ -61,8 +82,18 @@ Görüntülerdeki tüm firmalar, sunucular ve kullanıcılar **uydurmadır** (`.
 - `Enter` veya karta tek tıklama: OpenVPN Connect'in `--connect-shortcut` seçeneğiyle hemen bağlanır.
 - **Bağlantı kapsülü (Dynamic Island):** *Bağlı değil → Bağlanıyor → Kimlik doğrulanıyor → Bağlı (süre sayacı) → Kesiliyor → Hata* olmak üzere 6 durum; yay (spring) animasyonlarıyla genişler/daralır. Kapsüldeki düğmeyle bağlantı kesilir.
 - Bağlanırken fiş düğmesi etrafında dönen ışık, doğrulanınca yeşil onay animasyonu; 45 sn içinde doğrulanamazsa kırmızı sallanma ve hata kapsülü.
-- **FortiClient:** SSL VPN tüneli seçilir, FortiClient açılır ve *Connect*'e uygulama basar. Parola FortiClient'ta kayıtlıysa doğrudan bağlanır; değilse ilk seferde sorulur ve (isteğe bağlı) **Windows Kimlik Bilgileri**'nde saklanır. IPsec tünellerinde FortiClient yalnızca açılır.
-- Bağlıyken satıra sağ tık veya ⋯ menüsünden **Bağlantıyı kes**.
+- **FortiClient:** SSL VPN tüneli seçilir ve *Connect*'e uygulama basar. Parola FortiClient'ta kayıtlıysa doğrudan bağlanır; değilse ilk seferde sorulur ve (isteğe bağlı) **Windows Kimlik Bilgileri**'nde saklanır. IPsec tünellerinde FortiClient yalnızca açılır.
+- **Sophos Connect ve WatchGuard:** kayıtlı parola yoksa ilk bağlanışta kullanıcı adı/parola sorulur ("Bu bilgisayarda sakla" ile saklanır; vazgeçerseniz parolasız denenir). Sağ tık menüsünde *Parolayı kaydet… / Kayıtlı parolayı değiştir… / Kayıtlı parolayı sil* bulunur. Bağlantı, durum yoklamasıyla doğrulanır; 120 sn içinde doğrulanamazsa hata gösterilir.
+- Bağlıyken satıra sağ tık veya ⋯ menüsünden **Bağlantıyı kes**; bildirim alanı menüsünde de her istemci için kesme öğesi vardır.
+
+### Arka planda çalışma
+Bağlanma ve kesme sırasında istemci pencereleri **öne getirilmez**; çalıştığınız uygulama odağını korur.
+- **OpenVPN Connect:** komutla açılan pencere, önceden açık değilse odak almadan küçültülür.
+- **FortiClient:** arayüzü okunabilsin diye pencere ekranın dışına park edilir, iş bitince kapatılır.
+- **WatchGuard:** giriş ve durum pencereleri arka planda (ekran dışında) sürülür.
+- **Sophos Connect:** `sccli` komut satırıyla çalışır, kendi penceresi açılmaz; parola verilirse `scgui` arka planda tutulur.
+- **Sizin açtığınız pencereye dokunulmaz:** o anda ekranda açık olan istemci penceresi taşınmaz, kapatılmaz, doldurulmaz.
+- İstemci penceresi **yalnızca sizin işlem yapmanız gerekiyorsa** görünür (parola, token/SAML, hata gibi).
 
 ### Pencere davranışı
 - **Yan panel modu:** OpenVPN Connect açılınca çerçevesiz panel, OpenVPN'in görünür çerçevesine aynı yükseklikte yapışır; taşıma/boyut/küçültme/gizleme olaylarını WinEvent kancalarıyla anında izler. Sağda yer yoksa sola geçer; panel tarafı Ayarlar'dan seçilir.
@@ -96,6 +127,7 @@ Görüntülerdeki tüm firmalar, sunucular ve kullanıcılar **uydurmadır** (`.
 | Tuş | İşlev |
 |---|---|
 | `Ctrl+Alt+V` | Paneli aç / gizle (genel) |
+| `Ctrl+1` … `Ctrl+5` | Sağlayıcı bölümünü seç (Tümü, OpenVPN, FortiClient, Sophos, WatchGuard; görünen bölümlerin sırasıyla) |
 | `↑` `↓` `PgUp` `PgDn` | Profil seç |
 | `Enter` | Seçili profile bağlan |
 | `Ctrl+P` | Sabitle / kaldır |
@@ -103,16 +135,42 @@ Görüntülerdeki tüm firmalar, sunucular ve kullanıcılar **uydurmadır** (`.
 | `Ctrl+,` | Ayarlar |
 | `Esc` | Aramayı temizle → pencereyi gizle |
 
+## Ayarlar
+`⋯ > Ayarlar…` veya `Ctrl+,`; dört sayfa: *Genel*, *Yedekleme*, *Görünüm*, *Hakkında*. Dosya: `%APPDATA%\OpenVpnQuickSearch\settings.json`.
+- **Genel:** kısayol tuşu, Windows açılışında başlat, panel tarafı, sunucu erişim testi ve her istemci için bir anahtar: *FortiClient profilleri*, *Sophos Connect profilleri*, *WatchGuard profilleri*. Sophos ve WatchGuard anahtarları yalnızca o istemci **algılanırsa** görünür. Bir anahtarı kapatmak o istemcinin satırlarını listeden kaldırır ve durumunu sıfırlar; anahtarlar yeniden başlatmada korunur.
+- **Yedekleme** ve **Görünüm:** yedek sıklığı / sayısı / klasörü; tema.
+- **Hakkında > Güncelleme:** bkz. aşağıdaki [Güncelleme](#güncelleme).
+
+## Güncelleme
+Uygulama, bu deponun [Releases](https://github.com/bymrhan/vpn-manager/releases) sayfasındaki son sürümü denetler. Ayarlar > Hakkında > **Güncelleme** bloğu:
+- **Güncellemeler:** *Sor* (varsayılan; yeni sürüm bildirimi çıkar: *Şimdi güncelle* / *Sonra* / *Bu sürümü atla* / *Sürüm notları*), *Otomatik* (indirir, doğrular ve boştayken sessizce kurar) veya *Kapalı* (otomatik denetim yok).
+- **Denetleme sıklığı:** *Açılışta* / *Günlük* (varsayılan) / *Haftalık*. İstek yalnızca `api.github.com` sürüm bilgisini alır; profil bilgisi veya kullanıcı verisi gönderilmez.
+- **Şimdi denetle** her kipte çalışır; **Bu sürümü atla** o sürümü otomatik denetimlerde gizler. Sürüm notları düğmesi sürüm sayfasını açar.
+- **Boştayken kurulum (Otomatik):** panel gizli/küçültülmüş ya da 2 dakikadır giriş yok; bağlanma/kesme sürmüyor; uygulamanın başka penceresi açık değil. Bağlı bir VPN kurulumu engellemez. Uygulama arka planda yeniden başlar.
+- **Doğrulama:** paket `OpenVPN-Hizli-Arama-Kurulum.zip` ve yanındaki `.sha256` dosyasıyla indirilir; özet uyuşmazsa veya dosya yoksa **hiçbir şey kurulmaz**. Kurulum başarısız olursa değişen dosyalar yedekten geri alınır, eski sürüm yeniden açılır ve aynı sürüm 24 saat boyunca otomatik denenmez (`guncelleme-basarisiz.txt`). Günlük: kurulum klasöründe `guncelleme.log`.
+- **Yalnızca kurulu kopya** (`%LOCALAPPDATA%\Programs\OpenVPN Hizli Arama`) kendini günceller; başka yerdeki (taşınabilir) kopya sadece bildirim gösterir ve sürüm sayfasını açar. Ayarlar, sabitlenenler, geçmiş ve profiller korunur.
+- Demo modunda güncelleme denetlenmez.
+- **Sınır:** `.sha256` dosyası zip ile **aynı GitHub sürümünden** gelir; bozuk/yarım indirmeye ve sahte yansıya karşı korur, ele geçirilmiş bir yayıncı hesabına karşı korumaz (uygulama imzasızdır).
+
+Sürüm yayınlama adımları için bkz. [`docs/RELEASING.md`](docs/RELEASING.md) (`build.ps1 -NoProfiles` zip'in yanına `.sha256` yazar; ikisi de sürüme yüklenir).
+
+## Tanılama
+- **`%APPDATA%\OpenVpnQuickSearch\forti.log`:** FortiClient otomatik bağlanma adımlarının sonucunu satır satır yazar (hangi tünel, sonuç, kısa ayrıntı). **Parola içermez.** FortiClient'ta *Connect* bulunamazsa nedenini buradan okuyabilirsiniz.
+- `%APPDATA%\OpenVpnQuickSearch\history.csv`: bağlantı geçmişi; `pinned.txt`: sabitlenenler.
+- Güncelleme kurulumu için kurulum klasöründeki `guncelleme.log` (yukarıya bakın).
+
 ## Güvenlik ve gizlilik
 - OpenVPN profillerinden yalnızca **profil adı, sunucu, kullanıcı adı ve dosya adı** metadata'sı kullanılır; parola, özel anahtar ve sertifika içeriği saklanmaz, loglanmaz, ayarlara yazılmaz.
-- FortiClient parolası yalnızca siz *"Bu bilgisayarda sakla"* derseniz **Windows Kimlik Bilgileri**'ne (`OpenVpnQuickSearch:forti:<tünel>`, kullanıcıya bağlı şifreli) yazılır; FortiClient'ın kendi kayıtlı parolaları okunmaz.
-- Ağ erişimi yalnızca sunucu erişim testi içindir (TCP/ping). Telemetri yoktur.
+- FortiClient, Sophos Connect ve WatchGuard parolaları yalnızca siz *"Bu bilgisayarda sakla"* derseniz **Windows Kimlik Bilgileri**'ne (`OpenVpnQuickSearch:forti:<tünel>`, `OpenVpnQuickSearch:sophos:<bağlantı>`, `OpenVpnQuickSearch:watchguard:<sunucu>`; kullanıcıya bağlı şifreli) yazılır; istemcilerin kendi kayıtlı parolaları okunmaz. Sophos'a bağlanırken parola `sccli` komut satırında kısa süre görünür.
+- Ağ erişimi yalnızca sunucu erişim testi (TCP/ping) ve güncelleme denetimi/indirmesi içindir (yalnızca bu deponun GitHub sürümleri; kapatılabilir). Telemetri yoktur.
 - **Yedekler `.ovpn` içindeki özel anahtarları içerir**; güvenli yerde tutun.
 - Bu repo ve sürüm paketleri **hiçbir profil, anahtar veya firma verisi içermez** (`.gitignore` `*.ovpn`, `profiller/`, `*.zip` dosyalarını dışarıda tutar).
 - Uygulama şu an imzasız: Windows SmartScreen "bilinmeyen yayıncı" uyarısı gösterebilir. Dilerseniz [`install.ps1`](install.ps1) ve kaynak kodu inceleyip kendiniz derleyebilirsiniz.
 
 ## Bilinen sınırlar
 - FortiClient'ta otomatik *Connect*, FortiClient 7.4 İngilizce arayüzüyle denendi; arayüz dili/sürümü değişirse düğme bulunamayabilir (uygulama FortiClient'ı açıp "Connect'e basın" der).
+- Sophos Connect liste/durum biçimi yalnızca boş profil listesiyle, WatchGuard bağlan/kes akışı ise canlı tünelle denenmedi; WatchGuard tek bağlantılı bir istemcidir ([ayrıntı](#desteklenen-istemciler)).
+- Uygulama imzasızdır; güncelleme `.sha256` özeti aynı sürümden gelir (bkz. [Güncelleme](#güncelleme)).
 - OpenVPN Connect komut satırı yeniden adlandırmayı desteklemediği için profil yeniden adlandırma yoktur.
 - Yedekleme, dışa aktarma, silme ve yinelenen bulucu yalnızca OpenVPN profilleri içindir.
 - Cam efekti Windows 11 22H2+ üzerinde DWM Acrylic ile en iyi görünür.
@@ -124,14 +182,14 @@ Gerçek profilleriniz yerine uydurma örnek firmalarla arayüzü denemek (ekran 
 & "$env:LOCALAPPDATA\Programs\OpenVPN Hizli Arama\OpenVPN-Hizli-Arama.exe" --demo --instance=demo --settings="$env:TEMP\vpnm-demo.json"
 ```
 
-Ek anahtarlar: `--demo-connected=Acme` (örnek profili bağlı göster), `--demo-search=en`, `--demo-settings=0..3` (Ayarlar sayfası), `--scale=1.5`. Demo modunda OpenVPN Connect / FortiClient'a, sabitleme dosyasına ve ayarlara **dokunulmaz**; hiçbir bağlantı başlatılmaz.
+Ek anahtarlar: `--demo-connected=Acme` (örnek profili bağlı göster), `--demo-search=en`, `--demo-settings=0..3` (Ayarlar sayfası), `--scale=1.5`. Demo modu uydurma Sophos ve WatchGuard satırları da gösterir. Demo modunda OpenVPN Connect / FortiClient / Sophos / WatchGuard'a, sabitleme dosyasına ve ayarlara **dokunulmaz**; hiçbir bağlantı başlatılmaz.
 
 ## Geliştirme
 
 Yalnızca Windows'un kendi C# derleyicisi (`csc.exe`, .NET Framework 4.x) gerekir; harici paket yoktur.
 
 ```powershell
-# derle + 20 otomatik test + kurulum paketi (outputs\ klasörüne)
+# derle + otomatik testler + kurulum paketi (outputs\ klasörüne; zip'in yanına .sha256 da yazılır)
 powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -NoProfiles
 
 # yalnızca testler
@@ -148,10 +206,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `modules\MenuKit.cs`, `Assets.cs`, `assets\*.svg` | Menüler, SVG ikon kütüphanesi |
 | `modules\SettingsWindow.cs`, `Settings.cs`, `SetupWizard.cs` | Ayarlar, temalar, ilk kurulum sihirbazı |
 | `modules\Connection.cs`, `FortiClient.cs`, `Reachability.cs` | Bağlantı izleme / geçmiş, FortiClient entegrasyonu, erişim testi |
+| `modules\SophosConnect.cs`, `WatchGuardSsl.cs`, `VpnProviders.cs` | Sophos (`sccli`) ve WatchGuard entegrasyonu, sağlayıcı yönlendirme |
+| `modules\QuietWindow.cs` | İstemci pencerelerini arka planda tutma |
+| `modules\Updater.cs` | Güncelleme denetimi, doğrulama, kurulum yardımcısı |
 | `modules\BackupService.cs`, `ImportService.cs`, `Duplicates.cs` | Yedek, içe/dışa aktarma, yinelenen profiller |
 | `modules\Demo.cs` | `--demo` örnek verisi |
 | `paket\` | Kurulum paketi şablonları (`kur.ps1`, `kaldir.ps1`, `BENIOKU.txt`, kullanım) |
 | `install.ps1` | Uzaktan tek komut kurulum |
+| `docs\RELEASING.md`, `docs\providers\` | Sürüm yayınlama adımları, WatchGuard bulguları |
 | `tests\` | Otomatik testler; `tests\manual\` gerçek FortiClient penceresine karşı elle denemeler |
 
 Tek satırla derleme:
@@ -164,3 +226,5 @@ Kaynak dosyalar UTF-8 **BOM'lu** ve CRLF'dir (Türkçe metin için `csc` ve Wind
 
 ## Sürüm
 **2.0.0** — Liquid Glass yeniden tasarımı: cam malzeme sistemi, bağlantı kapsülü, yeni liste/menü/ayarlar, SVG ikon kütüphanesi, FortiClient entegrasyonu, uzaktan kurulum.
+
+**Sonraki sürüm (geliştirmede)** — Sophos Connect ve WatchGuard SSL VPN desteği, arka planda bağlanma, FortiClient otomatik doldurma düzeltmesi ve `forti.log`, sağlayıcıya göre ayar anahtarları, otomatik güncelleme sistemi.

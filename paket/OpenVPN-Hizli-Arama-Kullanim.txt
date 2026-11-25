@@ -4,10 +4,10 @@
 FORTICLIENT VPN
 --------------
 - FortiClient VPN'deki SSL VPN ve IPsec tünelleri listenin sonunda "FORTICLIENT VPN"
-  grubunda görünür (kırmızı avatar). Aramaya dahildir; "forti" yazınca hepsi listelenir.
-- Bir SSL VPN tüneline tıklayınca FortiClient'ta o tünel seçilir, FortiClient açılır ve
-  "Connect" düğmesine uygulama basar. Başka bir tünele geçerken FortiClient penceresi
-  birkaç saniye içinde yeniden açılır.
+  grubunda görünür (FortiClient rozetiyle). Aramaya dahildir; "forti" yazınca hepsi listelenir.
+- Bir SSL VPN tüneline tıklayınca FortiClient'ta o tünel seçilir ve "Connect" düğmesine
+  uygulama basar. FortiClient penceresi öne gelmez (arka planda çalışılır); yalnızca sizin
+  işlem yapmanız gerekirse (parola, hata) görünür. Siz zaten açtıysanız pencereye dokunulmaz.
 - Parola: FortiClient parolayı kendisi saklıyorsa ("Save Password" işaretli) doğrudan
   bağlanır. Saklamıyorsa uygulama ilk seferde kullanıcı adı ve parolayı sorar;
   "Bu bilgisayarda sakla" işaretliyse bir dahaki sefere sormaz. Vazgeçerseniz parolayı
@@ -22,6 +22,26 @@ FORTICLIENT VPN
   FortiClient'ı açar ve "Connect'e basın" der.
 - Ayarlar > Genel > "FortiClient profilleri" ile gizlenebilir.
 - Yedekleme, dışa aktarma, silme ve yinelenen profiller yalnızca OpenVPN profilleri içindir.
+- Tanılama günlüğü: %APPDATA%\OpenVpnQuickSearch\forti.log (parola içermez).
+
+SOPHOS CONNECT VE WATCHGUARD SSL VPN
+------------------------------------
+- Bilgisayarda kuruluysa listede "SOPHOS CONNECT" ve "WATCHGUARD SSL VPN" gruplarında
+  görünür; üstteki kapsül kontrolünde de bölümleri olur (Ctrl+1 ... Ctrl+5).
+  Ayarlar > Genel'den (istemci kuruluysa) gizlenebilir.
+- Bağlanırken kayıtlı parola yoksa uygulama sorar; "Bu bilgisayarda sakla" ile Windows
+  Kimlik Bilgileri'nde saklanır. Satıra sağ tık: "Parolayı kaydet…", "Kayıtlı parolayı
+  değiştir…", "Kayıtlı parolayı sil". İstemci pencereleri öne getirilmez; yalnızca sizin
+  işlem yapmanız gerekirse görünür.
+- Sınırlar: Sophos liste/durum çıktısı yalnızca boş profil listesiyle denendi. WatchGuard
+  tek bağlantılı bir istemcidir ve penceresi üzerinden sürülür; canlı bir tünelle denenmedi.
+  Ayrıntı için README.md'ye bakın.
+
+GÜNCELLEME
+----------
+- Ayarlar > Hakkında > Güncelleme: Sor / Otomatik / Kapalı, denetim sıklığı (Açılışta /
+  Günlük / Haftalık), "Şimdi denetle", "Bu sürümü atla". Yalnızca kurulu kopya kendini
+  günceller; paket SHA-256 ile doğrulanır, hata olursa eski sürüm geri yüklenir.
 
 ANİMASYONLAR VE PERFORMANS
 --------------------------
@@ -133,9 +153,9 @@ OpenVPN profilleri için araç yalnızca profil adı, sunucu adresi, kullanıcı
 dosya adı gibi metadata alanlarını kullanır. Parola, özel anahtar ve sertifika içeriğini
 kullanmaz ve saklamaz. (OpenVPN Connect bu bilgileri aynı config.json dosyasında tuttuğu
 için dosya okunurken bellekte geçici olarak bulunur.)
-FortiClient tünelleri için yalnızca siz "Bu bilgisayarda sakla" veya "Parolayı kaydet"
-seçerseniz kullanıcı adı ve parola Windows Kimlik Bilgileri'nde saklanır
-("OpenVpnQuickSearch:forti:<tünel>"). Windows bunları oturum açan kullanıcıya bağlı
+FortiClient, Sophos Connect ve WatchGuard için yalnızca siz "Bu bilgisayarda sakla" veya
+"Parolayı kaydet" seçerseniz kullanıcı adı ve parola Windows Kimlik Bilgileri'nde saklanır
+("OpenVpnQuickSearch:forti:<tünel>", ":sophos:", ":watchguard:"). Windows bunları oturum açan kullanıcıya bağlı
 olarak şifreler; başka kullanıcılar okuyamaz. Silmek için tünele sağ tık > "Kayıtlı
 parolayı sil" veya Denetim Masası > Kimlik Bilgileri Yöneticisi > Windows Kimlik Bilgileri.
 Parolalar uygulamanın ayar, geçmiş veya log dosyalarına yazılmaz.
