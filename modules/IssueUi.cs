@@ -25,7 +25,7 @@ internal sealed class ReportPreview : Form
             Text = "GitHub'a gidecek metnin tamamı. Kayıt herkese açık olur; müşteri adı, sunucu veya parola görürseniz göndermeyin. " +
                    "Aynı hata açık bir kayıtta zaten varsa yalnızca kısa bir \"Tekrar: sürüm, Windows\" yorumu eklenir; " +
                    "eski kayıt kapalı ya da kilitliyse yeni kaydın başına \"Önceki kayıt: #n\" satırı eklenir.",
-            Dock = DockStyle.Top, Height = S(64), Padding = new Padding(S(12), S(10), S(12), 0), ForeColor = Ui.Text, BackColor = Ui.Bg
+            Dock = DockStyle.Top, Height = S(64),   // sized from the wrapped text below Padding = new Padding(S(12), S(10), S(12), 0), ForeColor = Ui.Text, BackColor = Ui.Bg
         };
         var box = new TextBox
         {
@@ -41,6 +41,14 @@ internal sealed class ReportPreview : Form
         bar.Controls.Add(close);
         bar.Resize += delegate { close.Location = new Point(bar.Width - close.Width - S(16), (bar.Height - close.Height) / 2); };
         Controls.Add(box); Controls.Add(bar); Controls.Add(head);
+        Action fit = delegate
+        {
+            var w = Math.Max(S(100), ClientSize.Width - head.Padding.Horizontal);
+            var h = TextRenderer.MeasureText(head.Text, head.Font, new Size(w, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
+            head.Height = h + head.Padding.Vertical + S(8);
+        };
+        Resize += delegate { fit(); };
+        fit();
         KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) { Close(); e.Handled = true; } };
         Shown += delegate { box.SelectionStart = 0; box.SelectionLength = 0; close.Focus(); };
     }

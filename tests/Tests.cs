@@ -1311,6 +1311,9 @@ static class Tests
         Check(IssueLink.SearchUrl("ab12cd34").Contains("label%3Ahata"), "arama hata etiketiyle");
         // title cap
         var json = GitHubIssueClient.IssueJson(new string('T', 500), "b", true);
-        Check(json.Contains(new string('T', 200)) && !json.Contains(new string('T', 201)), "başlık 200 karakterde kesilir");
+        Check(json.Contains(new string('T', 199)) && !json.Contains(new string('T', 200)), "başlık 200 karakterde kesilir");
+        var cut = GitHubIssueClient.CutTitle("[hata] NullReferenceException: " + new string('X', 300) + " (ab12cd34)");
+        Check(cut.Length == GitHubIssueClient.MaxTitleChars && cut.StartsWith("[hata] NullReferenceException: ") && cut.EndsWith("… (ab12cd34)"), "ortadan kesilir, parmak izi kalır");
+        Check(GitHubIssueClient.CutTitle("kısa (ab12cd34)") == "kısa (ab12cd34)", "kısa başlık değişmez");
     }
 }

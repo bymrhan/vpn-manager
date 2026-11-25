@@ -198,10 +198,21 @@ internal static class GitHubIssueClient
     {
         var d = new Dictionary<string, object>();
         title = title ?? "";
-        d["title"] = title.Length > MaxTitleChars ? title.Substring(0, MaxTitleChars) : title;
+        d["title"] = CutTitle(title);
         d["body"] = body ?? "";
         if (withLabel) d["labels"] = new[] { IssueLink.Label };
         return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Serialize(d);
+    }
+
+    // At most MaxTitleChars; cut in the middle so a trailing " (<fingerprint>)" survives.
+    public static string CutTitle(string title)
+    {
+        title = title ?? "";
+        if (title.Length <= MaxTitleChars) return title;
+        var tail = "";
+        var open = title.LastIndexOf(" (", StringComparison.Ordinal);
+        if (title.EndsWith(")", StringComparison.Ordinal) && open > 0 && title.Length - open <= 40) tail = title.Substring(open);
+        return title.Substring(0, MaxTitleChars - tail.Length - 1) + "…" + tail;
     }
 
     public static string CommentJson(string body)

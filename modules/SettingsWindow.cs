@@ -798,15 +798,23 @@ internal sealed class SettingsForm : Form
         {
             if (settingPrompt) return;
             var picked = promptModes[prompt.SelectedIndex];
-            var confirmed = false;
+            var confirmed = false; var declined = false;
             if (picked == "auto" && !IssueToken.Available)
-                GlassDialog.Show(this, CrashReporter.NoTokenText + "\nSeçim \"Sor\" olarak kalır.", "Otomatik gönderim", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            {
+                GlassDialog.Show(this, "Bu sürümde gönderme anahtarı yok; Otomatik seçilemez ve rapor tarayıcıda açılır.", "Otomatik gönderim", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                declined = true;
+            }
             else if (picked == "auto")
+            {
                 confirmed = (work.CrashPrompt == "auto" && work.CrashAutoConsent) ||
                     GlassDialog.Show(this, CrashReporter.AutoWarning + "\n\nOtomatik kipte rapor, çökmeden sonra size sorulmadan GitHub'da herkese açık bir kayıt olarak oluşturulur. " +
                         "Bunu kabul ediyor musunuz?", "Otomatik gönderim", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.OK;
+                declined = !confirmed;
+            }
             bool consent;
-            work.CrashPrompt = CrashPromptLogic.StoredMode(picked, IssueToken.Available, confirmed, out consent);
+            // Cancelled / not possible: back to the mode chosen before (work still holds it).
+            if (declined) consent = work.CrashAutoConsent;
+            else work.CrashPrompt = CrashPromptLogic.StoredMode(picked, IssueToken.Available, confirmed, out consent);
             work.CrashAutoConsent = consent;
             if (work.CrashPrompt != picked) { settingPrompt = true; prompt.SelectedIndex = Array.IndexOf(promptModes, work.CrashPrompt); settingPrompt = false; }
             promptRow.Description = CrashPromptText(work.CrashPrompt); promptRow.Invalidate();
