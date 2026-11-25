@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -56,7 +57,18 @@ static class Tests
         Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
         Run("Güncelleme: zip slip", UpdateZipSlip);
         Run("OpenVPN penceresi geri getirme", OpenVpnWindowRestore);
-        Console.WriteLine();
+        Run("Tanılama: temizleyici sahte sırları siler", SanitizerRemovesSeeds);
+        Run("Tanılama: temizleyici idempotent ve kararlı", SanitizerIdempotentAndStable);
+        Run("Tanılama: temizleyici kodu bozmaz", SanitizerKeepsCode);
+        Run("Tanılama: parmak izi", ErrorFingerprints);
+        Run("Tanılama: rapor", ReportBuild);
+        Run("Tanılama: GitHub kayıt adresi", IssueLinks);
+        Run("Tanılama: yineleme denetimi", DuplicateCheck);
+        Run("Tanılama: günlük döndürme", LogRotationRules);
+        Run("Tanılama: sıklık sınırı", RateLimit);
+        Run("Tanılama: çökme işareti", CrashMarker);
+        Run("Tanılama: günlük dosyası", LogWriterFile);
+        Run("Ayarlar: tanılama", DiagnosticsSettings);        Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
     }
@@ -655,5 +667,308 @@ static class Tests
             Check(!Directory.Exists(Path.Combine(work, "paket")), "yarım açılan paket silinir");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    // ---------- Diagnostics (modules\Diagnostics.cs) ----------
+    // All data below is fictional (.example hosts, documentation IP ranges, made-up names).
+
+    // " (fark: …)" around the first differing character, for failure messages.
+    static string Diff(string a, string b)
+    {
+        if (a == b) return "";
+        var i = 0; while (i < a.Length && i < b.Length && a[i] == b[i]) i++;
+        var s = Math.Max(0, i - 30);
+        return " (fark: «" + a.Substring(s, Math.Min(80, a.Length - s)) + "» / «" + b.Substring(s, Math.Min(80, b.Length - s)) + "»)";
+    }
+
+    static LogSanitizer SeededSanitizer()
+    {
+        var s = new LogSanitizer();
+        s.AddProfile(new VpnProfile { Name = "Acme Lojistik Merkez", Host = "vpn.acme-lojistik.example", Username = "ayse.demir" });
+        s.AddProfile(new VpnProfile { Name = "Beta Enerji", Host = "198.51.100.7:1194", Username = "beta.vpnuser" });
+        s.AddHost("wg-gw.gamma-tekstil.example");                       // a WatchGuard server entry
+        s.AddUser("ayse.demir");
+        s.AddMachine("ACME-PC-042");
+        s.AddDomain("ACMECORP");
+        s.AddPathRoot(@"C:\Users\ayse.demir\AppData\Local", "%LOCALAPPDATA%");
+        s.AddPathRoot(@"C:\Users\ayse.demir\AppData\Roaming", "%APPDATA%");
+        s.AddPathRoot(@"C:\Users\ayse.demir", "~");
+        return s;
+    }
+
+    const string SeedLog =
+        "2026-11-25 14:03:11.123 INFO  forti connect requested kind=Forti profile=Acme Lojistik Merkez host=vpn.acme-lojistik.example\n" +
+        "2026-11-25 14:03:12.000 WARN  sophos sccli enable -p Hunter2!Gizli --user beta.vpnuser\n" +
+        "2026-11-25 14:03:12.500 ERROR app password=Hunter2!Gizli token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 secret: \"s3cr3t value\"\n" +
+        "Authorization: Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==\n" +
+        "curl -H \"Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl\" https://admin:Hunter2!Gizli@fw.delta-insaat.example/api\n" +
+        "mail to ayse.demir@acme-lojistik.example and it@delta-insaat.example\n" +
+        "server 203.0.113.45:443, backup 198.51.100.7, v6 2001:db8::42 and fe80::1%12\n" +
+        "Beta Enerji connected via wg-gw.gamma-tekstil.example on ACME-PC-042 (ACMECORP\\ayse.demir)\n" +
+        "C:\\Users\\ayse.demir\\AppData\\Roaming\\OpenVpnQuickSearch\\settings.json and C:\\Users\\mehmet.kaya\\Desktop\\epsilon.ovpn\n" +
+        "share \\\\fs01.zeta-gida.example\\vpn\\profiles\n" +
+        "blob deadbeefdeadbeefdeadbeefdeadbeef00112233 key MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n" +
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcw\nZmFrZSBrZXkgZGF0YQ==\n-----END PRIVATE KEY-----\n" +
+        "<key>\nZmFrZSBpbmxpbmUga2V5\n</key>\n" +
+        "unknown host eta-holding.example.com.tr answered\n";
+
+    static readonly string[] Seeds = {
+        "acme", "lojistik", "Beta Enerji", "beta.vpnuser", "gamma", "delta", "zeta", "eta-holding", "ayse", "demir", "mehmet", "kaya", "epsilon",
+        "ACME-PC-042", "Hunter2", "ghp_", "QWxhZGRpbjpvcGVu", "eyJhbGci", "s3cr3t", "203.0.113.45", "198.51.100.7", "2001:db8", "fe80",
+        "deadbeef", "MIIEvQ", "ZmFrZSB", "fs01", "it@" };
+
+    static void SanitizerRemovesSeeds()
+    {
+        var s = SeededSanitizer();
+        var outText = s.Sanitize(SeedLog);
+        var leaked = Seeds.Where(x => outText.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        Check(leaked.Count == 0, "sahte sırların hiçbiri kalmaz" + (leaked.Count > 0 ? " (kalan: " + string.Join(", ", leaked) + ")\n" + outText : ""));
+        Check(outText.Contains("<profil-1>") && outText.Contains("<sunucu-1>") && outText.Contains("<ip-") && outText.Contains("<kullanici>") && outText.Contains("<makine>") && outText.Contains("<alan>"), "bilinen değerler yer tutucuya döner");
+        Check(outText.Contains("%APPDATA%\\OpenVpnQuickSearch\\settings.json") && outText.Contains("~\\Desktop\\epsilon.ovpn") == false && outText.Contains("~\\Desktop"), "kullanıcı klasörleri kısaltılır, dosya adı kalır");
+        Check(outText.Contains("<pem>") && outText.Contains("<anahtar>") && outText.Contains("<gizli>") && outText.Contains("<eposta>") && outText.Contains("<blob>"), "PEM, satır içi anahtar, parola, e-posta, blob");
+        // a fresh sanitizer without known values still catches the pattern-based ones
+        var bare = new LogSanitizer().Sanitize("x 203.0.113.9 y vpn.kappa.example z password=abc123 u ops@kappa.example C:\\Users\\lambda\\x.txt \\\\nas01\\s");
+        Check(!bare.Contains("203.0.113.9") && !bare.Contains("kappa") && !bare.Contains("abc123") && !bare.Contains("lambda") && !bare.Contains("nas01"), "bilinmeyen değerler kalıplarla yakalanır: " + bare);
+    }
+
+    static void SanitizerIdempotentAndStable()
+    {
+        var s = SeededSanitizer();
+        var once = s.Sanitize(SeedLog);
+        Check(s.Sanitize(once) == once, "aynı örnekle ikinci geçiş değiştirmez" + Diff(once, s.Sanitize(once)));
+        Check(SeededSanitizer().Sanitize(once) == once && new LogSanitizer().Sanitize(once) == once, "yeni örnekle de değiştirmez (idempotent)" + Diff(once, new LogSanitizer().Sanitize(once)));
+        var t = new LogSanitizer();
+        var a = t.Sanitize("a vpn.iota.example b vpn.theta.example c vpn.iota.example d 192.0.2.10 e 192.0.2.10 f 192.0.2.11");
+        Check(a == "a <sunucu-1> b <sunucu-2> c <sunucu-1> d <ip-1> e <ip-1> f <ip-2>", "yer tutucular rapor içinde kararlı: " + a);
+        Check(t.Sanitize("again vpn.theta.example") == "again <sunucu-2>", "aynı örnekte sonraki çağrıda da aynı numara");
+        var p = new LogSanitizer(); p.AddProfileName("Omega"); p.AddProfileName("Omega Lojistik"); p.AddProfileName("ab");
+        Check(p.Sanitize("Omega Lojistik ve Omega ve ab") == "<profil-2> ve <profil-1> ve ab", "uzun ad önce; 3 karakterden kısa değerler yok sayılır");
+        var u = new LogSanitizer(); u.AddUser("ali");
+        Check(u.Sanitize("ali ve Kalinin ve ALI") == "<kullanici> ve Kalinin ve <kullanici>", "kısa değerler yalnızca tam kelime olarak");
+    }
+
+    static void SanitizerKeepsCode()
+    {
+        var s = new LogSanitizer(); s.AddProfileName("Form"); s.AddProfileName("Connect");
+        var frame = "   at SearchForm.ConnectForti in OpenVpnQuickSearch.cs:line 1073";
+        Check(s.Sanitize(frame) == frame, "yığın satırı (yalnızca tanımlayıcılar) olduğu gibi kalır");
+        var plain = "System.IO.IOException at System.Windows.Forms.Control.Invoke, see Connection.cs and app-20261125.log, api.github.com, sürüm 2.1.0, 2026-11-25 14:03:11.123, clr 4.0.30319.42000, scale=1.50";
+        var n = new LogSanitizer().Sanitize(plain);
+        Check(n == plain, "kod adları, dosya adları, GitHub, sürümler ve zaman damgaları bozulmaz: " + n);
+    }
+
+    static Exception Thrown(Action a) { try { a(); } catch (Exception ex) { return ex; } return null; }
+    static int failDepth;
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static void FailDeep(int n) { if (n <= 0) throw new InvalidOperationException("could not open 'C:\\Users\\ayse.demir\\x.ovpn' on vpn.acme-lojistik.example"); FailDeep(n - 1); failDepth++; } // not a tail call: every level keeps its frame
+
+    static void ErrorFingerprints()
+    {
+        var a = new ErrorInfo { Type = "System.NullReferenceException" };
+        a.Frames.Add(new ErrorFrame { Method = "SearchForm.ConnectForti", File = "OpenVpnQuickSearch.cs", Line = 10 });
+        a.Frames.Add(new ErrorFrame { Method = "SearchForm+<>c__DisplayClass1a.<ConnectForti>b__19", File = "OpenVpnQuickSearch.cs", Line = 20 });
+        a.Frames.Add(new ErrorFrame { Method = "ProfileList.OnMouseUp", File = "GlassList.cs", Line = 30 });
+        a.Frames.Add(new ErrorFrame { Method = "System.Windows.Forms.Control.WndProc" });
+        var b = new ErrorInfo { Type = a.Type };
+        b.Frames.Add(new ErrorFrame { Method = "SearchForm.ConnectForti", File = "Other.cs", Line = 999 });
+        b.Frames.Add(new ErrorFrame { Method = "SearchForm+<>c__DisplayClass2f.<ConnectForti>b__7" });
+        b.Frames.Add(new ErrorFrame { Method = "ProfileList.OnMouseUp", Line = 31 });
+        b.Frames.Add(new ErrorFrame { Method = "Something.Else" });
+        var fa = ErrorFingerprint.Of(a); var fb = ErrorFingerprint.Of(b);
+        Check(fa != null && System.Text.RegularExpressions.Regex.IsMatch(fa, "^[0-9a-f]{8}$"), "parmak izi 8 onaltılık karakter: " + fa);
+        Check(fa == fb, "dosya yolu, satır numarası, derleyici sayaçları ve 4. çerçeve parmak izini değiştirmez");
+        b.Frames[2].Method = "ProfileList.OnMouseDown";
+        Check(ErrorFingerprint.Of(b) != fa, "ilk 3 yöntemden biri değişince parmak izi değişir");
+        var c = new ErrorInfo { Type = "System.ArgumentException", Frames = a.Frames };
+        Check(ErrorFingerprint.Of(c) != fa, "istisna türü parmak izine girer");
+        var wrapped = new ErrorInfo { Type = "System.Reflection.TargetInvocationException", Inner = a };
+        wrapped.Frames.Add(new ErrorFrame { Method = "System.RuntimeMethodHandle.InvokeMethod" });
+        Check(ErrorFingerprint.Of(wrapped) == fa, "sarmalayan istisnada en içteki hata esas alınır");
+
+        var ex1 = Thrown(() => FailDeep(2)); var ex2 = Thrown(() => FailDeep(2));
+        var i1 = ErrorInfo.From(ex1);
+        Check(ErrorFingerprint.Of(i1) == ErrorFingerprint.Of(ErrorInfo.From(ex2)), "aynı yerden atılan gerçek istisnalar aynı parmak izi");
+        Check(i1.Frames.Count >= 3 && i1.Frames.All(f => f.File == null || (f.File.IndexOf('\\') < 0 && f.File.IndexOf('/') < 0)), "çerçevelerde mutlak yol yok: " + string.Join(" | ", i1.Frames.Select(f => f.ToString()).ToArray()));
+        Check(i1.Frames[0].Method == "Tests.FailDeep", "çerçeve tür + yöntem adı: " + i1.Frames[0].Method);
+        var nested = ErrorInfo.From(new InvalidOperationException("dış", ex1));
+        Check(nested.Inner != null && nested.Root.Type == "System.InvalidOperationException" && nested.Inner.Frames.Count > 0, "iç istisna korunur");
+    }
+
+    static ReportEnvironment FakeEnv()
+    {
+        return new ReportEnvironment { AppVersion = "2.1.0", Windows = "10.0 build 26100.2033", Clr = "4.0.30319.42000", NetRelease = "533325", Scale = 1.5F, OpenVpn = true, Forti = true };
+    }
+
+    static void ReportBuild()
+    {
+        var ex = Thrown(() => FailDeep(1));
+        var log = new List<string>();
+        for (var i = 0; i < 100; i++) log.Add("2026-11-25 14:00:" + (i % 60).ToString("00") + ".000 INFO  app line " + i + " host vpn.acme-lojistik.example user ayse.demir");
+        var r = ErrorReport.Build("crash", ErrorInfo.From(ex), FakeEnv(), log, SeededSanitizer(), new DateTime(2026, 11, 25, 11, 0, 0, DateTimeKind.Utc));
+        Check(System.Text.RegularExpressions.Regex.IsMatch(r.Title, @"^\[hata\] InvalidOperationException: Tests\.FailDeep \([0-9a-f]{8}\)$"), "başlık biçimi: " + r.Title);
+        Check(r.Fingerprint != null && r.Title.Contains("(" + r.Fingerprint + ")") && r.Body.Contains("`" + r.Fingerprint + "`"), "parmak izi başlıkta ve gövdede");
+        Check(r.Body.Contains("2.1.0") && r.Body.Contains("26100") && r.Body.Contains("4.0.30319.42000") && r.Body.Contains("OpenVPN Connect: var") && r.Body.Contains("Sophos Connect: yok"), "sürüm, Windows, .NET, sağlayıcılar (var/yok)");
+        Check(r.Body.Contains("line 99") && !r.Body.Contains("line 39 ") && r.Body.Contains("Son günlük satırları (60)"), "yalnızca son 60 günlük satırı");
+        var leaked = Seeds.Where(x => r.Body.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0 || r.Title.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        Check(leaked.Count == 0 && !r.Body.Contains(":\\"), "rapor sahte sır ve mutlak yol içermez" + (leaked.Count > 0 ? ": " + string.Join(", ", leaked) : ""));
+        Check(r.Body.Contains("'<metin>'") && r.Body.Contains("at Tests.FailDeep"), "istisna iletisindeki tırnaklı metin çıkarılır, çerçeveler kalır");
+        Check(SeededSanitizer().Sanitize(r.Body) == r.Body, "rapor gövdesi yeniden temizlenince değişmez");
+        var back = ErrorReport.ParseRecord(r.ToRecord().Replace("\n", "\r\n"));
+        Check(back != null && back.Title == r.Title && back.Kind == "crash" && back.Fingerprint == r.Fingerprint && back.Body.Replace("\r\n", "\n") == r.Body, "kayıt dosyası gidiş-dönüş");
+        Check(ErrorReport.ParseRecord("bozuk") == null && ErrorReport.ParseRecord("title: x\nfingerprint: ../..\n---\nb").Fingerprint == null, "bozuk kayıt / geçersiz parmak izi");
+        var m = ErrorReport.Build("manual", null, FakeEnv(), new List<string>(), new LogSanitizer(), DateTime.UtcNow);
+        Check(m.Kind == "manual" && m.Fingerprint == null && m.Title.StartsWith("[hata] Kullanıcı bildirimi"), "kayıtlı hata yoksa kullanıcı bildirimi");
+    }
+
+    static void IssueLinks()
+    {
+        bool cut;
+        var url = IssueLink.NewIssueUrl("[hata] Çökme: ığüşöç (ab12cd34)", "Gövde: ığüşöçİ & = ? #\nikinci satır", IssueLink.MaxUrlLength, out cut);
+        Check(!cut && url.StartsWith("https://github.com/bymrhan/vpn-manager/issues/new?template=hata-raporu.yml&labels=hata&title="), "kısa rapor: şablon ve etiket ile");
+        Check(url.Contains("%C4%B1") && url.Contains("%C5%9F") && url.Contains("%C3%87") && url.Contains("%26") && url.Contains("%3D") && url.Contains("%0A") && url.IndexOf(' ') < 0, "Türkçe karakterler ve özel karakterler yüzde-kodlanır");
+        Check(Uri.UnescapeDataString(url).Contains("&rapor=Gövde: ığüşöçİ & = ? #\nikinci satır"), "kod çözülünce gövde aynen");
+        var body = new StringBuilder("### Ortam\n- x\n\n### Son günlük satırları\n```\n");
+        for (var i = 0; i < 400; i++) body.Append("2026-11-25 14:00:00.000 INFO  app satır ").Append(i).Append(" ığüş\n");
+        body.Append("```\n");
+        url = IssueLink.NewIssueUrl("[hata] T: M (ab12cd34)", body.ToString(), IssueLink.MaxUrlLength, out cut);
+        var decoded = Uri.UnescapeDataString(url);
+        var fences = System.Text.RegularExpressions.Regex.Matches(decoded, "```").Count;
+        Check(cut && url.Length <= IssueLink.MaxUrlLength && url.Length > IssueLink.MaxUrlLength - 400, "uzun rapor sınırın altında kısaltılır (" + url.Length + ")");
+        Check(decoded.Contains("panoya kopyalandı") && fences % 2 == 0 && decoded.Contains("satır 0 "), "kısaltma notu, kapalı kod bloğu, baştan satırlar");
+        Check(IssueLink.IsOurIssueUrl("https://github.com/bymrhan/vpn-manager/issues/12") && !IssueLink.IsOurIssueUrl("https://github.com/other/repo/issues/1") && !IssueLink.IsOurIssueUrl("https://evil.example/?https://github.com/bymrhan/vpn-manager/issues/"), "yalnızca bu deponun kayıt adresleri açılır");
+    }
+
+    static void DuplicateCheck()
+    {
+        const string fp = "ab12cd34";
+        var json = "{\"total_count\":4,\"items\":[" +
+            "{\"number\":3,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/pull/3\",\"state\":\"open\",\"pull_request\":{}}," +
+            "{\"number\":4,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/someone/fork/issues/4\",\"state\":\"open\"}," +
+            "{\"number\":5,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/5\",\"state\":\"closed\"}," +
+            "{\"number\":9,\"title\":\"[hata] X: Y (AB12CD34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/9\",\"state\":\"open\"}]}";
+        var d = IssueLink.FindDuplicate(json, fp);
+        Check(d != null && d.Number == 9 && d.Open, "açık kayıt kapalıya tercih edilir; PR ve başka depo atlanır");
+        var closedOnly = "{\"items\":[{\"number\":5,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/5\",\"state\":\"closed\"}]}";
+        d = IssueLink.FindDuplicate(closedOnly, fp);
+        Check(d != null && d.Number == 5 && !d.Open, "kapalı kayıt da yineleme sayılır");
+        Check(IssueLink.FindDuplicate("{\"items\":[{\"number\":1,\"title\":\"başka (ab12cd35)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/1\",\"state\":\"open\"}]}", fp) == null, "başka parmak izi eşleşmez");
+        Check(IssueLink.FindDuplicate("<html>rate limit</html>", fp) == null && IssueLink.FindDuplicate("{\"message\":\"API rate limit exceeded\"}", fp) == null && IssueLink.FindDuplicate(json, "zz") == null, "bozuk yanıt / geçersiz parmak izi: yok");
+        string asked = null;
+        d = IssueLink.CheckDuplicate(fp, u => { asked = u; return closedOnly; });
+        Check(d != null && asked != null && asked.StartsWith("https://api.github.com/search/issues?q=") && asked.Contains("repo%3Abymrhan%2Fvpn-manager") && asked.Contains(fp), "arama adresi depo ve parmak izi ile");
+        Check(IssueLink.CheckDuplicate(fp, u => { throw new System.Net.WebException("ağ yok"); }) == null, "ağ hatası sessizce atlanır");
+        var called = false;
+        Check(IssueLink.CheckDuplicate("../x", u => { called = true; return json; }) == null && !called, "geçersiz parmak izi için istek yapılmaz");
+    }
+
+    static void LogRotationRules()
+    {
+        var now = new DateTime(2026, 11, 25, 9, 0, 0);
+        var ex = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        Check(LogRotation.PickFile(now, ex, 100) == "app-20261125.log", "ilk dosya");
+        ex["app-20261125.log"] = 50;
+        Check(LogRotation.PickFile(now, ex, 100) == "app-20261125.log", "sınırın altında aynı dosya");
+        ex["app-20261125.log"] = 100;
+        Check(LogRotation.PickFile(now, ex, 100) == "app-20261125-2.log", "sınırda sonraki parça");
+        ex["app-20261125-2.log"] = 10;
+        Check(LogRotation.PickFile(now, ex, 100) == "app-20261125-2.log", "en yeni parçaya devam");
+        Check(LogRotation.PickFile(now.AddDays(1), ex, 100) == "app-20261126.log", "yeni gün yeni dosya");
+        var names = new[] { "app-20261120.log", "app-20261121.log", "app-20261122.log", "app-20261123.log", "app-20261124.log", "app-20261125.log", "app-20261125-2.log", "app-20261125-10.log", "forti.log", "crash-20261125-120000.txt" };
+        var del = LogRotation.ToDelete(names, 5);
+        Check(del.Count == 3 && del.Contains("app-20261120.log") && del.Contains("app-20261121.log") && del.Contains("app-20261122.log"), "en fazla 5 günlük kalır, eskiler silinir; başka dosyalara dokunulmaz");
+        var recs = new[] { "crash-20261120-100000.txt", "crash-20261121-100000.txt", "crash-20261121-100000-2.txt", "error-20261125-100000.txt", "crash-x.txt" };
+        Check(LogRotation.RecordsToDelete(recs, "crash", 2).SequenceEqual(new[] { "crash-20261120-100000.txt" }), "kayıt temizliği türe göre");
+        Check(LogRotation.NewestRecord(recs) == "error-20261125-100000.txt" && LogRotation.NewestRecord(new[] { "app-20261125.log" }) == null, "en yeni kayıt");
+    }
+
+    static void RateLimit()
+    {
+        var l = new LogRateLimiter(TimeSpan.FromMinutes(10));
+        var t = new DateTime(2026, 11, 25, 9, 0, 0, DateTimeKind.Utc); int s;
+        Check(l.Allow("poll:sophos", t, out s) && s == 0, "ilk kayıt yazılır");
+        Check(!l.Allow("poll:sophos", t.AddMinutes(1), out s) && !l.Allow("poll:sophos", t.AddMinutes(2), out s), "pencere içinde susturulur");
+        Check(l.Allow("poll:watchguard", t.AddMinutes(2), out s), "anahtarlar ayrı");
+        Check(l.Allow("poll:sophos", t.AddMinutes(10), out s) && s == 2, "pencere sonunda yazılır, atlanan sayısıyla");
+        Check(l.Allow("poll:sophos", t.AddMinutes(-5), out s), "saat geri giderse kilitlenmez");
+    }
+
+    static void CrashMarker()
+    {
+        var now = new DateTime(2026, 11, 25, 9, 0, 0, DateTimeKind.Utc);
+        var m = CrashPromptLogic.MarkerText("crash-20261125-085959.txt", now.AddMinutes(-1));
+        Check(CrashPromptLogic.ShouldOffer(m, "ask", false, now) == "crash-20261125-085959.txt", "işaret varsa sorulur");
+        Check(CrashPromptLogic.ShouldOffer(m, "never", false, now) == null && CrashPromptLogic.ShouldOffer(m, "ask", true, now) == null, "\"bir daha sorma\" ve demo: sorulmaz");
+        Check(CrashPromptLogic.ShouldOffer(m, "ask", false, now.AddDays(31)) == null && CrashPromptLogic.ShouldOffer(CrashPromptLogic.MarkerText("crash-20261125-085959.txt", now.AddDays(3)), "ask", false, now) == null, "eski ya da gelecekteki işaret yok sayılır");
+        Check(CrashPromptLogic.ShouldOffer("..\\..\\settings.json\n2026-11-25T08:00:00Z\n", "ask", false, now) == null && CrashPromptLogic.ShouldOffer("error-20261125-085959.txt\n2026-11-25T08:00:00Z\n", "ask", false, now) == null && CrashPromptLogic.ShouldOffer("", "ask", false, now) == null && CrashPromptLogic.ShouldOffer("crash-20261125-085959.txt\nbozuk", "ask", false, now) == null, "bozuk işaret, yol, işlenmiş hata: sorulmaz");
+    }
+
+    static void LogWriterFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-log-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var t = new DateTime(2026, 11, 25, 9, 0, 0);
+            var w = new LogWriter(dir) { Async = false, Clock = () => t };
+            w.Write(LogLevel.Info, "app", "start version=2.1.0", null);
+            w.Write(LogLevel.Warn, "forti", "çok\nsatırlı", null);
+            w.Write(LogLevel.Error, "crash", "boom", Thrown(() => FailDeep(1)));
+            var file = Path.Combine(dir, "app-20261125.log");
+            var lines = File.ReadAllLines(file, Encoding.UTF8);
+            Check(lines.Length >= 4 && lines[0] == "2026-11-25 09:00:00.000 INFO  app start version=2.1.0" && lines[1] == "2026-11-25 09:00:00.000 WARN  forti çok satırlı", "satır biçimi: zaman düzey kaynak ileti, UTF-8: " + (lines.Length > 1 ? lines[1] : ""));
+            Check(lines[2].StartsWith("2026-11-25 09:00:00.000 ERROR crash boom") && lines.Skip(3).Any(l => l.Trim().StartsWith("at Tests.FailDeep")) && !lines.Any(l => l.Contains(":\\")), "istisna yığını yolsuz, ileti tırnaksız");
+            var b = File.ReadAllBytes(file);
+            Check(b.Length > 3 && !(b[0] == 0xEF && b[1] == 0xBB), "BOM'suz UTF-8");
+            Check(w.Recent(2).Count == 2 && w.Recent(100).Count == lines.Length, "son satırlar bellekte");
+            w.Enabled = false; w.Write(LogLevel.Info, "app", "yazılmamalı", null);
+            Check(!File.ReadAllText(file).Contains("yazılmamalı"), "kapalıyken yazılmaz");
+
+            var r = new LogWriter(dir) { Async = false, Clock = () => t, MaxBytes = 300, Keep = 3 };
+            for (var i = 0; i < 40; i++) r.Write(LogLevel.Info, "app", "rotation line " + i + new string('x', 40), null);
+            var files = Directory.GetFiles(dir, "app-*.log");
+            Check(files.Length == 3 && files.All(f => new FileInfo(f).Length < 300 + 200), "boyut sınırında yeni parça, en fazla Keep dosya (" + files.Length + ")");
+
+            var a = new LogWriter(dir + "-async") { Clock = () => t };
+            var threads = new List<Thread>();
+            for (var k = 0; k < 4; k++) { var id = k; var th = new Thread(() => { for (var i = 0; i < 50; i++) a.Write(LogLevel.Info, "w" + id, "line " + i, null); }); threads.Add(th); th.Start(); }
+            foreach (var th in threads) th.Join();
+            for (var wait = 0; wait < 50 && (!File.Exists(Path.Combine(dir + "-async", "app-20261125.log")) || File.ReadAllLines(Path.Combine(dir + "-async", "app-20261125.log")).Length < 200); wait++) { a.Flush(); Thread.Sleep(50); }
+            a.Flush();
+            var asyncLines = File.ReadAllLines(Path.Combine(dir + "-async", "app-20261125.log")).Length;
+            Check(asyncLines == 200, "4 iş parçacığından 200 satır, kayıpsız (" + asyncLines + ")");
+
+            var bad = new LogWriter("Z:\\::yok\\<>|") { Async = false };
+            var threw = false;
+            try { bad.Write(LogLevel.Error, "app", "x", new Exception("y")); bad.Flush(); bad.Recent(5); } catch { threw = true; }
+            Check(!threw, "yazılamayan klasör: hata atmaz");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+            try { Directory.Delete(dir + "-async", true); } catch { }
+        }
+    }
+
+    static void DiagnosticsSettings()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ovpnqs-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        SettingsStore.PathOverride = path;
+        try
+        {
+            File.WriteAllText(path, "{\"Hotkey\":\"Ctrl+Alt+V\",\"Theme\":\"light\"}");
+            var old = SettingsStore.Load();
+            Check(old.LogEnabled && old.CrashPrompt == "ask", "eski settings.json: günlük açık, çökmede sor");
+            old.LogEnabled = false; old.CrashPrompt = "never";
+            SettingsStore.Save(old);
+            var back = SettingsStore.Load();
+            Check(!back.LogEnabled && back.CrashPrompt == "never", "kaydedilip geri okunur");
+            File.WriteAllText(path, "{\"LogEnabled\":\"hayir\",\"CrashPrompt\":\"bazen\"}");
+            var bad = SettingsStore.Load();
+            Check(bad.LogEnabled && bad.CrashPrompt == "ask", "geçersiz değerler varsayılana döner");
+        }
+        finally
+        {
+            SettingsStore.PathOverride = null;
+            try { File.Delete(path); } catch { }
+        }
     }
 }

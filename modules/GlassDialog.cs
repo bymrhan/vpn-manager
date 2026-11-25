@@ -20,7 +20,7 @@ internal sealed class GlassDialog : Form
     readonly System.Windows.Forms.Timer fade = new System.Windows.Forms.Timer { Interval = 15 };
     Point home;
 
-    GlassDialog(string text, string caption, MessageBoxButtons kind, MessageBoxIcon icon, int def)
+    GlassDialog(string text, string caption, MessageBoxButtons kind, MessageBoxIcon icon, int def, string[] custom = null, int escIndex = -1)
     {
         this.defIndex = def;
         this.text = text ?? ""; this.caption = caption ?? ""; Text = this.caption; this.icon = icon;
@@ -40,15 +40,21 @@ internal sealed class GlassDialog : Form
             case MessageBoxButtons.YesNoCancel: labels = new[] { "Evet", "Hayır", "İptal" }; results = new[] { DialogResult.Yes, DialogResult.No, DialogResult.Cancel }; break;
             default: labels = new[] { "Tamam" }; results = new[] { DialogResult.OK }; break;
         }
+        if (custom != null && custom.Length > 0 && custom.Length <= ChoiceResults.Length)
+        {
+            labels = custom; results = ChoiceResults.Take(custom.Length).ToArray();
+        }
         var x = Width - S(22);
         for (var i = labels.Length - 1; i >= 0; i--)
         {
-            var b = new SButton(labels[i], i == Math.Min(def, labels.Length - 1) ? SButtonKind.Primary : SButtonKind.Secondary) { Width = Math.Max(S(92), 0) };
+            var b = new SButton(labels[i], i == Math.Min(def, labels.Length - 1) ? SButtonKind.Primary : SButtonKind.Secondary);
+            b.Width = Math.Max(S(92), b.Width);
             var r = results[i]; b.Click += delegate { DialogResult = r; };
             x -= b.Width; b.Location = new Point(x, Height - S(22) - b.Height); x -= S(8);
             Controls.Add(b); buttons.Insert(0, b);
         }
-        CancelResult = results.Contains(DialogResult.Cancel) ? DialogResult.Cancel : results.Contains(DialogResult.No) ? DialogResult.No : DialogResult.OK;
+        CancelResult = escIndex >= 0 && escIndex < results.Length ? results[escIndex]
+            : results.Contains(DialogResult.Cancel) ? DialogResult.Cancel : results.Contains(DialogResult.No) ? DialogResult.No : DialogResult.OK;
         KeyDown += delegate(object s, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Escape) { DialogResult = CancelResult; e.Handled = true; }
@@ -115,6 +121,16 @@ internal sealed class GlassDialog : Form
     public static DialogResult Show(IWin32Window owner, string text, string caption) { return Show(owner, text, caption, MessageBoxButtons.OK, MessageBoxIcon.None); }
     public static DialogResult Show(IWin32Window owner, string text) { return Show(owner, text, "", MessageBoxButtons.OK, MessageBoxIcon.None); }
     public static DialogResult Show(string text, string caption) { return Show(null, text, caption, MessageBoxButtons.OK, MessageBoxIcon.None); }
+
+    // Buttons with own labels (left to right); returns the index of the pressed one. Esc / close = escIndex.
+    static readonly DialogResult[] ChoiceResults = { DialogResult.Yes, DialogResult.No, DialogResult.Ignore, DialogResult.Retry, DialogResult.Abort };
+    public static int ShowChoice(IWin32Window owner, string text, string caption, string[] labels, int defaultIndex, int escIndex, MessageBoxIcon icon)
+    {
+        DialogResult r;
+        using (var d = new GlassDialog(text, caption, MessageBoxButtons.OK, icon, defaultIndex, labels, escIndex)) r = owner != null ? d.ShowDialog(owner) : d.ShowDialog();
+        var i = Array.IndexOf(ChoiceResults, r);
+        return i >= 0 && i < labels.Length ? i : escIndex;
+    }
 }
 
 // Toast: a floating glass capsule that slides up from the footer, then away.

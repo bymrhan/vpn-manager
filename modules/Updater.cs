@@ -378,6 +378,14 @@ internal static class UpdateClient
 
     static string Quote(string s) { return "\"" + s.Replace("\"", "") + "\""; }
 
+    // Read-only GET of a GitHub API JSON document (diagnostics duplicate check). Never call on the
+    // UI thread. Throws on network / size problems.
+    public static string GetText(string url)
+    {
+        if (url == null || !url.StartsWith("https://api.github.com/", StringComparison.Ordinal)) throw new InvalidOperationException("beklenmeyen adres");
+        return Encoding.UTF8.GetString(Get(url, MaxJsonBytes, "application/vnd.github+json"));
+    }
+
     static byte[] Get(string url, long maxBytes, string accept)
     {
         if (!url.StartsWith("https://", StringComparison.Ordinal)) throw new InvalidOperationException("yalnızca HTTPS");

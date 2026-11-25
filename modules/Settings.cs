@@ -32,6 +32,8 @@ internal sealed class AppSettings
     public string UpdateInterval;       // "startup", "daily", "weekly"
     public DateTime LastUpdateCheckUtc; // last successful update check
     public string SkippedVersion;       // "2.1.0" the user chose to skip; "" = none
+    public bool LogEnabled;             // app log + crash / error records in %APPDATA%\OpenVpnQuickSearch\logs
+    public string CrashPrompt;          // "ask" (offer the GitHub report after a crash), "never"
 
     public static AppSettings Defaults()
     {
@@ -52,7 +54,9 @@ internal sealed class AppSettings
             UpdateMode = "ask",
             UpdateInterval = "daily",
             LastUpdateCheckUtc = DateTime.MinValue,
-            SkippedVersion = ""
+            SkippedVersion = "",
+            LogEnabled = true,
+            CrashPrompt = "ask"
         };
     }
 
@@ -82,6 +86,7 @@ internal sealed class AppSettings
         if (Array.IndexOf(new[] { "startup", "daily", "weekly" }, UpdateInterval) < 0) UpdateInterval = d.UpdateInterval;
         if (LastUpdateCheckUtc.Kind == DateTimeKind.Unspecified) LastUpdateCheckUtc = DateTime.SpecifyKind(LastUpdateCheckUtc, DateTimeKind.Utc);
         SkippedVersion = UpdateLogic.NormalizeTag(SkippedVersion) ?? "";
+        if (CrashPrompt != "ask" && CrashPrompt != "never") CrashPrompt = d.CrashPrompt;
     }
 }
 
@@ -128,6 +133,8 @@ internal static class SettingsStore
             long uticks = Long(d, "LastUpdateCheckUtcTicks", 0);
             s.LastUpdateCheckUtc = uticks > 0 && uticks <= DateTime.MaxValue.Ticks ? new DateTime(uticks, DateTimeKind.Utc) : DateTime.MinValue;
             s.SkippedVersion = Str(d, "SkippedVersion", s.SkippedVersion);
+            s.LogEnabled = Bool(d, "LogEnabled", s.LogEnabled);
+            s.CrashPrompt = Str(d, "CrashPrompt", s.CrashPrompt);
         }
         catch
         {
@@ -161,6 +168,8 @@ internal static class SettingsStore
         d["UpdateInterval"] = n.UpdateInterval;
         d["LastUpdateCheckUtcTicks"] = n.LastUpdateCheckUtc.Kind == DateTimeKind.Local ? n.LastUpdateCheckUtc.ToUniversalTime().Ticks : n.LastUpdateCheckUtc.Ticks;
         d["SkippedVersion"] = n.SkippedVersion;
+        d["LogEnabled"] = n.LogEnabled;
+        d["CrashPrompt"] = n.CrashPrompt;
         var json = new JavaScriptSerializer().Serialize(d);
 
         var path = FilePath;
