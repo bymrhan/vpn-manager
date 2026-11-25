@@ -3,7 +3,7 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
-## 2.1.0 (hazırlanıyor)
+## 2.1.0
 
 - **2.0.0'dan güncelleme: kurulum komutunu bir kez yeniden çalıştırın** (`irm https://raw.githubusercontent.com/bymrhan/vpn-manager/main/install.ps1 | iex`). Mevcut kurulum sessizce güncellenir; ayarlar, sabitlenenler ve geçmiş korunur, sihirbaz açılmaz. Sonraki güncellemeler güncelleme ayarlarına göre otomatik gelir.
 - **Sophos Connect desteği:** `sccli` üzerinden profilleri listeleme, bağlanma / bağlantıyı kesme ve durum.

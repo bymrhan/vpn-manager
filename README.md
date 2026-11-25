@@ -264,4 +264,4 @@ Kaynak dosyalar UTF-8 **BOM'lu** ve CRLF'dir (Türkçe metin için `csc` ve Wind
 ## Sürüm
 **2.0.0** — Liquid Glass yeniden tasarımı: cam malzeme sistemi, bağlantı kapsülü, yeni liste/menü/ayarlar, SVG ikon kütüphanesi, FortiClient entegrasyonu, uzaktan kurulum.
 
-**2.1.0 (hazırlanıyor)** — Sophos Connect ve WatchGuard SSL VPN desteği, arka planda bağlanma, FortiClient düzeltmeleri, sağlayıcıya göre ayar anahtarları, otomatik güncelleme sistemi, uygulama günlüğü ve onaylı GitHub hata raporları, ayarlar kaydırma çubuğu düzeltmesi, *Görev çubuğunda göster* seçeneği. Ayrıntılı liste: [`docs/RELEASE-NOTES.md`](docs/RELEASE-NOTES.md).
+**2.1.0** — Sophos Connect ve WatchGuard SSL VPN desteği, arka planda bağlanma, FortiClient düzeltmeleri, sağlayıcıya göre ayar anahtarları, otomatik güncelleme sistemi, uygulama günlüğü ve onaylı GitHub hata raporları, ayarlar kaydırma çubuğu düzeltmesi, *Görev çubuğunda göster* seçeneği. Ayrıntılı liste: [`docs/RELEASE-NOTES.md`](docs/RELEASE-NOTES.md).
