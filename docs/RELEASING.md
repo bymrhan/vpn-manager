@@ -53,7 +53,10 @@ Prereleases and drafts are ignored by the updater.
    ```
 
    The release notes (`--notes-file`) are shown in the app's update notice (first lines) and on the
-   release page. Do not mark the release as a prerelease, or the app will not offer it.
+   release page. Write `notes.md` by copying the version's list from `docs\RELEASE-NOTES.md`
+   (e.g. the "2.1.0 (hazırlanıyor)" list, without the heading); then change that heading to the
+   released version and start a new "(hazırlanıyor)" section for the next one. Do not mark the
+   release as a prerelease, or the app will not offer it.
 
 4. **Check** the release: `install.ps1` on a test machine, or "Şimdi denetle" in
    Ayarlar › Hakkında on an older build (it should report "Sürüm 2.1.0 hazır").

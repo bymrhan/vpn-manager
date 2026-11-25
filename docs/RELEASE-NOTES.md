@@ -1,0 +1,17 @@
+# Sürüm notları
+
+GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
+bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
+
+## 2.1.0 (hazırlanıyor)
+
+- **Sophos Connect desteği:** `sccli` üzerinden profilleri listeleme, bağlanma / bağlantıyı kesme ve durum.
+- **WatchGuard Mobile VPN with SSL desteği:** kayıtlı sunucular listede; bağlanma istemcinin kendi penceresi üzerinden yapılır.
+- **Sağlayıcı ayarları:** FortiClient, Sophos ve WatchGuard için ayrı anahtarlar (Sophos / WatchGuard yalnızca istemci algılanınca); kurulu ve açık istemcinin sekmesi bağlantı yokken de görünür.
+- **Arka planda bağlanma:** VPN istemcilerinin pencereleri öne gelmez, yalnızca sizin işlem yapmanız gerekiyorsa görünür; uygulama kapanırken ekran dışında bekleyen pencere bırakılmaz. Kullanıcı beklenirse küçültülen OpenVPN Connect penceresi geri getirilir.
+- **FortiClient düzeltmeleri:** kullanıcı adı otomatik doldurmanın geri okunarak doğrulanması, arka planda açılan FortiClient penceresinin kapatılması, bağlanma adımının ayrıntılı durumu.
+- **Otomatik güncelleme:** GitHub sürümlerinden denetim (*Sor* / *Otomatik* / *Kapalı*, denetleme sıklığı), SHA-256 doğrulamalı indirme, `kur.ps1 -Update` ile sessiz kurulum ve hata olursa geri alma.
+- **Tanılama:** uygulama günlüğü ve çökme kaydı (Ayarlar > Hakkında > Tanılama ile kapatılabilir); çökmeden sonra temizlenmiş hata raporu yalnızca onayınızla gönderilir.
+- **Hata raporu gönderme:** rapor tarayıcıda hazır bir GitHub kaydı olarak açılır; anahtar gömülü sürümlerde uygulama kaydı onayınızdan sonra kendisi oluşturur (otomatik kip bir kez onaylanan uyarı ister, kurulum başına günde en fazla 3).
+- **Ayarlar penceresi:** yerel kaydırma çubuğu yerine pencere kenarını bozmayan ince kaydırma çubuğu; açıklama satırları metne göre boyutlanır.
+- **Görev çubuğunda göster:** Ayarlar > Genel'deki yeni anahtar (varsayılan kapalı). Açıkken uygulama penceresi görünür olduğu sürece görev çubuğunda ve Alt+Tab'da yer alır; ayar kaydedilince yeniden başlatmadan uygulanır.
