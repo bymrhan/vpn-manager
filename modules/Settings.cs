@@ -25,7 +25,7 @@ internal sealed class AppSettings
     public int BackupKeep;              // 1..100
     public DateTime LastBackupUtc;
     public string DockSide;             // "auto", "right", "left"
-    public string Theme;                // "dark", "light", "system"
+    public string Theme;                // "dark", "light", "system", "ocean" (Derin Mavi); Themes.Ids
     public bool ReachabilityCheck;
     public bool ShowForti;              // list FortiClient VPN tunnels too
     public bool ShowSophos;             // list Sophos Connect connections too (when installed)
@@ -94,7 +94,7 @@ internal sealed class AppSettings
         BackupKeep = Math.Max(1, Math.Min(100, BackupKeep));
         Presence = PresenceMode.Normalize(Presence);
         if (Array.IndexOf(new[] { "auto", "right", "left" }, DockSide) < 0) DockSide = d.DockSide;
-        if (Array.IndexOf(new[] { "dark", "light", "system" }, Theme) < 0) Theme = d.Theme;
+        if (!Themes.IsValid(Theme)) Theme = d.Theme;   // "dark", "light", "system", "ocean"
         if (LastBackupUtc.Kind == DateTimeKind.Unspecified) LastBackupUtc = DateTime.SpecifyKind(LastBackupUtc, DateTimeKind.Utc);
         if (Array.IndexOf(new[] { "ask", "auto", "off" }, UpdateMode) < 0) UpdateMode = d.UpdateMode;
         if (Array.IndexOf(new[] { "startup", "daily", "weekly" }, UpdateInterval) < 0) UpdateInterval = d.UpdateInterval;
@@ -269,7 +269,17 @@ internal static class Themes
 {
     public static bool IsLight { get; private set; }
 
-    // "light" = light, "system" = follow Windows apps setting, anything else = dark.
+    // Stored theme ids (AppSettings.Theme). Order = Settings > Görünüm tiles and the setup wizard's segments.
+    public const string Ocean = "ocean";
+    public static readonly string[] Ids = { "dark", "light", "system", Ocean };
+
+    public static bool IsValid(string theme) { return Array.IndexOf(Ids, theme) >= 0; }
+    // Tile / segment index of a stored id (unknown ids show as the default, Glass Dark) and back.
+    public static int IndexOf(string theme) { return Math.Max(0, Array.IndexOf(Ids, theme)); }
+    public static string FromIndex(int index) { return index >= 0 && index < Ids.Length ? Ids[index] : "dark"; }
+
+    // "light" = light, "system" = follow Windows apps setting (light or Glass Dark), "ocean" = Derin Mavi
+    // (a dark theme: only the palette differs), anything else = dark.
     public static void Apply(string theme)
     {
         var light = theme == "light" || (theme == "system" && SystemPrefersLight());
@@ -284,6 +294,15 @@ internal static class Themes
             Ui.Danger = Color.FromArgb(176, 80, 80); Ui.Warning = Color.FromArgb(160, 120, 56); Ui.Field = Color.FromArgb(255, 255, 255);
             Ui.Highlight = Color.FromArgb(66, 104, 152);
             Ui.GlassPrimary = Color.FromArgb(250, 252, 255); Ui.GlassSecondary = Color.FromArgb(238, 242, 248); Ui.WindowBg = Color.FromArgb(230, 235, 242);
+            Ui.GlassFloating = Color.FromArgb(246, 249, 253); Ui.GlassSelected = Color.FromArgb(214, 226, 241);
+            Ui.WindowTop = Color.FromArgb(242, 246, 251); Ui.WindowBottom = Color.FromArgb(222, 229, 238);
+            Ui.MenuTint = Color.FromArgb(214, 248, 249, 253); Ui.MenuSolid = Color.FromArgb(250, 251, 254); Ui.MenuFrame = Color.FromArgb(0xCC, 0xD2, 0xD8);
+        }
+        else if (theme == Ocean)
+        {
+            // Derin Mavi: deep navy / blue-slate glass, soft blue rims, teal-green connected state.
+            // Values measured from the reference panel (docs/plans/theme-report.md has the table).
+            OceanPalette();
         }
         else
         {
@@ -296,8 +315,41 @@ internal static class Themes
             Ui.Danger = Color.FromArgb(0xC4, 0x78, 0x78); Ui.Warning = Color.FromArgb(0xC4, 0xA1, 0x6E); Ui.Field = Color.FromArgb(0x26, 0x30, 0x3C);
             Ui.Highlight = Color.FromArgb(0x8B, 0xAE, 0xD9);
             Ui.GlassPrimary = Color.FromArgb(0x30, 0x39, 0x45); Ui.GlassSecondary = Color.FromArgb(0x26, 0x30, 0x3C); Ui.WindowBg = Color.FromArgb(0x1C, 0x22, 0x2C);
+            Ui.GlassFloating = Color.FromArgb(0x2A, 0x33, 0x3F); Ui.GlassSelected = Color.FromArgb(0x3A, 0x4B, 0x60);
+            Ui.WindowTop = Color.FromArgb(0x2A, 0x33, 0x40); Ui.WindowBottom = Color.FromArgb(0x18, 0x1E, 0x27);
+            Ui.MenuTint = Color.FromArgb(200, 22, 25, 36); Ui.MenuSolid = Color.FromArgb(30, 33, 46); Ui.MenuFrame = Color.FromArgb(0x46, 0x4C, 0x50);
         }
         IsLight = light;
+    }
+
+    static void OceanPalette()
+    {
+        Set(C(0x1A212C), C(0x232A37), C(0x2B3443),          // bg, surface, surface hover
+            C(0x2E3E52), C(0x2C3541), C(0x4E5E72),          // selected fill, border, strong border
+            C(0x5980AD), C(0x5980AD), C(0x8BAED9),          // brand, accent, accent 2
+            C(0xEDEDED), C(0xCDCDCD), C(0x94A3B7),          // text, muted, faint
+            C(0xB7976B), C(0x65C299));                      // gold, success
+        Ui.Danger = C(0xD88A8E); Ui.Warning = C(0xB7976B); Ui.Field = C(0x303A47);
+        Ui.Highlight = C(0x8BAED9);
+        Ui.GlassPrimary = C(0x263140); Ui.GlassSecondary = C(0x192431); Ui.WindowBg = C(0x172231);
+        Ui.GlassFloating = C(0x303A47); Ui.GlassSelected = C(0x293A4C);
+        Ui.WindowTop = C(0x16263A); Ui.WindowBottom = C(0x162030);
+        Ui.MenuTint = Color.FromArgb(200, C(0x141A24)); Ui.MenuSolid = C(0x1C2330); Ui.MenuFrame = C(0x3A4656);
+    }
+
+    static Color C(int rgb) { return Color.FromArgb((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF); }
+
+    // WCAG 2.x relative luminance and contrast ratio (1..21) of two opaque colors.
+    public static double Luminance(Color c)
+    {
+        Func<int, double> lin = v => { var s = v / 255.0; return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4); };
+        return 0.2126 * lin(c.R) + 0.7152 * lin(c.G) + 0.0722 * lin(c.B);
+    }
+
+    public static double Contrast(Color a, Color b)
+    {
+        double la = Luminance(a), lb = Luminance(b);
+        return (Math.Max(la, lb) + 0.05) / (Math.Min(la, lb) + 0.05);
     }
 
     public static bool SystemPrefersLight()

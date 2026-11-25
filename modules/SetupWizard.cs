@@ -20,7 +20,7 @@ using System.Windows.Forms;
 // Pure helpers for the wizard (unit-tested): status texts, toggle defaults, theme index.
 internal static class WizardLogic
 {
-    public static readonly string[] ThemeKeys = { "dark", "light", "system" };
+    public static readonly string[] ThemeKeys = { "dark", "light", "system", "ocean" };
     public const string NotFound = "Bulunamadı (isteğe bağlı)";
 
     public static int ThemeIndex(string theme) { var i = Array.IndexOf(ThemeKeys, theme); return i < 0 ? 0 : i; }
@@ -147,7 +147,7 @@ internal sealed class SetupWizard : Form
     readonly SButton finish = new SButton("Kurulumu tamamla", SButtonKind.Primary), skip = new SButton("Atla", SButtonKind.Ghost);
     readonly SToggle importOvpn = new SToggle(), importForti = new SToggle(), autoStart = new SToggle(), desktop = new SToggle(), deletePack = new SToggle();
     readonly SToggle showForti = new SToggle(), showSophos = new SToggle(), showWatchGuard = new SToggle();
-    readonly SSegmented theme = new SSegmented("Koyu", "Açık", "Sistem");
+    readonly SSegmented theme = new SSegmented("Koyu", "Açık", "Sistem", "Derin Mavi");
     string progress = ""; float progressValue = -1; bool running, saved;
     readonly List<string> packOvpn = ProfilePack.OpenVpnNames(), packForti = ProfilePack.FortiNames();
     List<string> missingOvpn = new List<string>(), missingForti = new List<string>();

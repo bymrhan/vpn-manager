@@ -298,8 +298,8 @@ internal static class Glass
     static Color W(int a) { return Color.FromArgb(Math.Max(0, Math.Min(255, a)), 255, 255, 255); }
     static Color K(int a) { return Color.FromArgb(Math.Max(0, Math.Min(255, a)), 0, 0, 0); }
 
-    // Window tint over the compositor blur: Graphite/Slate (#1C222C) in dark.
-    public static Color WindowTint { get { return Light ? Color.FromArgb(Backdrop.Active ? 178 : 255, 232, 237, 244) : Color.FromArgb(Backdrop.Active ? 212 : 255, 0x1C, 0x22, 0x2C); } }
+    // Window tint over the compositor blur: Ui.WindowBg (Graphite/Slate #1C222C in Glass Dark).
+    public static Color WindowTint { get { return Light ? Color.FromArgb(Backdrop.Active ? 178 : 255, 232, 237, 244) : Color.FromArgb(Backdrop.Active ? 212 : 255, Ui.WindowBg); } }
 
     // Surface tints use the approved glass colors: Primary #303945, Secondary #26303C.
     static Color Tint(GlassKind kind, float amount)
@@ -310,8 +310,8 @@ internal static class Glass
         {
             case GlassKind.Primary:   c = Ui.GlassPrimary;   a = Light ? 175 : 168; break;
             case GlassKind.Secondary: c = Ui.GlassSecondary; a = Light ? 120 : 118; break;
-            case GlassKind.Floating:  c = Light ? Color.FromArgb(246, 249, 253) : Color.FromArgb(0x2A, 0x33, 0x3F); a = Light ? 226 : 224; break;
-            default:                  c = Light ? Color.FromArgb(214, 226, 241) : Color.FromArgb(0x3A, 0x4B, 0x60); a = Light ? 200 : 190; break;
+            case GlassKind.Floating:  c = Ui.GlassFloating;  a = Light ? 226 : 224; break;
+            default:                  c = Ui.GlassSelected;  a = Light ? 200 : 190; break;
         }
         if (solid) a = Math.Max(a, kind == GlassKind.Secondary ? 150 : 235);
         return Color.FromArgb((int)(a * Ease.Clamp01(amount)), c);
@@ -397,7 +397,7 @@ internal static class Glass
             using (var b = new SolidBrush(WindowTint)) g.FillRectangle(b, rect);
         }
         else
-            using (var b = new LinearGradientBrush(rect, Light ? Color.FromArgb(242, 246, 251) : Color.FromArgb(0x2A, 0x33, 0x40), Light ? Color.FromArgb(222, 229, 238) : Color.FromArgb(0x18, 0x1E, 0x27), 62F))
+            using (var b = new LinearGradientBrush(rect, Ui.WindowTop, Ui.WindowBottom, 62F))
                 g.FillRectangle(b, rect);
         // light sweep
         using (var b = new LinearGradientBrush(rect, W(Light ? 90 : 30), W(0), 38F)) g.FillRectangle(b, rect);

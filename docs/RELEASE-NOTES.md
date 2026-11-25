@@ -10,6 +10,7 @@ bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta dur
 - **Profiller okunamazsa:** OpenVPN Connect'in `config.json` dosyası esnek okunur (farklı iç düzenler, başka konumlar); okunamazsa profiller OpenVPN Connect'in `profiles` klasöründeki `.ovpn` dosyalarından listelenir ve kaynak 30 sn'de bir yeniden denenir.
 - Boş liste nedenini söyler (dosya yok / okunamadı / düzen tanınmıyor / 0 profil) ve *Profil klasörünü seç…* ile *Dosya seç…* düğmelerini gösterir; aynı işlemler Ayarlar > Genel > *Profil kaynağı* altında da var.
 - *Tanı bilgisini kopyala*: sürümler, denenen konumlar ve `config.json`'ın yalnızca anahtar adlarıyla türleri (değer, ad ve sunucu içermez); aynı özet bir kez uygulama günlüğüne yazılır.
+- **Derin Mavi teması:** Ayarlar > Görünüm'de ve ilk kurulum sihirbazında dördüncü tema: lacivert / mavi-arduvaz cam, yumuşak mavi kenarlar ve yeşil bağlantı vurgusu. Koyu bir temadır; yerleşim değişmez, Koyu ve Açık temaların görünümü aynı kalır.
 
 ## 2.1.1
 

@@ -303,6 +303,10 @@ internal static class Ui
     public static Color Field = Color.FromArgb(0x26, 0x30, 0x3C);
     public static Color Highlight = Color.FromArgb(0x8B, 0xAE, 0xD9);
     public static Color GlassPrimary = Color.FromArgb(0x30, 0x39, 0x45), GlassSecondary = Color.FromArgb(0x26, 0x30, 0x3C), WindowBg = Color.FromArgb(0x1C, 0x22, 0x2C);
+    // Glass materials and floating panels (Glass.Tint, Glass.Layers fallback, MenuRenderer); also set by Themes.Apply.
+    public static Color GlassFloating = Color.FromArgb(0x2A, 0x33, 0x3F), GlassSelected = Color.FromArgb(0x3A, 0x4B, 0x60);
+    public static Color WindowTop = Color.FromArgb(0x2A, 0x33, 0x40), WindowBottom = Color.FromArgb(0x18, 0x1E, 0x27);   // opaque fallback gradient
+    public static Color MenuTint = Color.FromArgb(200, 22, 25, 36), MenuSolid = Color.FromArgb(30, 33, 46), MenuFrame = Color.FromArgb(0x46, 0x4C, 0x50);
 
     // Segoe UI Variable (Windows 11) first, then Inter if installed, then Segoe UI.
     static string Pick(params string[] names)

@@ -318,7 +318,7 @@ internal sealed class MenuRenderer : ToolStripRenderer
     readonly bool win11 = Glyphs.IsWindows11;
 
     // Floating glass panel: dense tint over the compositor blur (opaque when there is no blur).
-    static Color PanelTint { get { return Backdrop.Active ? (Themes.IsLight ? Color.FromArgb(214, 248, 249, 253) : Color.FromArgb(200, 22, 25, 36)) : (Themes.IsLight ? Color.FromArgb(250, 251, 254) : Color.FromArgb(30, 33, 46)); } }
+    static Color PanelTint { get { return Backdrop.Active ? Ui.MenuTint : Ui.MenuSolid; } }
 
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
     {
@@ -453,7 +453,7 @@ internal static class MenuKit
         {
             Backdrop.Apply(m.Handle, !Themes.IsLight);     // same compositor acrylic as the main window
             var corner = 2; NativeMethods.DwmSetWindowAttribute(m.Handle, 33, ref corner, 4);
-            var border = Themes.IsLight ? 0x00D8D2CC : 0x00504C46; NativeMethods.DwmSetWindowAttribute(m.Handle, 34, ref border, 4);
+            var border = Ui.MenuFrame.R | (Ui.MenuFrame.G << 8) | (Ui.MenuFrame.B << 16); NativeMethods.DwmSetWindowAttribute(m.Handle, 34, ref border, 4);   // COLORREF
         }
         catch { }
     }
