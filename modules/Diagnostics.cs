@@ -365,6 +365,7 @@ internal sealed class LogSanitizer
     }
 
     public void AddMachine(string value) { Remember(value, "<makine>"); }
+    public void AddSecret(string value) { Remember(value, "<gizli>"); }
     public void AddDomain(string value) { Remember(value, "<alan>"); }
 
     // A folder whose path names the user ("C:\Users\ayse"): replaced by placeholder ("~", "%APPDATA%").
@@ -812,7 +813,7 @@ internal sealed class ErrorReport
 
 internal sealed class IssueRef
 {
-    public int Number; public string Url, State, Title;
+    public int Number; public string Url, State, Title; public bool Locked;
     public bool Open { get { return State == "open"; } }
 }
 
@@ -902,7 +903,7 @@ internal static class IssueLink
                 if (!url.StartsWith(IssuesPrefix, StringComparison.Ordinal)) continue;
                 int number = 0;
                 if (d.TryGetValue("number", out v) && v != null) try { number = Convert.ToInt32(v, CultureInfo.InvariantCulture); } catch { }
-                var r = new IssueRef { Number = number, Url = url, State = state == "open" ? "open" : "closed", Title = title };
+                var r = new IssueRef { Number = number, Url = url, State = state == "open" ? "open" : "closed", Title = title, Locked = d.TryGetValue("locked", out v) && v is bool && (bool)v };
                 if (r.Open) return r;
                 if (closed == null) closed = r;
             }
@@ -1263,6 +1264,8 @@ internal static class CrashReporter
             s.AddPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "~");
             s.AddUser(Environment.UserName);
             s.AddMachine(Environment.MachineName);
+            var token = IssueToken.Value;
+            if (token != null) s.AddSecret(token);   // never in a report, even if it reached a log line
             var domain = Environment.UserDomainName;
             if (!string.Equals(domain, Environment.MachineName, StringComparison.OrdinalIgnoreCase)) s.AddDomain(domain);
         }

@@ -77,6 +77,11 @@ static class Tests
         Run("Tanılama: aşırı temizleme sınırı", SanitizerNoOverRedaction);
         Run("Tanılama: çökme işareti, Sonra", CrashMarkerLater);
         Run("Sağlayıcı bölümü görünürlüğü", ProviderSegmentVisibility);
+        Run("GitHub gönderimi: anahtar kodlama", IssueTokenCodec);
+        Run("GitHub gönderimi: sınırlar", IssueLimitRules);
+        Run("GitHub gönderimi: akışlar (sahte GitHub)", IssueClientFlows);
+        Run("GitHub gönderimi: adres ve gövde korumaları", IssueClientGuards);
+        Run("GitHub gönderimi: anahtar temizleme", TokenSanitizing);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -708,7 +713,7 @@ static class Tests
     const string SeedLog =
         "2026-11-25 14:03:11.123 INFO  forti connect requested kind=Forti profile=Acme Lojistik Merkez host=vpn.acme-lojistik.example\n" +
         "2026-11-25 14:03:12.000 WARN  sophos sccli enable -p Hunter2!Gizli --user beta.vpnuser\n" +
-        "2026-11-25 14:03:12.500 ERROR app password=Hunter2!Gizli token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 secret: \"s3cr3t value\"\n" +
+        "2026-11-25 14:03:12.500 ERROR app password=Hunter2!Gizli token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ01 secret: \"s3cr3t value\"\n" +
         "Authorization: Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==\n" +
         "curl -H \"Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl\" https://admin:Hunter2!Gizli@fw.delta-insaat.example/api\n" +
         "mail to ayse.demir@acme-lojistik.example and it@delta-insaat.example\n" +
@@ -1037,7 +1042,7 @@ static class Tests
         var inputs = new Dictionary<string, string> {
             { "a-", "password=Hunter2!Gizli " + string.Concat(Enumerable.Repeat("a-", 25000)) },
             { "email", "ayse.demir@acme-lojistik.example x@" + string.Concat(Enumerable.Repeat("ab.", 16700)) },
-            { "A", "token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 " + new string('A', 50000) },
+            { "A", "token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ01 " + new string('A', 50000) },
             { "dots", "203.0.113.45 " + string.Concat(Enumerable.Repeat("a.", 25000)) + "1" },
             { "ovpn", "Acme Lojistik Merkez " + new string('b', 50000) + ".ovpn" } };
         foreach (var kv in inputs)
@@ -1104,5 +1109,156 @@ static class Tests
         Check(VpnProviders.EmptySegmentText(VpnKind.OpenVpn) == null && VpnProviders.EmptySegmentText(VpnKind.Forti) == null && VpnProviders.EmptySegmentText(null) == null, "OpenVPN, FortiClient ve Tümü için özel metin yok");
         var segs = VpnProviders.Segments(true, VpnProviders.ShowsExtSegment(true, true, 0), VpnProviders.ShowsExtSegment(true, false, 0));
         Check(string.Join(",", VpnProviders.SegmentNames(segs)) == "Tümü,OpenVPN,FortiClient,Sophos" && VpnProviders.IndexOf(segs, VpnKind.Sophos) == 3 && VpnProviders.SegmentAt(segs, 3) == VpnKind.Sophos, "boş Sophos bölümü Ctrl+4 ile seçilir");
+    }
+
+    // ---------- Direct GitHub send (modules\IssueSender.cs). Fake tokens and a fake transport only. ----------
+
+    const string FakeToken = "github_pat_11FAKEFAKEFAKE_testonlynotarealtoken0123456789";
+
+    static void IssueTokenCodec()
+    {
+        var enc = IssueToken.Encode(FakeToken);
+        Check(IssueToken.Decode(enc) == FakeToken, "gidiş-dönüş");
+        Check(Encoding.ASCII.GetString(enc).IndexOf("github_pat", StringComparison.Ordinal) < 0 && Encoding.ASCII.GetString(enc).IndexOf("FAKE", StringComparison.Ordinal) < 0, "kaynakta düz metin yok");
+        Check(IssueToken.Decode(IssueToken.Encode("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ01")) == "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ01", "klasik ghp_ biçimi de");
+        var notToken = Encoding.ASCII.GetBytes(Convert.ToBase64String(Encoding.UTF8.GetBytes("merhaba dünya, bu bir anahtar değil")));
+        Check(IssueToken.Decode(null) == null && IssueToken.Decode(new byte[0]) == null && IssueToken.Decode(Encoding.ASCII.GetBytes("@@@ bozuk")) == null &&
+              IssueToken.Decode(notToken) == null && IssueToken.Decode(new byte[] { 0xFF, 0xFE, 0x00, 0x41 }) == null && IssueToken.Decode(new byte[5000]) == null, "bozuk veri: null");
+        var threw = false; try { IssueToken.Encode("parola123"); } catch (ArgumentException) { threw = true; }
+        Check(threw, "anahtar biçiminde olmayan değer kodlanmaz");
+        Check(!IssueToken.Available, "test derlemesinde gömülü anahtar yok (tarayıcı akışı)");
+    }
+
+    static void IssueLimitRules()
+    {
+        var t = new DateTime(2026, 11, 25, 9, 0, 0, DateTimeKind.Utc);
+        var s = new IssueLimitState();
+        Check(IssueLimits.Check(s, "aaaa0001", t) == IssueLimits.Verdict.Allowed, "boş durum: izin");
+        IssueLimits.Record(s, "aaaa0001", t);
+        Check(IssueLimits.Check(s, "aaaa0001", t.AddHours(23)) == IssueLimits.Verdict.FingerprintLimit && IssueLimits.Check(s, "aaaa0001", t.AddHours(24)) == IssueLimits.Verdict.Allowed, "aynı parmak izi 24 saatte bir");
+        IssueLimits.Record(s, "aaaa0002", t.AddHours(1)); IssueLimits.Record(s, null, t.AddHours(2));
+        Check(IssueLimits.Check(s, "aaaa0003", t.AddHours(3)) == IssueLimits.Verdict.DailyLimit, "günde en fazla 3");
+        Check(IssueLimits.Check(s, "aaaa0003", t.AddHours(24).AddMinutes(1)) == IssueLimits.Verdict.Allowed, "24 saat sonra yeniden");
+        Check(IssueLimits.Check(s, null, t.AddHours(3)) != IssueLimits.Verdict.Allowed, "parmak izsiz raporlar da sınırlı");
+        var back = IssueLimits.FromJson(IssueLimits.ToJson(s));
+        Check(back.Sent.Count == 3 && back.ByFingerprint.Count == 3 && IssueLimits.Check(back, "aaaa0003", t.AddHours(3)) == IssueLimits.Verdict.DailyLimit, "JSON gidiş-dönüş");
+        IssueLimits.Stop(back, t.AddHours(5));
+        Check(IssueLimits.Check(back, "bbbb0001", t.AddHours(28)) == IssueLimits.Verdict.Stopped && IssueLimits.Check(back, "bbbb0001", t.AddHours(30)) == IssueLimits.Verdict.Allowed, "401 sonrası 24 saat durur");
+        Check(IssueLimits.FromJson("{bozuk").Sent.Count == 0 && IssueLimits.FromJson(null).StoppedUntilUtc == DateTime.MinValue && IssueLimits.FromJson("{\"sent\":[\"x\",-5]}").Sent.Count == 0, "bozuk dosya: yeni durum");
+    }
+
+    // Fake GitHub: records every call, answers with handler(request).
+    sealed class FakeGitHub
+    {
+        public readonly List<ApiRequest> Calls = new List<ApiRequest>();
+        public Func<ApiRequest, ApiResponse> Handler;
+        public ApiResponse Call(ApiRequest r) { Calls.Add(r); return Handler(r); }
+        public static ApiResponse Ok(int number) { return new ApiResponse { Status = 201, Body = "{\"number\":" + number + ",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/" + number + "\"}" }; }
+        public static ApiResponse Search(string items) { return new ApiResponse { Status = 200, Body = "{\"total_count\":1,\"items\":[" + items + "]}" }; }
+        public static string Item(int number, string state, bool locked) { return "{\"number\":" + number + ",\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/" + number + "\",\"state\":\"" + state + "\",\"locked\":" + (locked ? "true" : "false") + "}"; }
+    }
+
+    static SendResult SendWith(FakeGitHub g, IssueLimitState limits, string fp, DateTime now)
+    {
+        return GitHubIssueClient.Send("[hata] X: Y (" + (fp ?? "-") + ")", "### Ortam\n- x", fp, FakeEnv(), FakeToken, g.Call, limits, now);
+    }
+
+    static void IssueClientFlows()
+    {
+        var now = new DateTime(2026, 11, 25, 9, 0, 0, DateTimeKind.Utc);
+        // new issue
+        var g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search("") : FakeGitHub.Ok(41) };
+        var lim = new IssueLimitState();
+        var res = SendWith(g, lim, "ab12cd34", now);
+        Check(res.Outcome == SendOutcome.Created && res.Number == 41 && res.Url == "https://github.com/bymrhan/vpn-manager/issues/41", "yeni kayıt oluşturulur");
+        Check(g.Calls.Count == 2 && g.Calls[0].Method == "GET" && !g.Calls[0].Authorized && g.Calls[0].Token == null && g.Calls[0].Url.Contains("ab12cd34"), "yineleme araması anahtarsız");
+        Check(g.Calls[1].Url == "https://api.github.com/repos/bymrhan/vpn-manager/issues" && g.Calls[1].Authorized && g.Calls[1].Token == FakeToken && g.Calls[1].Json.Contains("\"labels\":[\"hata\"]") && g.Calls[1].Json.Contains("[hata] X: Y (ab12cd34)"), "POST bu depoya, etiketle");
+        Check(!g.Calls[1].ToString().Contains(FakeToken) && !g.Calls[1].ToString().Contains("Ortam"), "istek metni anahtar ve gövde içermez");
+        Check(IssueLimits.Check(lim, "ab12cd34", now.AddHours(1)) == IssueLimits.Verdict.FingerprintLimit, "gönderim sınıra yazılır");
+        // 422 label -> retry without labels
+        g = new FakeGitHub();
+        var posts = 0;
+        g.Handler = r => { if (r.Method == "GET") return FakeGitHub.Search(""); posts++; return posts == 1 ? new ApiResponse { Status = 422, Body = "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"Label\",\"code\":\"invalid\"}]}" } : FakeGitHub.Ok(42); };
+        res = SendWith(g, new IssueLimitState(), "ab12cd35", now);
+        Check(res.Outcome == SendOutcome.Created && res.Number == 42 && posts == 2 && !g.Calls[2].Json.Contains("labels"), "etiket 422: etiketsiz bir kez daha");
+        // other 422: no retry
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search("") : new ApiResponse { Status = 422, Body = "{\"message\":\"title too long\"}" } };
+        res = SendWith(g, new IssueLimitState(), "ab12cd36", now);
+        Check(res.Outcome == SendOutcome.Failed && g.Calls.Count == 2, "başka 422: yeniden denenmez");
+        // 401 -> stopped for 24 h
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search("") : new ApiResponse { Status = 401, Body = "{\"message\":\"Bad credentials\"}" } };
+        lim = new IssueLimitState();
+        res = SendWith(g, lim, "ab12cd37", now);
+        var before = g.Calls.Count;
+        var again = SendWith(g, lim, "ab12cd38", now.AddHours(2));
+        Check(res.Outcome == SendOutcome.Unauthorized && again.Outcome == SendOutcome.Stopped && g.Calls.Count == before, "401: 24 saat hiç istek yapılmaz");
+        Check(SendWith(g, lim, "ab12cd38", now.AddHours(25)).Outcome == SendOutcome.Unauthorized, "24 saat sonra yeniden denenir");
+        // 403 / rate limit: no stop
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search("") : new ApiResponse { Status = 403, Body = "{\"message\":\"API rate limit exceeded\"}" } };
+        lim = new IssueLimitState();
+        res = SendWith(g, lim, "ab12cd39", now);
+        Check(res.Outcome == SendOutcome.Forbidden && lim.StoppedUntilUtc == DateTime.MinValue && lim.Sent.Count == 0, "403: tarayıcıya düşer, durdurmaz, sayılmaz");
+        // open duplicate -> one comment
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search(FakeGitHub.Item(12, "open", false)) : new ApiResponse { Status = 201, Body = "{\"id\":7,\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/12#issuecomment-7\"}" } };
+        lim = new IssueLimitState();
+        res = SendWith(g, lim, "ab12cd34", now);
+        Check(res.Outcome == SendOutcome.Commented && res.Number == 12 && g.Calls[1].Url == "https://api.github.com/repos/bymrhan/vpn-manager/issues/12/comments" && g.Calls[1].Json.Contains("Tekrar: sürüm 2.1.0, Windows 10.0 build 26100.2033"), "açık yineleme: tek \"Tekrar\" yorumu");
+        Check(SendWith(g, lim, "ab12cd34", now.AddHours(3)).Outcome == SendOutcome.FingerprintLimit && g.Calls.Count == 2, "aynı hata 24 saat içinde yeniden yorumlanmaz");
+        // closed duplicate -> new issue pointing at it
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search(FakeGitHub.Item(5, "closed", true)) : FakeGitHub.Ok(43) };
+        res = SendWith(g, new IssueLimitState(), "ab12cd34", now);
+        Check(res.Outcome == SendOutcome.Created && res.Number == 43 && g.Calls.Count == 2 && g.Calls[1].Url.EndsWith("/issues") && g.Calls[1].Json.Contains("Önceki kayıt: #5 (kapalı)"), "kapalı (kilitli) yineleme: yorum yok, eskiye bağlanan yeni kayıt");
+        // open but locked duplicate -> new issue
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search(FakeGitHub.Item(6, "open", true)) : FakeGitHub.Ok(44) };
+        res = SendWith(g, new IssueLimitState(), "ab12cd34", now);
+        Check(res.Outcome == SendOutcome.Created && !g.Calls.Any(c => c.Url.EndsWith("/comments")) && g.Calls[1].Json.Contains("Önceki kayıt: #6"), "kilitli açık yineleme: yorum yapılmaz");
+        // daily limit
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search("") : FakeGitHub.Ok(50) };
+        lim = new IssueLimitState();
+        foreach (var fp in new[] { "cc000001", "cc000002", "cc000003" }) SendWith(g, lim, fp, now);
+        var calls = g.Calls.Count;
+        Check(SendWith(g, lim, "cc000004", now.AddMinutes(5)).Outcome == SendOutcome.DailyLimit && g.Calls.Count == calls, "günde 3'ten sonra istek yok");
+        // network failure, search failure, no token
+        g = new FakeGitHub { Handler = r => { throw new System.Net.WebException("ağ yok"); } };
+        Check(SendWith(g, new IssueLimitState(), "ab12cd34", now).Outcome == SendOutcome.Failed, "ağ hatası: tarayıcıya düşer");
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? new ApiResponse { Status = 0 } : FakeGitHub.Ok(45) };
+        Check(SendWith(g, new IssueLimitState(), "ab12cd34", now).Outcome == SendOutcome.Created, "arama başarısız: yine de kayıt açılır");
+        g = new FakeGitHub { Handler = r => FakeGitHub.Ok(46) };
+        var none = GitHubIssueClient.Send("t", "b", "ab12cd34", FakeEnv(), null, g.Call, new IssueLimitState(), now);
+        Check(none.Outcome == SendOutcome.NoToken && g.Calls.Count == 0, "anahtar yoksa hiç istek yok");
+        // a 201 whose link is not this repository is not trusted
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search("") : new ApiResponse { Status = 201, Body = "{\"number\":1,\"html_url\":\"https://evil.example/x\"}" } };
+        Check(SendWith(g, new IssueLimitState(), "ab12cd34", now).Outcome == SendOutcome.Failed, "yabancı bağlantılı yanıt reddedilir");
+    }
+
+    static void IssueClientGuards()
+    {
+        Check(GitHubIssueClient.IsAllowedUrl("https://api.github.com/repos/bymrhan/vpn-manager/issues") && GitHubIssueClient.IsAllowedUrl("https://api.github.com/repos/bymrhan/vpn-manager/issues/12/comments") &&
+              GitHubIssueClient.IsAllowedUrl(IssueLink.SearchUrl("ab12cd34")), "izinli adresler");
+        Check(!GitHubIssueClient.IsAllowedUrl("http://api.github.com/repos/bymrhan/vpn-manager/issues") && !GitHubIssueClient.IsAllowedUrl("https://api.github.com/repos/other/repo/issues") &&
+              !GitHubIssueClient.IsAllowedUrl("https://api.github.com/repos/bymrhan/vpn-manager/issues/1/comments/../../../x") && !GitHubIssueClient.IsAllowedUrl("https://api.github.com/repos/bymrhan/vpn-manager/labels") && !GitHubIssueClient.IsAllowedUrl(null), "başka depo, http, başka uç nokta: hayır");
+        Check(GitHubIssueClient.HttpTransport(new ApiRequest { Method = "POST", Url = "https://evil.example/", Token = FakeToken, Authorized = true }).Status == 0, "gerçek taşıyıcı izinsiz adrese hiç bağlanmaz");
+        var big = new string('x', 100000);
+        var cut = GitHubIssueClient.Truncate("```\n" + big);
+        Check(cut.Length <= GitHubIssueClient.MaxBodyChars && cut.Contains("60 KB") && System.Text.RegularExpressions.Regex.Matches(cut, "```").Count % 2 == 0, "gövde 60 KB'ta kesilir, kod bloğu kapanır");
+        Check(GitHubIssueClient.IssueJson("a\"b", "satır\nıüş", true).Contains("\\\"") && GitHubIssueClient.IssueJson("t", "b", false).IndexOf("labels", StringComparison.Ordinal) < 0, "JSON kaçışı, etiketsiz biçim");
+    }
+
+    static void TokenSanitizing()
+    {
+        var s = new LogSanitizer();
+        var a = s.Sanitize("token in text github_pat_11ABCDEFGHIJKLMNOPQRST_abcdefghijklmnopqrstuvwxyz012345 and ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ01 and gho_abcdefghijklmnopqrstu1");
+        Check(a.IndexOf("github_pat", StringComparison.Ordinal) < 0 && a.IndexOf("ghp_", StringComparison.Ordinal) < 0 && a.IndexOf("gho_", StringComparison.Ordinal) < 0, "GitHub anahtar biçimleri çıkar: " + a);
+        var t = new LogSanitizer(); t.AddSecret(FakeToken);
+        var b = t.Sanitize("Authorization: Bearer x; raw " + FakeToken + " end");
+        Check(b.IndexOf("FAKE", StringComparison.Ordinal) < 0 && b.IndexOf("Bearer x", StringComparison.Ordinal) < 0, "gömülü anahtar ve Authorization başlığı rapora girmez: " + b);
+        var path = Path.Combine(Path.GetTempPath(), "ovpnqs-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        SettingsStore.PathOverride = path;
+        try
+        {
+            var st = AppSettings.Defaults(); st.CrashPrompt = "auto"; SettingsStore.Save(st);
+            Check(SettingsStore.Load().CrashPrompt == "auto", "CrashPrompt: auto kaydedilir");
+        }
+        finally { SettingsStore.PathOverride = null; try { File.Delete(path); } catch { } }
     }
 }

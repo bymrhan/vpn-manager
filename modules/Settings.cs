@@ -33,7 +33,7 @@ internal sealed class AppSettings
     public DateTime LastUpdateCheckUtc; // last successful update check
     public string SkippedVersion;       // "2.1.0" the user chose to skip; "" = none
     public bool LogEnabled;             // app log + crash / error records in %APPDATA%\OpenVpnQuickSearch\logs
-    public string CrashPrompt;          // "ask" (offer the GitHub report after a crash), "never"
+    public string CrashPrompt;          // "ask" (offer the GitHub report after a crash), "auto" (send without asking; needs the embedded token), "never"
 
     public static AppSettings Defaults()
     {
@@ -86,7 +86,7 @@ internal sealed class AppSettings
         if (Array.IndexOf(new[] { "startup", "daily", "weekly" }, UpdateInterval) < 0) UpdateInterval = d.UpdateInterval;
         if (LastUpdateCheckUtc.Kind == DateTimeKind.Unspecified) LastUpdateCheckUtc = DateTime.SpecifyKind(LastUpdateCheckUtc, DateTimeKind.Utc);
         SkippedVersion = UpdateLogic.NormalizeTag(SkippedVersion) ?? "";
-        if (CrashPrompt != "ask" && CrashPrompt != "never") CrashPrompt = d.CrashPrompt;
+        if (CrashPrompt != "ask" && CrashPrompt != "auto" && CrashPrompt != "never") CrashPrompt = d.CrashPrompt;
     }
 }
 
