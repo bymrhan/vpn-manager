@@ -24,8 +24,20 @@ New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 # The staging folder holds this PC's profiles (private keys): it is removed even when a step fails.
 try {
 
+# The token variable is read once and removed from this process at once, so no child process
+# (tests, csc, git) inherits it.
+$envToken = $env:VPNM_ISSUE_TOKEN
+Remove-Item Env:VPNM_ISSUE_TOKEN -ErrorAction SilentlyContinue
+
 # secrets\ must never be in git: stop before anything else.
 $tracked = $null
+$tokenFile = Join-Path $root 'secrets\issue-token.txt'
+if (Test-Path -LiteralPath $tokenFile) {
+    # fail closed: with a token file present, git must be able to say it is not tracked
+    $inRepo = $null
+    try { $inRepo = & git -C $root rev-parse --is-inside-work-tree 2>$null } catch { }
+    if ($inRepo -ne 'true') { throw 'secrets\issue-token.txt var ama git denetlenemiyor (git yok ya da depo değil): anahtar gömülmez.' }
+}
 try { $tracked = & git -C $root ls-files -- secrets 2>$null } catch { }
 if ($tracked) { throw 'secrets\ klasörü git tarafından izleniyor: anahtar gömülmez. Dosyayı depodan çıkarın (git rm --cached) ve anahtarı GitHub''da iptal edin.' }
 
@@ -51,10 +63,10 @@ Invoke-Compile @()
 # plain string scan of the exe, it is NOT protection. The exe is then built again with the resource.
 # The value is never printed or put in a message. Without a token the first build is the result.
 $token = $null
-$tokenFile = Join-Path $root 'secrets\issue-token.txt'
 if (Test-Path -LiteralPath $tokenFile) { $token = [string](Get-Content -LiteralPath $tokenFile -TotalCount 1) }
-elseif ($env:VPNM_ISSUE_TOKEN) { $token = [string]$env:VPNM_ISSUE_TOKEN }
 if ($token) { $token = $token.Trim() }
+if (-not $token -and $envToken) { $token = ([string]$envToken).Trim() }   # no file or empty first line: the variable
+$envToken = $null
 $embedded = $false
 if ($token) {
     $issueToken = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($exe)).GetType('IssueToken')
