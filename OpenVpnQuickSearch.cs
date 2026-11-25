@@ -1107,6 +1107,14 @@ internal sealed class SearchForm : Form
     // source tag. Outcome only: never the tunnel name, the username or the password.
     static void FortiTrace(string line) { AppLog.Info("forti", line); }
 
+    // FortiGui's detail without anything identifying: "seçili: <tunnel>" loses the name, quotes go.
+    static string TraceDetail(string detail)
+    {
+        if (string.IsNullOrEmpty(detail)) return "";
+        if (detail.StartsWith("seçili", StringComparison.Ordinal)) return " (tunnel selected)";
+        return " (" + LogSanitizer.StripQuoted(detail) + ")";
+    }
+
     // Runs on a worker thread after FortiStore.Open(): waits up to 20 s for FortiClient's form to
     // show the selected tunnel, then presses Connect when the password is saved. Any other outcome
     // leaves the window to the user, as before.
@@ -1114,6 +1122,7 @@ internal sealed class SearchForm : Form
     {
         var deadline = DateTime.UtcNow.AddSeconds(20);
         var outcome = FortiGui.Outcome.NotReady;
+        string lastDetail = "";
         while (DateTime.UtcNow < deadline)
         {
             string detail = "";
@@ -1121,11 +1130,13 @@ internal sealed class SearchForm : Form
             catch (Exception ex) { outcome = FortiGui.Outcome.NotReady; detail = ex.GetType().Name; }
             if (outcome == FortiGui.Outcome.Pressed || outcome == FortiGui.Outcome.NeedsPassword || outcome == FortiGui.Outcome.FillFailed)
             {
-                FortiTrace("connect form: " + outcome);
+                FortiTrace("connect form: " + outcome + TraceDetail(detail));
                 return outcome;
             }
+            lastDetail = detail;
             Thread.Sleep(500);
         }
+        FortiTrace("connect form: " + outcome + " after 20 s" + TraceDetail(lastDetail));
         return outcome;
     }
 
@@ -1836,7 +1847,7 @@ internal sealed class SearchForm : Form
         updateChecking = false; updateCheckedThisRun = true;
         if (r == null)
         {
-            AppLog.Warn("update", "check failed: " + (err ?? "unknown"));
+            AppLog.Warn("update", "check failed: " + LogSanitizer.StripQuoted(err ?? "unknown"));
             if (!manual) { updateFailUtc = DateTime.UtcNow; return; }   // silent; retried at the next due time
             ReportUpdate("Denetlenemedi: " + (err ?? "bilinmeyen hata"));
             SetStatus("Güncelleme denetlenemedi");
@@ -1892,7 +1903,7 @@ internal sealed class SearchForm : Form
             UiInvoke(delegate
             {
                 updateDownloading = false;
-                if (pkg == null) AppLog.Warn("update", "download / verification failed: " + err);
+                if (pkg == null) AppLog.Warn("update", "download / verification failed: " + LogSanitizer.StripQuoted(err));
                 else AppLog.Info("update", "package " + r.Version + " downloaded and verified");
                 if (pkg == null)
                 {
@@ -1961,7 +1972,7 @@ internal sealed class SearchForm : Form
             {
                 updateInstalling = false;
                 if (ok) { AppLog.Info("update", "installer started for " + (version ?? "?") + ", exiting"); AppLog.Flush(); }
-                else AppLog.Warn("update", "install start failed: " + err);
+                else AppLog.Warn("update", "install start failed: " + LogSanitizer.StripQuoted(err));
                 if (!ok)
                 {
                     updatePackage = null; updateBadVersion = version;
@@ -1990,12 +2001,14 @@ internal sealed class SearchForm : Form
             if (updateRelease != null) f.ReleaseNotesUrl = updateRelease.HtmlUrl;
             f.Icon = Icon;
             openSettings = f;
+            var promptBefore = settings.CrashPrompt;   // "Bir daha sorma" may be chosen while the window is open
             DialogResult dr;
             try { dr = f.ShowDialog(this); } finally { openSettings = null; }
             if (dr != DialogResult.OK || f.Result == null) { ApplyTheme(); return; } // undo live theme preview
             var r = f.Result;
             r.LastBackupUtc = settings.LastBackupUtc; // a backup may have run while the window was open
             r.LastUpdateCheckUtc = settings.LastUpdateCheckUtc; r.SkippedVersion = settings.SkippedVersion; // same for an update check
+            if (settings.CrashPrompt != promptBefore && r.CrashPrompt == promptBefore) r.CrashPrompt = settings.CrashPrompt; // kept, not undone by the window's copy
             var old = settings;
             settings = r;
             SaveSettings();
