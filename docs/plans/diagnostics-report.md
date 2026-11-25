@@ -358,3 +358,20 @@ check accepts both `github_pat_…` and `ghp_…` (tested).
 - Defender could flag future edits of the token step. Keep encoding in C#.
 - The empty `C:\Users\user\Documents\Codex\2026-11-11\watchguard-ss\README.md` from an earlier round
   still needs deleting by hand.
+
+**Final round** (`a480264`, `53cb271`, `4a305c8`; tests 399 / 399):
+- `.github/workflows/label-hata.yml` labels issues opened by `vars.REPORT_BOT_LOGIN` whose title
+  starts with `[hata] `. It passes only the issue number via env and uses the run's own token. This
+  is now the default path: GitHub silently ignores labels from non-collaborators, and the app's
+  duplicate check stays label-bound. Manual labelling is the fallback (RELEASING / TRIAGE). Setup:
+  `gh variable set REPORT_BOT_LOGIN --body <bot-login>`, `gh label create hata`. The workflow was not
+  run, since that needs GitHub.
+- `build.ps1`:
+  - Fails closed when `secrets\issue-token.txt` exists and git cannot confirm a work tree; checked
+    with a TEMP copy, which stopped with exit 1.
+  - `VPNM_ISSUE_TOKEN` is read once and removed from the process before the tests run.
+  - An empty first line in the token file falls back to the variable.
+  - The fake-token TEMP build still embeds and decodes the token, and the outputs have no plain token.
+- Cancelling the Otomatik warning, or picking Otomatik without a token, restores the previous mode.
+- The preview header is sized from its wrapped text.
+- Titles are cut in the middle so the `(fingerprint)` suffix survives.
