@@ -17,30 +17,52 @@ internal static class Demo
     static readonly HashSet<string> pins = new HashSet<string>();
 
     // name, host, user, kind (o = OpenVPN, f = FortiClient, s = Sophos Connect, w = WatchGuard SSL VPN),
-    // minutes since last connection (0 = never), reachable
+    // minutes since last connection (0 = never), reachable, fictional sessions in the last 60 days
+    // (Demo.History; 3+ puts a profile in "SIK KULLANILANLAR" unless it is pinned or recent)
     static readonly object[][] Rows = new object[][]
     {
-        new object[] { "Acme Lojistik",           "vpn.acme-lojistik.example",   "ayse.demir",     'o', 35,      true  },
-        new object[] { "Contoso Enerji",          "vpn.contoso-enerji.example",  "mehmet.kaya",    'o', 190,     true  },
-        new object[] { "Northwind Gıda",          "gw.northwind-gida.example",   "elif.yildiz",    'o', 1500,    true  },
-        new object[] { "Fabrikam Yazılım",        "vpn.fabrikam.example:10443",  "can.ozturk",     'f', 2900,    true  },
-        new object[] { "Globex Otomotiv",         "vpn.globex-otomotiv.example", "zeynep.arslan",  'o', 5200,    true  },
-        new object[] { "Initech Danışmanlık",     "vpn.initech.example",         "burak.sahin",    'o', 0,       true  },
-        new object[] { "Umbrella Sağlık",         "uzak.umbrella-saglik.example","selin.acar",     'o', 0,       false },
-        new object[] { "Wayne Makine",            "vpn.wayne-makine.example:8443","ali.cetin",     'f', 0,       true  },
-        new object[] { "Stark Elektrik",          "vpn.stark-elektrik.example",  "deniz.polat",    'o', 0,       true  },
-        new object[] { "Tailspin Turizm",         "vpn.tailspin.example",        "ece.korkmaz",    'o', 0,       true  },
-        new object[] { "Wingtip Tekstil",         "gw.wingtip-tekstil.example",  "emre.aydin",     'o', 0,       true  },
-        new object[] { "Adventure Works İnşaat",  "vpn.adventure-works.example", "gizem.kurt",     'o', 0,       false },
-        new object[] { "Litware Gayrimenkul",     "vpn.litware.example",         "oguz.erdem",     'o', 0,       true  },
-        new object[] { "Proseware Eğitim",        "vpn.proseware.example:4443",  "pinar.ates",     'f', 0,       true  },
-        new object[] { "Woodgrove Finans",        "vpn.woodgrove.example",       "kerem.bulut",    'o', 0,       true  },
-        new object[] { "Blue Yonder Havacılık",   "vpn.blue-yonder.example",     "naz.tuna",       'o', 0,       true  },
-        new object[] { "Fourth Coffee Gıda",      "gw.fourth-coffee.example",    "hakan.yilmaz",   's', 720,     true  },
-        new object[] { "Alpine Ski Turizm",       "sslvpn.alpine-ski.example:443","irem.koc",      's', 0,       false },
-        new object[] { "Margie Seyahat",          "ssl.margie-seyahat.example:443","tolga.sen",    'w', 4300,    true  },
-        new object[] { "Lucerne Yayıncılık",      "vpn.lucerne.example:4100",    "derya.uslu",     'w', 0,       true  },
+        new object[] { "Acme Lojistik",           "vpn.acme-lojistik.example",   "ayse.demir",     'o', 35,      true,  14 },
+        new object[] { "Contoso Enerji",          "vpn.contoso-enerji.example",  "mehmet.kaya",    'o', 190,     true,  6  },
+        new object[] { "Northwind Gıda",          "gw.northwind-gida.example",   "elif.yildiz",    'o', 1500,    true,  9  },
+        new object[] { "Fabrikam Yazılım",        "vpn.fabrikam.example:10443",  "can.ozturk",     'f', 2900,    true,  2  },
+        new object[] { "Globex Otomotiv",         "vpn.globex-otomotiv.example", "zeynep.arslan",  'o', 5200,    true,  3  },
+        new object[] { "Initech Danışmanlık",     "vpn.initech.example",         "burak.sahin",    'o', 8600,    true,  12 },
+        new object[] { "Umbrella Sağlık",         "uzak.umbrella-saglik.example","selin.acar",     'o', 0,       false, 0  },
+        new object[] { "Wayne Makine",            "vpn.wayne-makine.example:8443","ali.cetin",     'f', 9500,    true,  5  },
+        new object[] { "Stark Elektrik",          "vpn.stark-elektrik.example",  "deniz.polat",    'o', 11000,   true,  7  },
+        new object[] { "Tailspin Turizm",         "vpn.tailspin.example",        "ece.korkmaz",    'o', 20000,   true,  2  },
+        new object[] { "Wingtip Tekstil",         "gw.wingtip-tekstil.example",  "emre.aydin",     'o', 0,       true,  0  },
+        new object[] { "Adventure Works İnşaat",  "vpn.adventure-works.example", "gizem.kurt",     'o', 0,       false, 0  },
+        new object[] { "Litware Gayrimenkul",     "vpn.litware.example",         "oguz.erdem",     'o', 0,       true,  0  },
+        new object[] { "Proseware Eğitim",        "vpn.proseware.example:4443",  "pinar.ates",     'f', 0,       true,  0  },
+        new object[] { "Woodgrove Finans",        "vpn.woodgrove.example",       "kerem.bulut",    'o', 13000,   true,  4  },
+        new object[] { "Blue Yonder Havacılık",   "vpn.blue-yonder.example",     "naz.tuna",       'o', 0,       true,  0  },
+        new object[] { "Fourth Coffee Gıda",      "gw.fourth-coffee.example",    "hakan.yilmaz",   's', 720,     true,  1  },
+        new object[] { "Alpine Ski Turizm",       "sslvpn.alpine-ski.example:443","irem.koc",      's', 0,       false, 0  },
+        new object[] { "Margie Seyahat",          "ssl.margie-seyahat.example:443","tolga.sen",    'w', 4300,    true,  2  },
+        new object[] { "Lucerne Yayıncılık",      "vpn.lucerne.example:4100",    "derya.uslu",     'w', 15000,   true,  3  },
     };
+
+    // Fictional connection history (never read from or written to history.csv): per row as many
+    // 40-minute sessions as its count, the newest at its last connection, then every 2.5 days back.
+    static List<HistoryEntry> history;
+    public static List<HistoryEntry> History()
+    {
+        if (history != null) return history;
+        var now = DateTime.UtcNow; var list = new List<HistoryEntry>();
+        foreach (var r in Rows)
+        {
+            var count = (int)r[6]; var minutes = (int)r[4];
+            if (count <= 0 || minutes <= 0) continue;
+            for (var i = 0; i < count; i++)
+            {
+                var start = now.AddMinutes(-minutes).AddHours(-60 * i);
+                list.Add(new HistoryEntry { ProfileId = IdFor(r), ProfileName = (string)r[0], StartUtc = start, EndUtc = start.AddMinutes(40) });
+            }
+        }
+        history = list;
+        return list;
+    }
 
     // Ids use the real provider prefixes (forti-ssl:, sophos:, watchguard-ssl:) so the app routes
     // the rows like real ones; in demo mode Connect never reaches a client.
