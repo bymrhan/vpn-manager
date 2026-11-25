@@ -36,6 +36,10 @@ static class Tests
         Run("Sophos Connect ayrıştırma", SophosParsing);
         Run("Sophos kimlik bilgisi öneki", SophosCredentialPrefix);
         Run("Forti kimlik hedefi sabit", FortiTargetPinned);
+        Run("WatchGuard ayrıştırma", WatchGuardParsing);
+        Run("WatchGuard günlük durumu", WatchGuardLog);
+        Run("WatchGuard kimlik bilgisi öneki", WatchGuardCredentialPrefix);
+        Run("WatchGuard Load hiçbir şey başlatmaz", WatchGuardLoad);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -181,5 +185,92 @@ static class Tests
             Check(FortiCredentialStore.Delete(name, SophosStore.CredentialPrefix) && !FortiCredentialStore.Has(name, SophosStore.CredentialPrefix), "sil");
         }
         finally { FortiCredentialStore.Delete(name, SophosStore.CredentialPrefix); }
+    }
+
+    static void WatchGuardParsing()
+    {
+        var s = WatchGuardStore.ParseServers("vpn1.example:443,vpn2.example:10443,");
+        Check(s.Count == 2 && s[0] == "vpn1.example:443" && s[1] == "vpn2.example:10443", "kayıt değeri (sondaki virgül)");
+        Check(WatchGuardStore.ParseServers(" vpn1.example:443 ,,VPN1.example:443,").Count == 1, "boşluk, boş öğe ve tekrar");
+        Check(WatchGuardStore.ParseServers("").Count == 0 && WatchGuardStore.ParseServers(null).Count == 0 && WatchGuardStore.ParseServers(",").Count == 0, "boş değer");
+
+        Check(WatchGuardStore.HostOf("vpn1.example:443") == "vpn1.example", "host:port -> host");
+        Check(WatchGuardStore.HostOf("vpn1.example") == "vpn1.example", "portsuz giriş");
+        Check(WatchGuardStore.HostOf("[fd00::1]:443") == "fd00::1" && WatchGuardStore.HostOf("fd00::1") == "fd00::1", "IPv6");
+
+        Check(WatchGuardStore.ProfileName("vpn1.example:443", 1) == "WatchGuard SSL VPN", "tek sunucu: yalın ad");
+        Check(WatchGuardStore.ProfileName("vpn1.example:443", 2) == "WatchGuard SSL VPN · vpn1.example", "birden çok sunucu: ad + host");
+
+        var p = WatchGuardStore.MakeProfile("vpn2.example:10443", "kullanici.ornek", 2);
+        Check(p.Id == "watchguard-ssl:vpn2.example:10443" && WatchGuardStore.IsWatchGuard(p) && !WatchGuardStore.IsWatchGuard(new VpnProfile { Id = "sophos:x" }), "kimlik öneki");
+        Check(WatchGuardStore.ServerOf(p) == "vpn2.example:10443" && p.Host == "vpn2.example:10443" && p.Username == "kullanici.ornek", "sunucu ve kullanıcı adı");
+        Check(p.Source == "" && p.Keys.Length > 0 && p.Initials.Length > 0, "profil alanları");
+
+        Check(WatchGuardStore.ServerMatches("vpn1.example:443", "VPN1.example:443"), "tam giriş eşleşir");
+        Check(WatchGuardStore.ServerMatches("vpn1.example", "vpn1.example:443"), "portsuz gösterim eşleşir");
+        Check(!WatchGuardStore.ServerMatches("vpn1.example:444", "vpn1.example:443"), "farklı port eşleşmez");
+        Check(!WatchGuardStore.ServerMatches("vpn10.example:443", "vpn1.example:443") && !WatchGuardStore.ServerMatches("", "x"), "farklı host / boş eşleşmez");
+        var list = new List<string> { "vpn1.example:443", "vpn2.example:10443" };
+        Check(WatchGuardStore.MatchServer("vpn2.example:10443", list) == "vpn2.example:10443" && WatchGuardStore.MatchServer("vpn3.example:1", list) == null, "günlükteki sunucu → kayıt girişi");
+
+        Check(WatchGuardStore.IsClientTapAdapter("TAP-Windows Adapter V9") && WatchGuardStore.IsClientTapAdapter("TAP-Windows Adapter V9 #2"), "WatchGuard TAP bağdaştırıcısı");
+        Check(!WatchGuardStore.IsClientTapAdapter("TAP-Windows Adapter V9 for OpenVPN Connect") && !WatchGuardStore.IsClientTapAdapter("Sophos TAP Adapter")
+              && !WatchGuardStore.IsClientTapAdapter("TAP-Windows Adapter V9-WFP Native MAC Layer LightWeight Filter-0000"), "başka bağdaştırıcılar sayılmaz");
+        Check(WatchGuardGui.MakeWParam(1005, 0).ToInt64() == 1005 && WatchGuardGui.MakeWParam(1034, 1).ToInt64() == 0x1040A, "WM_COMMAND wParam");
+    }
+
+    static void WatchGuardLog()
+    {
+        const string start = "2026-01-01T10:00:00.000 Launching WatchGuard Mobile VPN with SSL client. Version 1.0 (Build 1)\r\r\n";
+        const string req = "2026-01-01T10:00:01.000 Requesting client configuration from vpn2.example:10443\r\r\n";
+        const string state = "2026-01-01T10:00:05.000 OVPN:>STATE:1,CONNECTED,SUCCESS,10.0.0.2,192.0.2.1,10443,,\r\r\n";
+        const string ok = "2026-01-01T10:00:06.000 SSLVPN Connected\r\r\n";
+        const string closed = "2026-01-01T11:00:00.000 Connection Closed.\r\r\n";
+        const string exiting = "2026-01-01T11:00:00.000 OVPN:>LOG:2,,MANAGEMENT: >STATE:2,EXITING,SIGTERM,,,,,\r\r\n";
+
+        var a = WatchGuardStore.ParseLog(start + req + state + ok);
+        Check(a.Known && a.Connected && a.Server == "vpn2.example:10443", "bağlandı + sunucu");
+        var b = WatchGuardStore.ParseLog(start + req + state);
+        Check(b.Connected, "yalnız openvpn CONNECTED,SUCCESS da bağlı sayılır");
+        Check(!WatchGuardStore.ParseLog(start + req + ok + closed).Connected, "Connection Closed bağlantıyı bitirir");
+        Check(!WatchGuardStore.ParseLog(start + req + ok + exiting).Connected, "EXITING bağlantıyı bitirir");
+        var c = WatchGuardStore.ParseLog(start + req + ok + start);
+        Check(c.Known && !c.Connected && c.Server == "", "istemcinin yeniden başlaması durumu sıfırlar");
+        var d = WatchGuardStore.ParseLog(start + req);
+        Check(d.Known && !d.Connected && d.Server == "vpn2.example:10443", "bağlanırken bağlı sayılmaz");
+        var e = WatchGuardStore.ParseLog("garbage\nmore");
+        Check(!e.Known && !e.Connected && !WatchGuardStore.ParseLog(null).Known, "anlaşılmayan metin: bilinmiyor");
+
+        Check(WatchGuardStore.Decide(true, true, false, a) && WatchGuardStore.Decide(true, false, true, a), "günlük bağlı + tünel açık");
+        Check(!WatchGuardStore.Decide(false, true, true, a), "istemci çalışmıyorsa bağlı değil");
+        Check(!WatchGuardStore.Decide(true, false, false, a), "tünel yoksa eski günlük kaydı sayılmaz");
+        Check(!WatchGuardStore.Decide(true, true, true, WatchGuardStore.ParseLog(start + req + ok + closed)), "günlük kapandı diyorsa bağdaştırıcı sayılmaz");
+        Check(WatchGuardStore.Decide(true, true, false, e) && !WatchGuardStore.Decide(true, false, true, e), "günlük yoksa bağdaştırıcı karar verir");
+    }
+
+    static void WatchGuardCredentialPrefix()
+    {
+        const string name = "__oqs_test_wg__.example:443";
+        var px = WatchGuardStore.CredentialPrefix;
+        Check(px != SophosStore.CredentialPrefix && px != "OpenVpnQuickSearch:forti:", "önek Forti ve Sophos'tan farklı");
+        FortiCredentialStore.Delete(name); FortiCredentialStore.Delete(name, px);
+        try
+        {
+            Check(FortiCredentialStore.Save(name, new FortiCredential { Username = "u", Password = "p" }, px) == null, "WatchGuard öneğiyle kaydet");
+            Check(FortiCredentialStore.Has(name, px) && !FortiCredentialStore.Has(name) && !FortiCredentialStore.Has(name, SophosStore.CredentialPrefix), "diğer hedefler etkilenmez");
+            Check(FortiCredentialStore.Delete(name, px) && !FortiCredentialStore.Has(name, px), "sil");
+        }
+        finally { FortiCredentialStore.Delete(name, px); }
+    }
+
+    // Load() reads the registry only: as many profiles as Server entries, and no client process.
+    static void WatchGuardLoad()
+    {
+        var running = WatchGuardStore.ClientRunning;
+        var profiles = WatchGuardStore.Load();
+        Check(profiles != null, "Load hata vermez");
+        if (WatchGuardStore.IsInstalled) Check(profiles.Count == WatchGuardStore.Servers().Count, "kayıttaki her sunucu için bir profil (" + profiles.Count + ")");
+        foreach (var p in profiles) if (!WatchGuardStore.IsWatchGuard(p)) Check(false, "profil kimliği watchguard-ssl: ile başlar");
+        Check(WatchGuardStore.ClientRunning == running, "istemci başlatılmadı");
     }
 }
