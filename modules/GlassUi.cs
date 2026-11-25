@@ -302,7 +302,7 @@ internal sealed class ConnectionIsland : Control
     public ConnectionIsland()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Opaque, true); SetStyle(ControlStyles.Selectable, false); TabStop = false;
-        anim.Tick = dt => { var a = width.Step(dt); var b = content.Step(dt); var c = press.Step(dt); var live = ambientOn && AllowAmbient(); Invalidate(); anim.Interval = (a || b || c) ? 15 : 80; return a || b || c || live; };
+        anim.Tick = dt => { var a = width.Step(dt); var b = content.Step(dt); var c = press.Step(dt) | pulse.Step(dt); var live = ambientOn && AllowAmbient(); Invalidate(); anim.Interval = (a || b || c) ? 15 : 80; return a || b || c || live; };
         clockTick.Tick += delegate { if (state == IslandState.Connected && Visible && AllowAmbient()) Invalidate(); };
         SetState(IslandState.Disconnected, "Bağlı değil", "", DateTime.MinValue);
     }

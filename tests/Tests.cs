@@ -51,6 +51,7 @@ static class Tests
         Run("Sık kullanılanlar: grup seçimi", FrequentPick);
         Run("Sık kullanılanlar: ayar", FrequentSettings);
         Run("Sık kullanılanlar: demo geçmişi", FrequentDemo);
+        Run("Diyalog düğmeleri (SButton)", DialogButtons);
         Run("Güncelleme: sürüm karşılaştırma", UpdateVersions);
         Run("Güncelleme: sürüm JSON'u", UpdateReleaseJson);
         Run("Güncelleme: SHA-256 dosyası", UpdateSha256);
@@ -379,6 +380,9 @@ static class Tests
         Check(VpnProviders.Asset(VpnKind.Sophos) == "provider-sophos" && VpnProviders.Asset(VpnKind.WatchGuard) == "provider-watchguard" && VpnProviders.Asset(VpnKind.Forti) == "provider-forti" && VpnProviders.Asset(VpnKind.OpenVpn) == "provider-openvpn", "rozet simgeleri");
         Check(VpnProviders.RowLabel(ovpn) == null && VpnProviders.RowLabel(forti) == "FortiClient SSL", "OpenVPN satırı etiketsiz, Forti kendi kaynağını gösterir");
         Check(VpnProviders.RowLabel(sophos) == "Sophos Connect" && VpnProviders.RowLabel(wg) == "WatchGuard SSL", "Sophos / WatchGuard satır etiketi");
+        Check(VpnProviders.RowSubLine(new VpnProfile { Id = "ovpn-9", Name = "x", Host = "vpn.example", Username = "ayse" }) == "OpenVPN  ·  vpn.example  ·  ayse", "alt satır: sağlayıcı · sunucu · kullanıcı (OpenVPN de adını gösterir)");
+        Check(VpnProviders.RowSubLine(new VpnProfile { Id = "ovpn-9", Name = "x", Host = "", Username = "" }) == "OpenVPN  ·  Sunucu adresi yok", "alt satır: sunucusuz OpenVPN");
+        Check(VpnProviders.RowSubLine(new VpnProfile { Id = "forti-ssl:ALFA", Name = "ALFA", Source = "FortiClient SSL", Host = "gw.example:10443", Username = null }) == "FortiClient SSL  ·  gw.example:10443", "alt satır: Forti kaynağı ve sunucu");
         Check(VpnProviders.GroupTitle(VpnKind.Sophos) == "SOPHOS CONNECT" && VpnProviders.GroupTitle(VpnKind.WatchGuard) == "WATCHGUARD SSL VPN" && VpnProviders.GroupTitle(VpnKind.Forti) == "FORTICLIENT VPN", "grup başlıkları");
 
         Check(VpnProviders.CredentialPrefix(VpnKind.Sophos) == SophosStore.CredentialPrefix && VpnProviders.CredentialPrefix(VpnKind.WatchGuard) == WatchGuardStore.CredentialPrefix && VpnProviders.CredentialPrefix(VpnKind.Forti) == null, "kimlik bilgisi önekleri");
@@ -582,6 +586,25 @@ static class Tests
                 Check(TaskbarButton.HasMinimizeBox(h) == on, "küçültme kutusu " + (on ? "açıldı" : "kapandı") + " (" + (i + 1) + ")");
             }
             Check(f.Handle == h && !TaskbarButton.Iconic(h), "küçültme kutusu tutamacı değiştirmez; gizli form küçültülmüş değil");
+        }
+    }
+
+    // Dialog buttons are glass SButtons: they must still work as AcceptButton / CancelButton (no window is shown).
+    static void DialogButtons()
+    {
+        using (var f = new System.Windows.Forms.Form())
+        {
+            var cancel = new SButton("Vazgeç", SButtonKind.Secondary) { DialogResult = System.Windows.Forms.DialogResult.Cancel };
+            var ok = new SButton("Bağlan", SButtonKind.Primary); var clicks = 0; ok.Click += delegate { clicks++; };
+            f.Controls.Add(cancel); f.Controls.Add(ok);
+            f.AcceptButton = ok; f.CancelButton = cancel;
+            Check(f.AcceptButton == ok && f.CancelButton == cancel, "SButton Enter / Esc düğmesi olabilir");
+            cancel.PerformClick();
+            Check(f.DialogResult == System.Windows.Forms.DialogResult.Cancel, "DialogResult olan düğme formu kapatır");
+            ok.PerformClick();
+            Check(clicks == 1, "PerformClick Click olayını çalıştırır");
+            ok.Enabled = false; ok.PerformClick();
+            Check(clicks == 1, "devre dışı düğme tıklanmaz");
         }
     }
 

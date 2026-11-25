@@ -147,9 +147,19 @@ internal sealed class SSegmented : SControl
 
 internal enum SButtonKind { Primary, Secondary, Ghost, Danger }
 
-internal sealed class SButton : SControl
+internal sealed class SButton : SControl, IButtonControl
 {
     public SButtonKind Kind; public Glyph Glyph;
+    // IButtonControl: dialogs use SButton as AcceptButton / CancelButton (Enter / Esc) like a Button
+    public DialogResult DialogResult { get; set; }
+    public void NotifyDefault(bool value) { }
+    public void PerformClick() { OnClick(EventArgs.Empty); }
+    protected override void OnClick(EventArgs e)
+    {
+        if (!Enabled) return;
+        var f = FindForm(); if (f != null && DialogResult != DialogResult.None) f.DialogResult = DialogResult;
+        base.OnClick(e);
+    }
     public SButton(string text, SButtonKind kind, Glyph glyph = Glyph.None)
     {
         Text = text; Kind = kind; Glyph = glyph; Cursor = Cursors.Hand; TabStop = true; Height = S(34);

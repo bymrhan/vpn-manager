@@ -33,6 +33,10 @@ internal sealed class ProfileList : Control
     readonly Animator anim = new Animator();
     readonly Dictionary<string, Spring> flip = new Dictionary<string, Spring>();   // FLIP: rows glide from their old position
     readonly Dictionary<string, float> pinPop = new Dictionary<string, float>();
+    // rows that left the list (deleted / gone after a reload): fade and slide out where they were
+    sealed class Ghost { public VpnProfile Profile; public int Y, Height; public float T0; }
+    readonly List<Ghost> ghosts = new List<Ghost>();
+    const float LeaveDuration = 0.28F;
     readonly ToolTip tip = new ToolTip();
     string tipText = "";
 
@@ -110,6 +114,7 @@ internal sealed class ProfileList : Control
     {
         var oldTops = new Dictionary<string, int>();
         foreach (var o in rows) if (!o.IsHeader) oldTops[o.Profile.Id] = o.Top;
+        var oldRows = rows; var oldScroll = (int)Math.Round(Scroll);
         rows = newRows; terms = newTerms; emptyTitle = title; emptyHint = hint;
         indexById.Clear();
         var y = S(2);
@@ -127,6 +132,13 @@ internal sealed class ProfileList : Control
                 var sp = new Spring(ot - r.Top, 330, 26); sp.Target = 0; flip[r.Profile.Id] = sp;
             }
         else flip.Clear();
+        if (!AnimateNext && !Motion.Reduced)
+        {
+            foreach (var o in oldRows)
+                if (!o.IsHeader && !indexById.ContainsKey(o.Profile.Id) && o.Top - oldScroll < Height && o.Top + o.Height - oldScroll > 0)
+                    ghosts.Add(new Ghost { Profile = o.Profile, Y = o.Top - oldScroll, Height = o.Height, T0 = anim.Time });
+        }
+        else ghosts.Clear();
         hoverIndex = -1; selectedIndex = -1;
         if (keepId != null) selectedIndex = rows.FindIndex(r => !r.IsHeader && r.Profile.Id == keepId);
         var keep = selectedIndex >= 0;
@@ -210,6 +222,7 @@ internal sealed class ProfileList : Control
         if (plugPress.Step(dt)) moving = true;
         foreach (var kv in flip.ToList()) { if (kv.Value.Step(dt)) moving = true; else flip.Remove(kv.Key); }
         foreach (var kv in pinPop.ToList()) { if (now - kv.Value > 0.5F) pinPop.Remove(kv.Key); moving = true; }
+        if (ghosts.Count > 0) { ghosts.RemoveAll(gh => now - gh.T0 > LeaveDuration); moving = true; }
         if (barAlpha > 0 && !dragThumb && !hoverBar && scroll.Settled) { barAlpha = Math.Max(0, barAlpha - dt * 1.4F); moving = true; }
 
         foreach (var kv in appearAt.ToList()) { if (now - kv.Value > AppearDuration + 0.05F) appearAt.Remove(kv.Key); moving = true; }
@@ -384,6 +397,13 @@ internal sealed class ProfileList : Control
             }
         if (hovA.Value > 0.01F && hoverIndex == selectedIndex) { /* selected plate already shows the pointer sheen */ }
 
+        foreach (var gh in ghosts)
+        {
+            var k = Ease.OutCubic((now - gh.T0) / LeaveDuration);
+            var gr = new Rectangle(RowX - (int)(S(28) * k), gh.Y, RowW, gh.Height);
+            try { PaintRow(g, gh.Profile, gr, false, false, now, 1 - k); } catch (ArgumentException) { }
+        }
+
         for (var i = 0; i < rows.Count; i++)
         {
             var r = rows[i]; var rr = RowRect(r);
@@ -421,7 +441,6 @@ internal sealed class ProfileList : Control
         var success = id == successId ? (now - successT0) : -1F; var fail = id == failId ? (now - failT0) : -1F;
         var live = LiveText(p);
         var providerIcon = VpnProviders.Asset(VpnProviders.KindOf(p));
-        var providerLabel = VpnProviders.RowLabel(p); // null for OpenVPN rows
         if (fail >= 0) rr.Offset((int)(Math.Sin(fail * 44) * S(6) * Math.Max(0F, 1 - fail / FailDuration)), 0);
         var active = selected || hover;
         var radius = S(12);
@@ -501,8 +520,7 @@ internal sealed class ProfileList : Control
         var x = (int)(av.Right + S(14));
         var textRight = right - sw - iconW - S(10);
         DrawHighlighted(g, p.Name, Ui.RowNameFont, Fade(Ui.Text, appear), new Rectangle(x, rr.Y + S(10), Math.Max(10, textRight - x), S(20)));
-        var sub = providerLabel != null ? providerLabel + (p.Host.Length > 0 ? "  ·  " + p.Host : "") : p.Host.Length > 0 ? p.Host : "Sunucu adresi yok";
-        if (p.Username.Length > 0) sub += "  ·  " + p.Username;
+        var sub = VpnProviders.RowSubLine(p);
         var sx = x;
         var reach = ReachOf(p);
         if (reach != ReachState.Unknown)
@@ -512,6 +530,9 @@ internal sealed class ProfileList : Control
             Assets.Draw(g, reach == ReachState.Up ? "reach-up" : reach == ReachState.Down ? "reach-down" : "reach-checking", new RectangleF(sx, rr.Y + S(32), S(12), S(12)), Fade(rc, appear), 1.25F);
             sx += S(17);
         }
+        // provider logo before the provider name: [logo] Provider · server · user
+        Assets.Draw(g, providerIcon, new RectangleF(sx, rr.Y + S(32.5F), S(13), S(13)), Fade(Ui.Muted, appear), 1.2F);
+        sx += S(18);
         DrawHighlighted(g, sub, Ui.SubFont, Fade(Ui.Muted, appear), new Rectangle(sx, rr.Y + S(31), Math.Max(10, right - sw - iconW - S(10) - sx), S(18)));
     }
 

@@ -11,6 +11,7 @@ bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta dur
 - Boş liste nedenini söyler (dosya yok / okunamadı / düzen tanınmıyor / 0 profil) ve *Profil klasörünü seç…* ile *Dosya seç…* düğmelerini gösterir; aynı işlemler Ayarlar > Genel > *Profil kaynağı* altında da var.
 - *Tanı bilgisini kopyala*: sürümler, denenen konumlar ve `config.json`'ın yalnızca anahtar adlarıyla türleri (değer, ad ve sunucu içermez); aynı özet bir kez uygulama günlüğüne yazılır.
 - **Derin Mavi teması:** Ayarlar > Görünüm'de ve ilk kurulum sihirbazında dördüncü tema: lacivert / mavi-arduvaz cam, yumuşak mavi kenarlar ve yeşil bağlantı vurgusu. Koyu bir temadır; yerleşim değişmez, Koyu ve Açık temaların görünümü aynı kalır.
+- **Görünüm iyileştirmeleri:** her profil satırının alt satırı artık sağlayıcı logosu ve adıyla başlar (*[logo] Sağlayıcı · sunucu · kullanıcı*, OpenVPN satırlarında da); silinen profil yerinde solarak çıkar; bağlantı kapsülündeki bağlanma/hata parıltısı söner; kimlik bilgisi, bağlantı geçmişi ve yinelenen profiller pencerelerinde düğmeler Ayarlar'daki cam düğmelerle aynıdır.
 
 ## 2.1.1
 
