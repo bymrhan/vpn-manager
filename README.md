@@ -13,7 +13,7 @@ PowerShell açın ve çalıştırın:
 irm https://raw.githubusercontent.com/bymrhan/vpn-manager/main/install.ps1 | iex
 ```
 
-Betik son sürümün paketini [Releases](https://github.com/bymrhan/vpn-manager/releases) sayfasından indirir, **SHA-256 özetini doğrular**, `%LOCALAPPDATA%\Programs\OpenVPN Hizli Arama` klasörüne kurar (yönetici izni gerekmez), Başlat menüsü kısayolunu ekler ve ilk kurulum sihirbazını açar.
+Betik son sürümün paketini [Releases](https://github.com/bymrhan/vpn-manager/releases) sayfasından indirir, **SHA-256 özetini doğrular**, `%LOCALAPPDATA%\Programs\OpenVPN Hizli Arama` klasörüne kurar (yönetici izni gerekmez), Başlat menüsü kısayolunu ekler ve ilk kurulum sihirbazını açar. Uygulama zaten kuruluysa sihirbaz açılmaz, kurulu kopya sessizce güncellenir (aşağıya bakın).
 
 - Belirli sürüm: `$env:VPNM_VERSION = 'v2.0.0'` yazıp aynı komutu çalıştırın.
 - Betiği çalıştırmadan önce okumak isterseniz: [`install.ps1`](install.ps1) (kısa ve yalnızca ASCII).
@@ -23,6 +23,8 @@ Betik son sürümün paketini [Releases](https://github.com/bymrhan/vpn-manager/
 **Gereksinimler:** Windows 10/11 (.NET Framework 4.8 Windows ile gelir) · OpenVPN Connect 3.x · FortiClient VPN 7.x, Sophos Connect ve WatchGuard Mobile VPN with SSL (hepsi isteğe bağlı; yalnızca kurulu olanlar listelenir).
 
 Kurulu kopya kendini de güncelleyebilir; bkz. [Güncelleme](#güncelleme).
+
+**Eski sürümden güncelleme:** 2.0.0 kendini güncelleyemez; 2.0.0 kullanıcıları yukarıdaki komutu **bir kez** yeniden çalıştırır. Betik mevcut kurulumu bulur, çalışan uygulamayı kapatır, program dosyalarını yerinde günceller ve uygulamayı arka planda yeniden başlatır; ayarlar, sabitlenenler, geçmiş ve profiller korunur, sihirbaz açılmaz. Sonraki güncellemeler [Güncelleme](#güncelleme) ayarlarına göre otomatik gelir.
 
 ## Ekran görüntüleri
 

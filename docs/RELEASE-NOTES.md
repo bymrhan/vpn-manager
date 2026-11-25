@@ -5,6 +5,7 @@ bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta dur
 
 ## 2.1.0 (hazırlanıyor)
 
+- **2.0.0'dan güncelleme: kurulum komutunu bir kez yeniden çalıştırın** (`irm https://raw.githubusercontent.com/bymrhan/vpn-manager/main/install.ps1 | iex`). Mevcut kurulum sessizce güncellenir; ayarlar, sabitlenenler ve geçmiş korunur, sihirbaz açılmaz. Sonraki güncellemeler güncelleme ayarlarına göre otomatik gelir.
 - **Sophos Connect desteği:** `sccli` üzerinden profilleri listeleme, bağlanma / bağlantıyı kesme ve durum.
 - **WatchGuard Mobile VPN with SSL desteği:** kayıtlı sunucular listede; bağlanma istemcinin kendi penceresi üzerinden yapılır.
 - **Sağlayıcı ayarları:** FortiClient, Sophos ve WatchGuard için ayrı anahtarlar (Sophos / WatchGuard yalnızca istemci algılanınca); kurulu ve açık istemcinin sekmesi bağlantı yokken de görünür.
