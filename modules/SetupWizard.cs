@@ -85,7 +85,7 @@ internal sealed class SetupWizard : Form
     readonly SPage page;
     readonly SButton finish = new SButton("Kurulumu tamamla", SButtonKind.Primary), skip = new SButton("Atla", SButtonKind.Ghost);
     readonly SToggle importOvpn = new SToggle(), importForti = new SToggle(), autoStart = new SToggle(), desktop = new SToggle(), showForti = new SToggle(), deletePack = new SToggle();
-    readonly SSegmented theme = new SSegmented("Koyu", "Açık", "Sistem");
+    readonly SSegmented theme = new SSegmented("Koyu", "Açık", "Sistem", "Derin Mavi");
     string progress = ""; float progressValue = -1; bool running;
     readonly List<string> packOvpn = ProfilePack.OpenVpnNames(), packForti = ProfilePack.FortiNames();
     List<string> missingOvpn = new List<string>(), missingForti = new List<string>();
@@ -138,7 +138,7 @@ internal sealed class SetupWizard : Form
 
         // options
         autoStart.SetInstant(hadSettings ? AutoStart.IsEnabled() : true); desktop.SetInstant(!hadSettings); showForti.SetInstant(hadSettings ? settings.ShowForti : fortiInstalled);
-        theme.SelectedIndex = Math.Max(0, Array.IndexOf(new[] { "dark", "light", "system" }, settings.Theme));
+        theme.SelectedIndex = Math.Max(0, Array.IndexOf(new[] { "dark", "light", "system", "ocean" }, settings.Theme));
         page.Add(new SCard(), caption: "AYARLAR")
             .Add(new SRow("Windows açılışında başlat", "OpenVPN açılınca panel kendiliğinden yanına gelir.", autoStart, Glyph.Power))
             .Add(new SRow("Masaüstü kısayolu", "\"OpenVPN Hızlı Arama\" kısayolu oluşturulur.", desktop, Glyph.Open))
@@ -221,7 +221,7 @@ internal sealed class SetupWizard : Form
 
     void SaveBasics()
     {
-        settings.Theme = new[] { "dark", "light", "system" }[theme.SelectedIndex];
+        settings.Theme = new[] { "dark", "light", "system", "ocean" }[theme.SelectedIndex];
         settings.ShowForti = showForti.Checked;
         settings.AutoStart = autoStart.Checked;
         try { SettingsStore.Save(settings); } catch { }

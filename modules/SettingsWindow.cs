@@ -352,16 +352,25 @@ internal sealed class SThemeTile : SControl
     protected override void OnClick(EventArgs e) { Focus(); if (Picked != null) Picked(this, EventArgs.Empty); base.OnClick(e); }
     protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) OnClick(EventArgs.Empty); base.OnKeyDown(e); }
 
-    static void Mini(Graphics g, Rectangle r, bool light)
+    // mode: "dark", "light" or "ocean" (the Derin Mavi preview uses that theme's own palette).
+    static void Mini(Graphics g, Rectangle r, string mode)
     {
+        var light = mode == "light"; var ocean = mode == Themes.Ocean;
         Color bg = light ? Color.FromArgb(246, 248, 252) : Color.FromArgb(17, 19, 34), surf = light ? Color.White : Color.FromArgb(26, 30, 47),
               line = light ? Color.FromArgb(222, 228, 238) : Color.FromArgb(52, 59, 84), text = light ? Color.FromArgb(40, 48, 66) : Color.FromArgb(200, 206, 222),
-              muted = light ? Color.FromArgb(190, 198, 212) : Color.FromArgb(70, 78, 102), sel = light ? Color.FromArgb(218, 232, 255) : Color.FromArgb(24, 38, 76);
+              muted = light ? Color.FromArgb(190, 198, 212) : Color.FromArgb(70, 78, 102), sel = light ? Color.FromArgb(218, 232, 255) : Color.FromArgb(24, 38, 76),
+              field = Color.FromArgb(82, 140, 255);
+        if (ocean)
+        {
+            bg = Color.FromArgb(0x1A, 0x21, 0x2C); surf = Color.FromArgb(0x23, 0x2A, 0x37); line = Color.FromArgb(0x2C, 0x35, 0x41);
+            text = Color.FromArgb(0xCD, 0xCD, 0xCD); muted = Color.FromArgb(0x4E, 0x5E, 0x72); sel = Color.FromArgb(0x2E, 0x3E, 0x52); field = Color.FromArgb(0x8B, 0xAE, 0xD9);
+        }
         using (var b = new SolidBrush(bg)) g.FillRectangle(b, r);
         var k = r.Width / 120F;
         Ui.FillRound(g, surf, new RectangleF(r.X + 8 * k, r.Y + 8 * k, r.Width - 16 * k, 12 * k), 4 * k);
-        Ui.DrawRound(g, Color.FromArgb(82, 140, 255), new RectangleF(r.X + 8 * k, r.Y + 8 * k, r.Width - 16 * k, 12 * k), 4 * k);
-        Color[] av = { Color.FromArgb(96, 150, 255), Color.FromArgb(56, 196, 166), Color.FromArgb(244, 154, 82) };
+        Ui.DrawRound(g, field, new RectangleF(r.X + 8 * k, r.Y + 8 * k, r.Width - 16 * k, 12 * k), 4 * k);
+        Color[] av = ocean ? new[] { Color.FromArgb(0x65, 0xC2, 0x99), Color.FromArgb(0x59, 0x80, 0xAD), Color.FromArgb(0xB7, 0x97, 0x6B) }
+                           : new[] { Color.FromArgb(96, 150, 255), Color.FromArgb(56, 196, 166), Color.FromArgb(244, 154, 82) };
         for (var i = 0; i < 3; i++)
         {
             var y = r.Y + (28 + i * 18) * k;
@@ -382,10 +391,10 @@ internal sealed class SThemeTile : SControl
         using (var clip = Ui.Round(pr, S(9))) g.SetClip(clip);
         if (Mode == "system")
         {
-            Mini(g, pr, false);
-            using (var path = new GraphicsPath()) { path.AddPolygon(new[] { new Point(pr.Right, pr.Top), new Point(pr.Right, pr.Bottom), new Point(pr.Left, pr.Bottom) }); g.SetClip(path, CombineMode.Intersect); Mini(g, pr, true); }
+            Mini(g, pr, "dark");
+            using (var path = new GraphicsPath()) { path.AddPolygon(new[] { new Point(pr.Right, pr.Top), new Point(pr.Right, pr.Bottom), new Point(pr.Left, pr.Bottom) }); g.SetClip(path, CombineMode.Intersect); Mini(g, pr, "light"); }
         }
-        else Mini(g, pr, Mode == "light");
+        else Mini(g, pr, Mode);
         g.Restore(state);
         Glass.Paint(g, outer, S(12), GlassKind.Secondary, 1F); if (selected) Ui.DrawRound(g, Ui.Accent, outer, S(12), S(2F));
         // radio + label
@@ -393,7 +402,7 @@ internal sealed class SThemeTile : SControl
         using (var p = new Pen(selected ? Ui.Accent : Ui.Faint, S(1.5F))) g.DrawEllipse(p, rc);
         if (selected) using (var b = new SolidBrush(Ui.Accent)) g.FillEllipse(b, Rectangle.Inflate(rc, -S(4), -S(4)));
         var ls = Ui.Measure(g, Label, SFonts.RowTitle);
-        Assets.Draw(g, Mode == "dark" ? "theme-dark" : Mode == "light" ? "theme-light" : "theme-system", new RectangleF(rc.Right + S(6), cy - S(8), S(16), S(16)), selected ? Ui.Highlight : Ui.Muted);
+        Assets.Draw(g, Mode == "dark" ? "theme-dark" : Mode == "light" ? "theme-light" : Mode == Themes.Ocean ? "nav-appearance" : "theme-system", new RectangleF(rc.Right + S(6), cy - S(8), S(16), S(16)), selected ? Ui.Highlight : Ui.Muted);
         TextRenderer.DrawText(g, Label, SFonts.RowTitle, new Point(rc.Right + S(28), cy - ls.Height / 2), Ui.Text, Ui.Flags);
         FocusRing(g, outer, S(10));
     }
@@ -750,12 +759,13 @@ internal sealed class SettingsForm : Form
     void BuildAppearance()
     {
         var page = NewPage("Görünüm", "Tema anında önizlenir; kaydetmezseniz geri alınır");
-        var holder = page.Add(new Panel { Height = S(140) }, caption: "TEMA");
+        var holder = page.Add(new Panel { Height = S(140 + 146) }, caption: "TEMA");
         holder.BackColor = Ui.Bg;
-        var modes = new[] { "dark", "light", "system" }; var labels = new[] { "Glass Dark", "Glass Light", "Sistem" };
-        for (var i = 0; i < 3; i++)
+        var modes = Themes.Ids; var labels = new[] { "Glass Dark", "Glass Light", "Sistem", "Derin Mavi" };
+        for (var i = 0; i < modes.Length; i++)
         {
-            var t = new SThemeTile(modes[i], labels[i]) { Location = new Point(i * S(160), 0), Selected = work.Theme == modes[i] };
+            // three tiles per row (the page is not wide enough for four); Derin Mavi starts the second row
+            var t = new SThemeTile(modes[i], labels[i]) { Location = new Point(i % 3 * S(160), i / 3 * S(146)), Selected = work.Theme == modes[i] };
             t.Picked += delegate(object s, EventArgs e)
             {
                 var tile = (SThemeTile)s; work.Theme = tile.Mode;
