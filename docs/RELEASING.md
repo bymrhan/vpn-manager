@@ -30,15 +30,18 @@ Prereleases and drafts are ignored by the updater.
    powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -NoProfiles
    ```
 
-   Next to each zip, `build.ps1` writes `<zip>.sha256`. With `-NoProfiles` it also writes the release
-   copy under the asset name to `outputs\release\`:
+   With `-NoProfiles`, `build.ps1` writes `<zip>.sha256` next to the zip and the release copy under
+   the asset name to `outputs\release\`:
 
    ```
    outputs\release\OpenVPN-Hizli-Arama-Kurulum.zip
    outputs\release\OpenVPN-Hizli-Arama-Kurulum.zip.sha256
    ```
 
-   Never publish a package built without `-NoProfiles`: it contains this PC's VPN profiles.
+   Never publish a package built without `-NoProfiles`: it contains this PC's VPN profiles with
+   their private keys. That build is named `outputs\OpenVPN-Hizli-Arama-PROFILLI-PAYLASMAYIN.zip`,
+   gets **no** `.sha256` and nothing in `outputs\release\`, and `build.ps1` prints a warning. Upload
+   only the two files from `outputs\release\`.
 
 3. **Commit and push** the version bump, then **create the release** with both files:
 

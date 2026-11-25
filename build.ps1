@@ -1,6 +1,9 @@
 ﻿# Builds OpenVPN-Hizli-Arama.exe and the installer zip.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 [-NoProfiles]
-# -NoProfiles: package without this PC's VPN profiles (generic installer).
+# -NoProfiles: package without this PC's VPN profiles (generic installer). Only this build writes
+# a .sha256 and the release copy (outputs\release\). Without it the zip carries this PC's profiles
+# with their private keys: it gets a "do not share" name and no .sha256, so it cannot pass for a
+# release asset.
 param([switch]$NoProfiles)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -75,7 +78,7 @@ foreach ($n in 'kur.ps1', 'kaldir.ps1') { $s = [IO.File]::ReadAllText((Join-Path
 foreach ($n in 'Kur.cmd', 'Kaldir.cmd', 'BENIOKU.txt') { Copy-Item (Join-Path $root "paket\$n") $stage }
 
 # 4) zip
-$zip = Join-Path $Out $(if ($NoProfiles) { 'OpenVPN-Hizli-Arama-Kurulum-Profilsiz.zip' } else { 'OpenVPN-Hizli-Arama-Kurulum.zip' })
+$zip = Join-Path $Out $(if ($NoProfiles) { 'OpenVPN-Hizli-Arama-Kurulum-Profilsiz.zip' } else { 'OpenVPN-Hizli-Arama-PROFILLI-PAYLASMAYIN.zip' })
 if (Test-Path $zip) { Remove-Item $zip -Force }
 if (Test-Path "$zip.sha256") { Remove-Item "$zip.sha256" -Force }
 # Both assemblies: ZipArchive lives in System.IO.Compression. Without -NoProfiles it happened to
@@ -88,8 +91,9 @@ foreach ($file in Get-ChildItem $stage -Recurse -File) {
     [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $rel, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
 }
 $archive.Dispose(); $fs.Dispose()
-$sha = Write-Sha256 $zip (Split-Path -Leaf $zip)
+$sha = $null
 if ($NoProfiles) {
+    $sha = Write-Sha256 $zip (Split-Path -Leaf $zip)
     # Release copy under the asset name the updater and install.ps1 download (see docs\RELEASING.md).
     $rel = Join-Path $Out 'release'
     New-Item -ItemType Directory -Force -Path $rel | Out-Null
@@ -101,7 +105,14 @@ if ($NoProfiles) {
 try { Copy-Item $exe (Join-Path $Out 'OpenVPN-Hizli-Arama.exe') -Force }
 catch { Write-Warning "outputs\OpenVPN-Hizli-Arama.exe güncellenmedi (uygulama çalışıyor olabilir). Paket yine de üretildi." }
 Write-Host "  Paket: $zip"
-Write-Host "  SHA-256: $sha"
+if ($sha) { Write-Host "  SHA-256: $sha" }
+else {
+    Write-Warning "DİKKAT: bu paket bu bilgisayarın VPN profillerini ÖZEL ANAHTARLARIYLA içerir. PAYLAŞMAYIN, sürüme YÜKLEMEYİN. Dağıtım için: build.ps1 -NoProfiles"
+    # An older build wrote the profile package under the release asset name: flag what is left of it.
+    foreach ($old in 'OpenVPN-Hizli-Arama-Kurulum.zip', 'OpenVPN-Hizli-Arama-Kurulum.zip.sha256') {
+        if (Test-Path (Join-Path $Out $old)) { Write-Warning "outputs\$old eski bir profilli derlemeden kalmış olabilir; yayınlamayın, silin." }
+    }
+}
 
 }
 finally {

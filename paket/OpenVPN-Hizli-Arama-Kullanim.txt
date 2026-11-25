@@ -162,8 +162,8 @@ Parolalar uygulamanın ayar, geçmiş veya log dosyalarına yazılmaz.
 FortiClient'ın kendi kayıtlı parolaları okunmaz.
 
 Kurulum paketleri:
-"OpenVPN-Hizli-Arama-Kurulum.zip" bu bilgisayarın OpenVPN profillerini (özel anahtarlarla)
-içerir; yalnızca kendi bilgisayarlarınıza taşımak için kullanın, PAYLAŞMAYIN.
+"OpenVPN-Hizli-Arama-PROFILLI-PAYLASMAYIN.zip" bu bilgisayarın OpenVPN profillerini (özel
+anahtarlarla) içerir; yalnızca kendi bilgisayarlarınıza taşımak için kullanın, PAYLAŞMAYIN.
 Başkalarına "OpenVPN-Hizli-Arama-Kurulum-Profilsiz.zip" dağıtın.
 
 Otomatik başlatma:

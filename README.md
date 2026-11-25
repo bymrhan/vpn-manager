@@ -189,14 +189,14 @@ Ek anahtarlar: `--demo-connected=Acme` (örnek profili bağlı göster), `--demo
 Yalnızca Windows'un kendi C# derleyicisi (`csc.exe`, .NET Framework 4.x) gerekir; harici paket yoktur.
 
 ```powershell
-# derle + otomatik testler + kurulum paketi (outputs\ klasörüne; zip'in yanına .sha256 da yazılır)
+# derle + otomatik testler + kurulum paketi (outputs\ klasörüne; -NoProfiles ile zip'in yanına .sha256 ve outputs\release\ da yazılır)
 powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -NoProfiles
 
 # yalnızca testler
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-`-NoProfiles` bu bilgisayarın profillerini pakete **koymaz** (dağıtım için bunu kullanın). Profilli paket yalnızca kendi cihazlarınıza taşıma içindir ve asla paylaşılmamalıdır.
+`-NoProfiles` bu bilgisayarın profillerini pakete **koymaz** (dağıtım için bunu kullanın). Profilli paket (`OpenVPN-Hizli-Arama-PROFILLI-PAYLASMAYIN.zip`, özel anahtarları içerir) yalnızca kendi cihazlarınıza taşıma içindir ve asla paylaşılmamalıdır; ona `.sha256` ve sürüm kopyası yazılmaz, `build.ps1` uyarı basar.
 
 | Yol | İçerik |
 |---|---|
