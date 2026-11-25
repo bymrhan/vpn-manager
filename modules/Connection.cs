@@ -295,6 +295,7 @@ internal static class ConnectionControl
         }
         try
         {
+            QuietWindow.KeepProcessInBackground("OpenVPNConnect", 8);
             var psi = new ProcessStartInfo(exe, "--disconnect-shortcut") { UseShellExecute = false, CreateNoWindow = true };
             var p = Process.Start(psi);
             if (p != null) p.Dispose();

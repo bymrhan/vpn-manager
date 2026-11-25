@@ -134,7 +134,7 @@ internal static class FortiStore
     }
 
     // Selects the tunnel in FortiClient and brings its window to the front. Returns an error or null.
-    public static string Open(VpnProfile p)
+    public static string Open(VpnProfile p, bool quiet = false)
     {
         if (!IsInstalled) return "FortiClient bulunamadı.";
         var target = TunnelName(p);
@@ -160,7 +160,7 @@ internal static class FortiStore
                 // Same tunnel already selected: just show the (possibly hidden) window.
                 if (sameTunnel)
                 {
-                    if (!ShowExistingWindow(pids)) return "FortiClient zaten çalışıyor; penceresi bulunamadı. Bildirim alanındaki FortiClient simgesinden açın.";
+                    if (!ShowExistingWindow(pids, quiet)) return "FortiClient zaten çalışıyor; penceresi bulunamadı. Bildirim alanındaki FortiClient simgesinden açın.";
                     return null;
                 }
                 // Different tunnel: close only the GUI (VPN services and the tray icon are separate
@@ -169,6 +169,7 @@ internal static class FortiStore
             }
             // Same as the Start menu shortcut: the GUI must start in its own folder, otherwise it
             // cannot find its configuration ("Cannot read properties of null (reading 'TraceLog')").
+            if (quiet) QuietWindow.ParkFortiWhenShown(25);
             using (Process.Start(new ProcessStartInfo { FileName = GuiPath, WorkingDirectory = Path.GetDirectoryName(GuiPath), UseShellExecute = true })) { }
             return null;
         }
@@ -214,10 +215,11 @@ internal static class FortiStore
     }
 
     // Finds FortiClient's top-level window (also when hidden to the tray) and shows it.
-    static bool ShowExistingWindow(HashSet<uint> pids)
+    static bool ShowExistingWindow(HashSet<uint> pids, bool quiet = false)
     {
         var found = FindMainWindow(pids);
         if (found == IntPtr.Zero) return false;
+        if (quiet) { QuietWindow.ParkExisting(found); return true; } // renderable, but off-screen and not focused
         ShowWindow(found, IsIconic(found) ? 9 : 5); // SW_RESTORE / SW_SHOW
         SetForegroundWindow(found);
         return true;
@@ -225,13 +227,14 @@ internal static class FortiStore
 
     // Shows FortiClient's window without changing the selected tunnel (starts the GUI when it is
     // not running). Returns an error or null.
-    public static string ShowGui()
+    public static string ShowGui(bool quiet = false)
     {
         if (!IsInstalled) return "FortiClient bulunamadı.";
         try
         {
             var pids = GuiProcessIds();
-            if (pids.Count > 0) return ShowExistingWindow(pids) ? null : "FortiClient penceresi bulunamadı.";
+            if (pids.Count > 0) return ShowExistingWindow(pids, quiet) ? null : "FortiClient penceresi bulunamadı.";
+            if (quiet) QuietWindow.ParkFortiWhenShown(25);
             using (Process.Start(new ProcessStartInfo { FileName = GuiPath, WorkingDirectory = Path.GetDirectoryName(GuiPath), UseShellExecute = true })) { }
             return null;
         }
@@ -335,11 +338,18 @@ internal static class FortiGui
                 if (!string.IsNullOrEmpty(cred.Username) && form.Username != null && Value(form.Username) != cred.Username)
                 {
                     form.Username.set_accValue(0, cred.Username);
-                    if (Value(form.Username) != cred.Username) { detail += ", kullanıcı adı yazılamadı"; return Outcome.FillFailed; }
+                    // Chromium applies the value asynchronously: poll the read-back for up to 2 s.
+                    var written = false;
+                    for (var i = 0; i < 20 && !written; i++)
+                    {
+                        written = string.Equals(Value(form.Username).Trim(), cred.Username.Trim(), StringComparison.CurrentCultureIgnoreCase);
+                        if (!written) System.Threading.Thread.Sleep(100);
+                    }
+                    if (!written) { detail += ", kullanıcı adı yazılamadı (okunan uzunluk " + Value(form.Username).Length + ")"; return Outcome.FillFailed; }
                 }
                 form.Password.set_accValue(0, cred.Password);
             }
-            catch (Exception ex) { detail += ", alan doldurulamadı: " + ex.GetType().Name; return Outcome.FillFailed; }
+            catch (Exception ex) { detail += ", alan doldurulamadı: " + ex.GetType().Name + " 0x" + ex.HResult.ToString("X8"); return Outcome.FillFailed; }
             System.Threading.Thread.Sleep(150); // let the page see the input events before Connect
             form.Connect.accDoDefaultAction(0);
             return Outcome.Pressed;

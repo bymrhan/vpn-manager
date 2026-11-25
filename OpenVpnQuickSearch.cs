@@ -1000,7 +1000,7 @@ internal sealed class SearchForm : Form
             var outcome = FortiGui.Outcome.NotReady;
             try
             {
-                err = FortiStore.ShowGui();
+                err = FortiStore.ShowGui(true);
                 var deadline = DateTime.UtcNow.AddSeconds(20);
                 while (err == null && DateTime.UtcNow < deadline)
                 {
@@ -1013,7 +1013,8 @@ internal sealed class SearchForm : Form
             catch (Exception ex) { err = ex.Message; }
             UiInvoke(delegate
             {
-                if (outcome == FortiGui.Outcome.Pressed) return;
+                if (outcome == FortiGui.Outcome.Pressed) { ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(4000); QuietWindow.Reveal(false); }); return; }
+                QuietWindow.Reveal(true);
                 fortiDisconnectingId = null; list.EndDisconnect();
                 SetStatus(err ?? "FortiClient'ta Disconnect bulunamadı — bağlantıyı FortiClient'tan kesin");
             });
@@ -1041,13 +1042,14 @@ internal sealed class SearchForm : Form
         ThreadPool.QueueUserWorkItem(delegate
         {
             string err;
-            try { err = FortiStore.Open(p); } catch (Exception ex) { err = ex.Message; }
+            try { err = FortiStore.Open(p, true); } catch (Exception ex) { err = ex.Message; }
             var outcome = FortiGui.Outcome.NotReady;
             if (err == null) outcome = PressFortiConnect(tunnel, cred);
             if (cred != null) cred.Password = "";
             UiInvoke(delegate
             {
                 fortiOpening = false;
+                if (outcome != FortiGui.Outcome.Pressed) QuietWindow.Reveal(true); // the user has to act in FortiClient
                 if (err != null) { if (fortiConnectingId == p.Id) fortiConnectingId = null; list.ConnectFailed(p.Id); SetStatus(err); return; }
                 if (outcome == FortiGui.Outcome.Pressed) { fortiAuth = true; SetStatus("FortiClient \"" + p.Name + "\" bağlanıyor…"); }
                 else if (outcome == FortiGui.Outcome.NeedsPassword) SetStatus("FortiClient'ta \"" + p.Name + "\" seçildi — parolayı girip Connect'e basın");
@@ -1055,6 +1057,16 @@ internal sealed class SearchForm : Form
                 else SetStatus("FortiClient'ta \"" + p.Name + "\" seçildi — Connect'e basın");
             });
         });
+    }
+
+    static void FortiTrace(string line)
+    {
+        try
+        {
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenVpnQuickSearch");
+            File.AppendAllText(Path.Combine(dir, "forti.log"), DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + line + Environment.NewLine);
+        }
+        catch { }
     }
 
     // Runs on a worker thread after FortiStore.Open(): waits up to 20 s for FortiClient's form to
@@ -1066,10 +1078,14 @@ internal sealed class SearchForm : Form
         var outcome = FortiGui.Outcome.NotReady;
         while (DateTime.UtcNow < deadline)
         {
-            string detail;
+            string detail = "";
             try { outcome = FortiGui.TryConnect(tunnel, cred, true, out detail); }
-            catch { outcome = FortiGui.Outcome.NotReady; }
-            if (outcome == FortiGui.Outcome.Pressed || outcome == FortiGui.Outcome.NeedsPassword || outcome == FortiGui.Outcome.FillFailed) return outcome;
+            catch (Exception ex) { outcome = FortiGui.Outcome.NotReady; detail = ex.GetType().Name; }
+            if (outcome == FortiGui.Outcome.Pressed || outcome == FortiGui.Outcome.NeedsPassword || outcome == FortiGui.Outcome.FillFailed)
+            {
+                FortiTrace(tunnel + ": " + outcome + " (" + detail + ")"); // never contains the password
+                return outcome;
+            }
             Thread.Sleep(500);
         }
         return outcome;
@@ -1140,6 +1156,7 @@ internal sealed class SearchForm : Form
             var match = profiles.Where(FortiStore.IsForti).FirstOrDefault(p => string.Equals(FortiStore.TunnelName(p), tunnel, StringComparison.CurrentCultureIgnoreCase));
             if (match != null) id = match.Id;
         }
+        if (fortiConnectingId != null && id == null && (DateTime.UtcNow - fortiConnectStart).TotalSeconds > 25 && QuietWindow.IsParked) QuietWindow.Reveal(true); // password / token prompt or an error
         if (fortiConnectingId != null && (DateTime.UtcNow - fortiConnectStart).TotalSeconds > 120)
         {
             list.CancelConnect(fortiConnectingId); fortiConnectingId = null;
@@ -1167,6 +1184,7 @@ internal sealed class SearchForm : Form
         }
         var sel = list.SelectedProfile;
         ApplyFilter(sel != null ? sel.Id : null);
+        if (id != null) QuietWindow.Reveal(false);
         if (id != null && id == fortiConnectingId) { fortiConnectingId = null; list.ConnectSucceeded(id); }
         fortiAuth = fortiConnectingId != null && fortiAuth;
         var p2 = profiles.FirstOrDefault(p => p.Id == id);
@@ -1763,6 +1781,7 @@ internal sealed class SearchForm : Form
         {
             var arg = "--connect-shortcut=" + p.Id;
             if (p.Id.IndexOf(' ') >= 0) arg = "\"" + arg + "\"";
+            QuietWindow.KeepProcessInBackground("OpenVPNConnect", 12);
             using (Process.Start(new ProcessStartInfo { FileName = openVpnPath, Arguments = arg, UseShellExecute = true })) { }
         }
         catch (Exception ex) { list.ConnectFailed(p.Id); GlassDialog.Show(this, "Bağlantı başlatılamadı:\n" + ex.Message, Text); return; }
