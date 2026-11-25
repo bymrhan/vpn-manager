@@ -293,6 +293,12 @@ static class Tests
         Check(!WatchGuardGui.IsExitQuestionText("Example question: leaving closes the tunnel.", questions), "sorunun bir parçası eşleşmez");
         Check(!WatchGuardGui.IsExitQuestionText("", questions) && !WatchGuardGui.IsExitQuestionText("x", null) && !WatchGuardGui.IsExitQuestionText("", new[] { "" }), "boş metin / boş liste eşleşmez");
         Check(WatchGuardGui.NormalizeText(" a \r\n\r\n b\t") == "a b", "boşluk sadeleştirme");
+
+        Check(!WatchGuardGui.RevealActivates(true) && WatchGuardGui.RevealActivates(false), "başarılı kesme/bağlanmadan sonra kalan pencere öne getirilmez, hatada getirilir");
+        Check(WatchGuardGui.OwnedBy(3, 3) && !WatchGuardGui.OwnedBy(2, 3) && WatchGuardGui.OwnedBy(2, 0), "yalnızca bu işlemin park ettiği pencere geri getirilir (işlem yoksa hepsi)");
+        Check(!WatchGuardGui.AnyParked, "başlangıçta park edilmiş pencere yok");
+        WatchGuardGui.RevealAllParked(); QuietWindow.Reveal(false);
+        Check(!WatchGuardGui.AnyParked && !QuietWindow.IsParked, "çıkışta geri getirme: park yokken hiçbir şey yapmaz");
     }
 
     static VpnProfile P(string id, string name = "x", string source = "") { return new VpnProfile { Id = id, Name = name, Host = "", Username = "", Source = source }; }

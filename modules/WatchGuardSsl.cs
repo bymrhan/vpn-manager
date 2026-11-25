@@ -429,6 +429,28 @@ internal static class WatchGuardGui
 
     static readonly object gate = new object();
     static readonly Dictionary<IntPtr, RECT> parked = new Dictionary<IntPtr, RECT>();
+    // Which connect / disconnect parked a window: RevealStranded only brings back its own.
+    static readonly Dictionary<IntPtr, int> parkOwner = new Dictionary<IntPtr, int>();
+    [ThreadStatic] static int currentOp;
+    static int lastOp;
+
+    static void BeginOp() { currentOp = Interlocked.Increment(ref lastOp); }
+
+    // Something of the client is parked off-screen right now (the app must not exit meanwhile).
+    public static bool AnyParked { get { lock (gate) return parked.Count > 0; } }
+
+    // App exit: every parked window goes back on screen (without focus), whoever parked it.
+    public static void RevealAllParked()
+    {
+        try
+        {
+            RestoreHiddenParked();
+            var left = new List<IntPtr>();
+            lock (gate) left.AddRange(parked.Keys);
+            foreach (var h in left) Reveal(h, false);
+        }
+        catch { }
+    }
 
     // WM_COMMAND wParam: control id in the low word, notification code in the high word.
     internal static IntPtr MakeWParam(int id, int code) { return new IntPtr(((code & 0xFFFF) << 16) | (id & 0xFFFF)); }
@@ -438,17 +460,38 @@ internal static class WatchGuardGui
     public static WatchGuardStore.ConnectOutcome Connect(string server, string user, string password, out string message)
     {
         message = null;
+        BeginOp();
         var prev = GetForegroundWindow();
         bool userHadIt; string err;
-        var dlg = EnsureLoginDialog(true, prev, out userHadIt, out err);
-        if (dlg == IntPtr.Zero) { message = err; return WatchGuardStore.ConnectOutcome.Failed; }
-        if (userHadIt)
+        var dlg = IntPtr.Zero;
+        var handedOver = false; // pressed (the watcher owns the windows now), shown to the user, or never parked
+        try
         {
-            // The user has the dialog open on screen: it is theirs. Nothing is changed or pressed.
-            message = "WatchGuard giriş penceresi zaten açık: bağlantıyı o pencereden tamamlayın.";
-            return WatchGuardStore.ConnectOutcome.ShownToUser;
+            dlg = EnsureLoginDialog(true, prev, out userHadIt, out err);
+            if (dlg == IntPtr.Zero) { message = err; handedOver = true; return WatchGuardStore.ConnectOutcome.Failed; }
+            if (userHadIt)
+            {
+                // The user has the dialog open on screen: it is theirs. Nothing is changed or pressed.
+                message = "WatchGuard giriş penceresi zaten açık: bağlantıyı o pencereden tamamlayın.";
+                handedOver = true;
+                return WatchGuardStore.ConnectOutcome.ShownToUser;
+            }
+            var o = DriveLoginDialog(dlg, prev, server, user, password, out message);
+            handedOver = true;
+            return o;
         }
+        finally
+        {
+            // An exception while opening / filling the dialog must not strand it off-screen.
+            if (!handedOver) { try { RevealStranded(true, 0); } catch { } }
+            currentOp = 0; // the watcher (if any) carries its own copy
+        }
+    }
 
+    // Fills the parked login dialog and presses Connect (or shows it to the user when it cannot).
+    static WatchGuardStore.ConnectOutcome DriveLoginDialog(IntPtr dlg, IntPtr prev, string server, string user, string password, out string message)
+    {
+        message = null;
         if (!SelectServer(dlg, server)) return ShowToUser(dlg, "WatchGuard penceresinde sunucu seçilemedi; sunucuyu seçip Connect'e basın.", out message);
         if (!string.IsNullOrEmpty(user) && !SetAndVerify(dlg, IdUsername, user))
             return ShowToUser(dlg, "WatchGuard penceresine kullanıcı adı yazılamadı; bilgileri girip Connect'e basın.", out message);
@@ -653,8 +696,10 @@ internal static class WatchGuardGui
     // anything that needs them (the login dialog coming back after a failure, an error box).
     static void BabysitAfterPress(IntPtr loginDlg, IntPtr prev, HashSet<IntPtr> before, int seconds)
     {
+        var op = currentOp;
         ThreadPool.QueueUserWorkItem(delegate
         {
+            currentOp = op; // windows parked here belong to the same connect
             var connected = false;
             try
             {
@@ -690,28 +735,39 @@ internal static class WatchGuardGui
                 // Never strand a parked window: give windows that are closing a moment to go,
                 // then bring back whatever is still visible (to the front unless the connection
                 // came up, when it is only the status window finishing).
-                try { RevealStranded(!connected, 1500); } catch { }
+                try { RevealStranded(RevealActivates(connected), 1500); } catch { }
+                currentOp = 0; // pool thread: the next work item is another operation
             }
         });
     }
 
-    // Moves every still-visible window this class parked back on screen; hidden ones go home
-    // silently. graceMs: time a closing window gets to disappear first. Returns the revealed ones.
+    // Moves every still-visible window the current operation (connect / disconnect, see BeginOp)
+    // parked back on screen; hidden ones go home silently. Windows parked by another operation are
+    // left to it. graceMs: time a closing window gets to disappear first. Returns the revealed ones.
     static List<IntPtr> RevealStranded(bool activate, int graceMs)
     {
         var until = DateTime.UtcNow.AddMilliseconds(graceMs);
         while (true)
         {
             RestoreHiddenParked();
-            lock (gate) if (parked.Count == 0) break;
+            if (OwnParked().Count == 0) break;
             if (DateTime.UtcNow >= until) break;
             Thread.Sleep(50);
         }
-        var left = new List<IntPtr>();
-        lock (gate) left.AddRange(parked.Keys);
+        var left = OwnParked();
         foreach (var h in left) Reveal(h, activate);
         return left;
     }
+
+    // Windows parked by the current operation (all of them when no operation is set).
+    static List<IntPtr> OwnParked()
+    {
+        var op = currentOp; var list = new List<IntPtr>();
+        lock (gate) foreach (var kv in parkOwner) if (OwnedBy(kv.Value, op)) list.Add(kv.Key);
+        return list;
+    }
+
+    internal static bool OwnedBy(int owner, int op) { return op == 0 || owner == op; }
 
     // ---- disconnect ----
 
@@ -723,25 +779,34 @@ internal static class WatchGuardGui
         if (hidden == IntPtr.Zero) return "WatchGuard istemci penceresi bulunamadı.";
         var prev = GetForegroundWindow();
         var before = OnScreenDialogs();
+        BeginOp();
+        var done = false;
 
         try
         {
             // 1) Tray "Disconnect" (the "Connect..." item while connected).
             PostMessage(hidden, WM_COMMAND, MakeWParam(CmdConnect, 0), IntPtr.Zero);
-            if (WaitDisconnected(pids, before, prev, false, 12)) return null;
+            if (WaitDisconnected(pids, before, prev, false, 12)) { done = true; return null; }
             // Timed out: whatever was parked and is still there goes back to the user and is left
             // alone by the next step.
             foreach (var h in RevealStranded(true, 1000)) before.Add(h);
             // 2) Tray "Exit": the client closes its connection; its exit question is answered Yes.
             PostMessage(hidden, WM_COMMAND, MakeWParam(CmdExit, 0), IntPtr.Zero);
-            if (WaitDisconnected(pids, before, prev, true, 12)) return null;
+            if (WaitDisconnected(pids, before, prev, true, 12)) { done = true; return null; }
             return "WatchGuard bağlantısı kesilemedi; WatchGuard simgesinden Disconnect'i seçin.";
         }
         finally
         {
-            try { RevealStranded(true, 1000); } catch { } // no exit path leaves a window off-screen
+            // No exit path leaves a window off-screen. After a successful disconnect it is only the
+            // status window closing: moved back without focus, never brought to the front.
+            try { RevealStranded(RevealActivates(done), 1000); } catch { }
+            currentOp = 0;
         }
     }
+
+    // Windows still parked when a command ends come to the front only when it failed (the user has
+    // to look); after success they are just moved back.
+    internal static bool RevealActivates(bool succeeded) { return !succeeded; }
 
     static bool WaitDisconnected(HashSet<uint> pids, HashSet<IntPtr> before, IntPtr prev, bool confirmExit, int seconds)
     {
@@ -889,9 +954,9 @@ internal static class WatchGuardGui
         if (!GetWindowRect(h, out r)) return;
         lock (gate)
         {
-            if (parked.ContainsKey(h)) { if (r.Left > Off + 1000) Move(h, Off, Off); return; }
+            if (parked.ContainsKey(h)) { parkOwner[h] = currentOp; if (r.Left > Off + 1000) Move(h, Off, Off); return; }
             if (r.Left <= Off + 1000) return;
-            parked[h] = r;
+            parked[h] = r; parkOwner[h] = currentOp;
         }
         Move(h, Off, Off);
     }
@@ -901,7 +966,7 @@ internal static class WatchGuardGui
     {
         if (h == IntPtr.Zero || !IsWindow(h)) return;
         RECT home; bool known;
-        lock (gate) { known = parked.TryGetValue(h, out home); parked.Remove(h); }
+        lock (gate) { known = parked.TryGetValue(h, out home); parked.Remove(h); parkOwner.Remove(h); }
         RECT now;
         GetWindowRect(h, out now);
         if (!known || home.Left <= Off + 1000)
@@ -930,10 +995,10 @@ internal static class WatchGuardGui
         lock (gate) foreach (var kv in parked) list.Add(kv);
         foreach (var kv in list)
         {
-            if (!IsWindow(kv.Key)) { lock (gate) parked.Remove(kv.Key); continue; }
+            if (!IsWindow(kv.Key)) { lock (gate) { parked.Remove(kv.Key); parkOwner.Remove(kv.Key); } continue; }
             if (IsWindowVisible(kv.Key)) continue;
             Move(kv.Key, kv.Value.Left, kv.Value.Top);
-            lock (gate) parked.Remove(kv.Key);
+            lock (gate) { parked.Remove(kv.Key); parkOwner.Remove(kv.Key); }
         }
     }
 

@@ -1851,13 +1851,15 @@ internal sealed class SearchForm : Form
         });
     }
 
-    // Nothing in flight that an exit would cut short. A connected VPN is fine (the clients run on their own).
+    // Nothing in flight that an exit would cut short, and no client window parked off-screen by us.
+    // A connected VPN is fine (the clients run on their own).
     bool UpdateBusy
     {
         get
         {
             return busy || list.IsConnecting || list.IsDisconnecting || connectingProfileId != null || disconnectStarted != DateTime.MinValue ||
-                   fortiConnectingId != null || fortiDisconnectingId != null || Exts.Any(x => x.InFlight) || updateChecking;
+                   fortiConnectingId != null || fortiDisconnectingId != null || Exts.Any(x => x.InFlight) || updateChecking ||
+                   QuietWindow.IsParked || WatchGuardGui.AnyParked; // a client window is still off-screen
         }
     }
 
@@ -2087,6 +2089,10 @@ internal sealed class SearchForm : Form
         if (foregroundHook != IntPtr.Zero) { NativeMethods.UnhookWinEvent(foregroundHook); foregroundHook = IntPtr.Zero; }
         if (activationWait != null) { activationWait.Unregister(null); activationWait = null; }
         if (tray != null) { tray.Visible = false; tray.Dispose(); tray = null; }
+        // Client windows parked off-screen (FortiClient, WatchGuard) go back on screen: their watchers
+        // run on pool threads that end with this process, so nothing else would move them back.
+        try { QuietWindow.Reveal(false); } catch { }
+        try { WatchGuardGui.RevealAllParked(); } catch { }
     }
 
     void ExitApp() { exiting = true; Close(); }
