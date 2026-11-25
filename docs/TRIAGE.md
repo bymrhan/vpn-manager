@@ -80,12 +80,20 @@ folder by other means if GitHub is not an option; the `app-*.log` files are **no
 ## Issues created by the app (embedded token)
 
 - Release builds with a token (docs\RELEASING.md) create the issue themselves: author = the token's
-  owner account, label `hata`, same title and body as the browser flow. With `CrashPrompt=auto`
-  the user was not asked at that moment; check the privacy of the body first (step 2 above).
+  account (recommended: the bot account), same title and body as the browser flow. With
+  `CrashPrompt=auto` the user confirmed a one-time warning but was not asked for this report;
+  check the privacy of the body first (step 2 above).
+- **Unlabelled reports.** A bot account cannot set labels and the app's 422 retry drops the label,
+  so such issues lack `hata` and `gh issue list -l hata` misses them. Find and label them:
+  `gh issue list --state all --search "[hata] in:title -label:hata"` (or `--author <bot>`), then
+  `gh issue edit <n> --add-label hata`. Until labelled, the app's duplicate check does not see them
+  (it only matches issues labelled `hata`), so the same fingerprint can open a second issue.
 - An open, unlocked issue with the same fingerprint gets a comment `Tekrar: sürüm X, Windows Y`
   instead of a new issue (at most once per fingerprint and install per 24 h). The number of such
   comments is a rough count of affected installs.
 - A closed or locked duplicate gets a new issue whose body starts with `Önceki kayıt: #n`: treat it
   as a regression of #n (reopen #n or keep the new one and link them).
-- Spam (an extracted token used outside the app): revoke the token, then
-  `gh issue list -l hata --search "created:>2026-11-25"`, close / lock / delete; see RELEASING.md.
+- Spam (an extracted token used outside the app): revoke the token and block the bot account, then
+  list what it created since the abuse started (`gh issue list --author <bot> --state all --search
+  "created:>YYYY-MM-DD"` with the date of the first spam issue) and close / lock / delete; see
+  RELEASING.md.
