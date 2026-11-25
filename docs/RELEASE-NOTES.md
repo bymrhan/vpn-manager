@@ -3,6 +3,10 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.2
+
+- **Kurulum yardımcısı:** OpenVPN Connect ve FortiClient'ın yanında Sophos Connect ile WatchGuard SSL VPN de taranır ve listelenir (bağlantı / sunucu sayısıyla); FortiClient, Sophos ve WatchGuard profillerini gösterme anahtarları eklendi (kurulu olmayan istemci için soluk). Tema seçimi sihirbazda anında uygulanır ve ana pencereye taşınır.
+
 ## 2.1.1
 
 - **Uygulama nerede görünsün:** Ayarlar > Genel'de üç seçenek: *Tepsi* (varsayılan), *Tepsi + düğme* (pencere açıkken görev çubuğunda da düğme), *Görev çubuğu* (tepsi simgesi yok; düğme uygulama açık olduğu sürece durur, gizlemek pencereyi düğmeye küçültür, pencereyi kapatmak uygulamadan çıkar). Kaydedince yeniden başlatmadan uygulanır.
