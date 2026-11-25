@@ -522,6 +522,7 @@ internal sealed class SearchForm : Form
     readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
     PointF[] shimmerPath; Rectangle shimmerArea, lastShimmer;
     string connectingProfileId; DateTime connectStarted, disconnectStarted = DateTime.MinValue, lastShowScan; int fadeStep;
+    bool ovpnWindowBack; // the OpenVPN window minimized for the current command was already brought back (or need not be)
     readonly ContextMenuStrip mainMenu = new ContextMenuStrip(), trayMenu = new ContextMenuStrip(), rowMenu = new ContextMenuStrip();
     readonly NativeMethods.WinEventProc hookProc; // kept as a field so the GC never collects the callback
     NotifyIcon tray;
@@ -1502,8 +1503,10 @@ internal sealed class SearchForm : Form
         var selected = list.SelectedProfile;
         ApplyFilter(selected != null ? selected.Id : null);
         if (id == null) list.EndDisconnect();
+        if (id == null && disconnectStarted != DateTime.MinValue) QuietWindow.ForgetMinimized(); // disconnected: OpenVPN stays minimized
         if (id != null && id == connectingProfileId)
         {
+            QuietWindow.ForgetMinimized(); // connected without the user: OpenVPN stays minimized
             // the profile we asked for is up: play the success animation
             connectingProfileId = null;
             list.ConnectSucceeded(id);
@@ -1522,7 +1525,7 @@ internal sealed class SearchForm : Form
     {
         string err;
         var id = connectedId;
-        if (ConnectionControl.Disconnect(out err)) { SetStatus("Bağlantı kesiliyor…"); if (id != null) list.BeginDisconnect(id); disconnectStarted = DateTime.UtcNow; }
+        if (ConnectionControl.Disconnect(out err)) { SetStatus("Bağlantı kesiliyor…"); if (id != null) list.BeginDisconnect(id); disconnectStarted = DateTime.UtcNow; ovpnWindowBack = false; }
         else GlassDialog.Show(this, err ?? "Bağlantı kesilemedi.", "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -2285,13 +2288,27 @@ internal sealed class SearchForm : Form
             using (Process.Start(new ProcessStartInfo { FileName = openVpnPath, Arguments = arg, UseShellExecute = true })) { }
         }
         catch (Exception ex) { list.ConnectFailed(p.Id); GlassDialog.Show(this, "Bağlantı başlatılamadı:\n" + ex.Message, Text); return; }
-        connectingProfileId = p.Id; connectStarted = DateTime.UtcNow;
+        connectingProfileId = p.Id; connectStarted = DateTime.UtcNow; ovpnWindowBack = false;
         list.BeginConnect(p.Id);
         SetStatus("\"" + p.Name + "\" bağlanıyor…");
     }
 
     void CheckConnectTimeout()
     {
+        // OpenVPN Connect is kept minimized while the command progresses. Still not there after a few
+        // seconds: it probably waits for the user (password, static / MFA challenge), so the window
+        // we minimized comes back to the front. A window the user minimized is never touched.
+        if (!ovpnWindowBack)
+        {
+            var now = DateTime.UtcNow;
+            var due = connectingProfileId != null ? QuietWindow.ShouldRestoreOpenVpnWindow((now - connectStarted).TotalSeconds, false)
+                    : disconnectStarted != DateTime.MinValue && QuietWindow.ShouldRestoreOpenVpnWindow((now - disconnectStarted).TotalSeconds, connectedId == null);
+            if (due)
+            {
+                ovpnWindowBack = true;
+                if (QuietWindow.RestoreMinimized()) SetStatus("OpenVPN Connect sizden bilgi bekliyor olabilir — penceresine bakın");
+            }
+        }
         if (connectingProfileId != null && (DateTime.UtcNow - connectStarted).TotalSeconds > ConnectTimeoutSeconds)
         {
             list.ConnectFailed(connectingProfileId); connectingProfileId = null;

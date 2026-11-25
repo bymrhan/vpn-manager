@@ -55,6 +55,7 @@ static class Tests
         Run("Ayarlar: güncelleme", UpdateSettings);
         Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
         Run("Güncelleme: zip slip", UpdateZipSlip);
+        Run("OpenVPN penceresi geri getirme", OpenVpnWindowRestore);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -348,6 +349,17 @@ static class Tests
         VpnProviders.ApplyLastConnected(new[] { a, b, s, f, o }, starts);
         Check(a.LastConnected == 100 && s.LastConnected == 200 && b.LastConnected == 0, "Sophos / WatchGuard son bağlanma geçmişten");
         Check(f.LastConnected == 0 && o.LastConnected == 5, "Forti ve OpenVPN'e dokunulmaz");
+    }
+
+    static void OpenVpnWindowRestore()
+    {
+        var t = QuietWindow.OpenVpnRestoreAfterSeconds;
+        Check(t >= 8 && t <= 10, "bekleme süresi 8-10 sn");
+        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(t - 0.5, false), "kısa süre: pencere küçük kalır");
+        Check(QuietWindow.ShouldRestoreOpenVpnWindow(t, false) && QuietWindow.ShouldRestoreOpenVpnWindow(44, false), "süre doldu, bağlanmadı: pencere geri gelir (parola / MFA)");
+        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(t + 5, true), "bağlandı: pencere küçük kalır");
+        QuietWindow.ForgetMinimized();
+        Check(!QuietWindow.HasMinimized && !QuietWindow.RestoreMinimized(), "küçültülen pencere yoksa hiçbir pencereye dokunulmaz");
     }
 
     static void ReachabilityEndpoints()

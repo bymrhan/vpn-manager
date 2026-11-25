@@ -8,7 +8,9 @@ using System.Threading;
 // =====================================================================
 // Keeps OpenVPN Connect and FortiClient in the background while this app drives them.
 //  - OpenVPN Connect: its window pops up when a connect/disconnect command reaches it; windows
-//    that were not open before the command are minimized again without taking focus.
+//    that were not open before the command are minimized again without taking focus. When the
+//    connection is not up after OpenVpnRestoreAfterSeconds (OpenVPN probably asks the user for a
+//    password or a challenge), the app calls RestoreMinimized: exactly those windows come back.
 //  - FortiClient: its form has to be on screen (rendered) for the accessibility calls, so the
 //    window is parked far off-screen instead. Reveal() moves it back when the user must act
 //    (password, token, an error) or when the connection work is over.
@@ -44,15 +46,21 @@ internal static class QuietWindow
     static readonly object gate = new object();
     static IntPtr parked = IntPtr.Zero;
     static RECT parkedHome;
+    static readonly HashSet<IntPtr> minimizedByUs = new HashSet<IntPtr>();
+    static int quietGeneration;
 
     // ---------- OpenVPN Connect ----------
 
     // Call right before sending a connect/disconnect command. For up to `seconds`, windows of the
     // process that were not open on screen before are minimized as soon as they show up.
+    // Windows are remembered (MinimizedByUs) so RestoreMinimized can bring back exactly those when
+    // the command needs the user (password, static / MFA challenge): never one the user minimized.
     public static void KeepProcessInBackground(string processName, int seconds)
     {
         var before = new HashSet<IntPtr>(TopWindows(processName, true));
         var prev = GetForegroundWindow();
+        int gen;
+        lock (gate) { gen = ++quietGeneration; minimizedByUs.Clear(); }
         ThreadPool.QueueUserWorkItem(delegate
         {
             try
@@ -64,6 +72,11 @@ internal static class QuietWindow
                     foreach (var h in TopWindows(processName, true))
                     {
                         if (before.Contains(h)) continue;
+                        lock (gate)
+                        {
+                            if (gen != quietGeneration) return; // RestoreMinimized / a newer command took over
+                            minimizedByUs.Add(h);
+                        }
                         ShowWindow(h, SW_SHOWMINNOACTIVE);
                         if (prev != IntPtr.Zero && IsWindow(prev) && GetForegroundWindow() != prev) SetForegroundWindow(prev);
                         if (graceEnd == DateTime.MaxValue) graceEnd = DateTime.UtcNow.AddSeconds(2);
@@ -73,6 +86,46 @@ internal static class QuietWindow
             }
             catch { }
         });
+    }
+
+    // After this long without the connection coming up, OpenVPN Connect is most likely waiting for
+    // the user (no saved password, static / MFA challenge): its window comes back to the front.
+    public const double OpenVpnRestoreAfterSeconds = 9;
+
+    // Pure decision: bring back the OpenVPN window we minimized? goalReached: connected (connect)
+    // or disconnected (disconnect).
+    public static bool ShouldRestoreOpenVpnWindow(double elapsedSeconds, bool goalReached)
+    {
+        return !goalReached && elapsedSeconds >= OpenVpnRestoreAfterSeconds;
+    }
+
+    public static bool HasMinimized { get { lock (gate) return minimizedByUs.Count > 0; } }
+
+    // Restores (SW_RESTORE + foreground) the windows KeepProcessInBackground minimized and that are
+    // still minimized; stops a running KeepProcessInBackground. Returns true when one came back.
+    public static bool RestoreMinimized()
+    {
+        List<IntPtr> list;
+        lock (gate) { quietGeneration++; list = new List<IntPtr>(minimizedByUs); minimizedByUs.Clear(); }
+        var any = false;
+        foreach (var h in list)
+        {
+            try
+            {
+                if (!IsWindow(h) || !IsIconic(h)) continue; // closed, or already back on screen
+                ShowWindow(h, SW_RESTORE);
+                SetForegroundWindow(h);
+                any = true;
+            }
+            catch { }
+        }
+        return any;
+    }
+
+    // The command worked: the minimized windows stay as they are and are no longer ours to restore.
+    public static void ForgetMinimized()
+    {
+        lock (gate) { quietGeneration++; minimizedByUs.Clear(); }
     }
 
     // ---------- FortiClient ----------
