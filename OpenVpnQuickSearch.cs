@@ -588,6 +588,13 @@ internal sealed class SearchForm : Form
         DragEnter += OnDragEnter; list.DragEnter += OnDragEnter;
         DragDrop += OnDragDrop; list.DragDrop += OnDragDrop;
 
+        // diagnostics: names the report sanitizer must remove, the crash prompt setting, and the
+        // offer of last session's crash report the first time the panel is shown
+        CrashReporter.Profiles = () => profiles;
+        CrashReporter.PromptMode = () => settings.CrashPrompt;
+        CrashReporter.NeverAsk = delegate { UiInvoke(delegate { settings.CrashPrompt = "never"; SaveSettings(); }); };
+        Shown += delegate { BeginInvoke(new Action(delegate { CrashReporter.OfferPendingCrash(this); })); };
+
         ReloadProfiles();
         if (Demo.On) DemoConnect(Demo.ConnectedName); else monitor.Poll();
         if (Demo.On && Demo.Query != null) Input.Text = Demo.Query;
@@ -1020,6 +1027,7 @@ internal sealed class SearchForm : Form
         if (Demo.On) { DemoConnect(null); return; } // demo rows: never touch the real FortiClient
         if (p == null || fortiDisconnectingId != null) return;
         fortiDisconnectingId = p.Id; fortiDisconnectStart = DateTime.UtcNow;
+        AppLog.Info("forti", "disconnect requested");
         list.BeginDisconnect(p.Id);
         SetStatus("FortiClient \"" + p.Name + "\" kesiliyor…");
         ThreadPool.QueueUserWorkItem(delegate
@@ -1038,9 +1046,11 @@ internal sealed class SearchForm : Form
                     Thread.Sleep(500);
                 }
             }
-            catch (Exception ex) { err = ex.Message; }
+            catch (Exception ex) { err = ex.Message; CrashReporter.HandledError("forti", "disconnect", ex); }
             UiInvoke(delegate
             {
+                if (outcome == FortiGui.Outcome.Pressed) AppLog.Info("forti", "disconnect outcome: pressed");
+                else AppLog.Warn("forti", "disconnect outcome: " + (err != null ? "failed" : "button not found"));
                 if (outcome == FortiGui.Outcome.Pressed) { ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(4000); FortiStore.CloseParkedGui(); }); return; }
                 QuietWindow.Reveal(true);
                 fortiDisconnectingId = null; list.EndDisconnect();
@@ -1057,11 +1067,14 @@ internal sealed class SearchForm : Form
         // saved in Windows Credential Manager, or ask for it once.
         FortiCredential cred = null;
         var tunnel = FortiStore.TunnelName(p);
-        if (p.Id.StartsWith(FortiStore.IdPrefixSsl, StringComparison.Ordinal) && !FortiCredentialStore.FortiKeepsPassword(tunnel))
+        var ssl = p.Id.StartsWith(FortiStore.IdPrefixSsl, StringComparison.Ordinal);
+        if (ssl && !FortiCredentialStore.FortiKeepsPassword(tunnel))
         {
             try { cred = FortiCredentialStore.Load(tunnel); } catch { cred = null; }
             if (cred == null) cred = AskFortiCredential(p, null);
         }
+        if (cred != null) CrashReporter.RememberUser(cred.Username);
+        AppLog.Info("forti", "connect requested (" + (ssl ? "ssl" : "ipsec") + (cred != null ? ", saved credential" : "") + ")");
         fortiOpening = true;
         fortiConnectingId = p.Id; fortiConnectStart = DateTime.UtcNow;
         list.BeginConnect(p.Id);
@@ -1070,13 +1083,15 @@ internal sealed class SearchForm : Form
         ThreadPool.QueueUserWorkItem(delegate
         {
             string err;
-            try { err = FortiStore.Open(p, true); } catch (Exception ex) { err = ex.Message; }
+            try { err = FortiStore.Open(p, true); } catch (Exception ex) { err = ex.Message; CrashReporter.HandledError("forti", "open tunnel", ex); }
             var outcome = FortiGui.Outcome.NotReady;
             if (err == null) outcome = PressFortiConnect(tunnel, cred);
             if (cred != null) cred.Password = "";
             UiInvoke(delegate
             {
                 fortiOpening = false;
+                if (err != null) AppLog.Warn("forti", "connect outcome: open failed");
+                else AppLog.Info("forti", "connect outcome: " + outcome);
                 if (outcome != FortiGui.Outcome.Pressed) QuietWindow.Reveal(true); // the user has to act in FortiClient
                 if (err != null) { if (fortiConnectingId == p.Id) fortiConnectingId = null; list.ConnectFailed(p.Id); SetStatus(err); return; }
                 if (outcome == FortiGui.Outcome.Pressed) { fortiAuth = true; SetStatus("FortiClient \"" + p.Name + "\" bağlanıyor…"); }
@@ -1087,15 +1102,9 @@ internal sealed class SearchForm : Form
         });
     }
 
-    static void FortiTrace(string line)
-    {
-        try
-        {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenVpnQuickSearch");
-            File.AppendAllText(Path.Combine(dir, "forti.log"), DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + line + Environment.NewLine);
-        }
-        catch { }
-    }
+    // FortiClient automation steps (formerly forti.log): now lines of the app log with the "forti"
+    // source tag. Outcome only: never the tunnel name, the username or the password.
+    static void FortiTrace(string line) { AppLog.Info("forti", line); }
 
     // Runs on a worker thread after FortiStore.Open(): waits up to 20 s for FortiClient's form to
     // show the selected tunnel, then presses Connect when the password is saved. Any other outcome
@@ -1111,7 +1120,7 @@ internal sealed class SearchForm : Form
             catch (Exception ex) { outcome = FortiGui.Outcome.NotReady; detail = ex.GetType().Name; }
             if (outcome == FortiGui.Outcome.Pressed || outcome == FortiGui.Outcome.NeedsPassword || outcome == FortiGui.Outcome.FillFailed)
             {
-                FortiTrace(tunnel + ": " + outcome + " (" + detail + ")"); // never contains the password
+                FortiTrace("connect form: " + outcome);
                 return outcome;
             }
             Thread.Sleep(500);
@@ -1171,7 +1180,8 @@ internal sealed class SearchForm : Form
         ThreadPool.QueueUserWorkItem(delegate
         {
             string name = null;
-            try { name = FortiStore.ConnectedTunnel(); } catch { }
+            try { name = FortiStore.ConnectedTunnel(); }
+            catch (Exception ex) { AppLog.Limited(LogLevel.Warn, "poll:forti", "forti", "poll failed: " + ex.GetType().Name, null); }
             UiInvoke(delegate { fortiPolling = false; OnFortiState(name); });
         });
     }
@@ -1187,6 +1197,7 @@ internal sealed class SearchForm : Form
         if (fortiConnectingId != null && id == null && (DateTime.UtcNow - fortiConnectStart).TotalSeconds > 25 && QuietWindow.IsParked) QuietWindow.Reveal(true); // password / token prompt or an error
         if (fortiConnectingId != null && (DateTime.UtcNow - fortiConnectStart).TotalSeconds > 120)
         {
+            AppLog.Warn("forti", "connect outcome: not confirmed in 120 s");
             list.CancelConnect(fortiConnectingId); fortiConnectingId = null;
         }
         if (fortiDisconnectingId != null && (id == null || (DateTime.UtcNow - fortiDisconnectStart).TotalSeconds > 60))
@@ -1199,6 +1210,7 @@ internal sealed class SearchForm : Form
             fortiDisconnectingId = null; list.EndDisconnect();
         }
         if (id == fortiConnectedId) return;
+        AppLog.Info("forti", id != null ? "state: connected" + (id == fortiConnectingId ? " (requested)" : "") : "state: disconnected");
         var now = DateTime.UtcNow;
         if (fortiConnectedId != null) RecordFortiSession(fortiConnectedId, fortiSince, now);
         fortiConnectedId = id;
@@ -1236,6 +1248,7 @@ internal sealed class SearchForm : Form
         public bool Polling, Busy, PollSoon;
         public readonly Dictionary<string, long> Seen = new Dictionary<string, long>(StringComparer.Ordinal); // id -> start (Unix ms) since app start
         public string Label { get { return VpnProviders.Label(Kind); } }
+        public string Log { get { return Kind == VpnKind.Sophos ? "sophos" : "watchguard"; } } // app log source tag
         public bool InFlight { get { return ConnectingId != null || DisconnectingId != null || Busy; } }
     }
 
@@ -1293,6 +1306,8 @@ internal sealed class SearchForm : Form
         FortiCredential cred = null;
         try { cred = FortiCredentialStore.Load(VpnProviders.CredentialKey(p), prefix); } catch { cred = null; }
         if (cred == null) cred = AskExtCredential(x, p, string.IsNullOrEmpty(p.Username) ? null : new FortiCredential { Username = p.Username, Password = "" });
+        if (cred != null) CrashReporter.RememberUser(cred.Username);
+        AppLog.Info(x.Log, "connect requested" + (cred != null ? " (with credential)" : ""));
         x.Busy = true; x.ConnectingId = p.Id; x.ConnectStart = DateTime.UtcNow;
         list.BeginConnect(p.Id);
         SetStatus(x.Label + " \"" + p.Name + "\" bağlanıyor…");
@@ -1309,7 +1324,7 @@ internal sealed class SearchForm : Form
                 }
                 else outcome = WatchGuardStore.Connect(p, cred, out msg); // parks its own windows off-screen
             }
-            catch (Exception ex) { msg = ex.Message; outcome = WatchGuardStore.ConnectOutcome.Failed; }
+            catch (Exception ex) { msg = ex.Message; outcome = WatchGuardStore.ConnectOutcome.Failed; CrashReporter.HandledError(x.Log, "connect", ex); }
             finally { if (cred != null) cred.Password = ""; }
             UiInvoke(delegate { OnExtConnectResult(x, p, outcome, msg); });
         });
@@ -1318,6 +1333,8 @@ internal sealed class SearchForm : Form
     void OnExtConnectResult(ExtVpn x, VpnProfile p, WatchGuardStore.ConnectOutcome outcome, string msg)
     {
         x.Busy = false; x.PollSoon = true; x.CommandDone = DateTime.UtcNow;
+        if (outcome == WatchGuardStore.ConnectOutcome.Failed) AppLog.Warn(x.Log, "connect outcome: Failed");
+        else AppLog.Info(x.Log, "connect outcome: " + outcome);
         if (outcome == WatchGuardStore.ConnectOutcome.Failed)
         {
             if (x.ConnectingId == p.Id) x.ConnectingId = null;
@@ -1337,6 +1354,7 @@ internal sealed class SearchForm : Form
         if (Demo.On) { DemoConnect(null); return; }
         if (p == null || x.DisconnectingId != null) return;
         x.DisconnectingId = p.Id; x.DisconnectStart = DateTime.UtcNow;
+        AppLog.Info(x.Log, "disconnect requested");
         list.BeginDisconnect(p.Id);
         SetStatus(x.Label + " \"" + p.Name + "\" kesiliyor…");
         var name = SophosStore.ConnectionName(p);
@@ -1348,9 +1366,11 @@ internal sealed class SearchForm : Form
                 if (x.Kind == VpnKind.Sophos) err = SophosStore.Disconnect(name);
                 else err = WatchGuardStore.Disconnect();
             }
-            catch (Exception ex) { err = ex.Message; }
+            catch (Exception ex) { err = ex.Message; CrashReporter.HandledError(x.Log, "disconnect", ex); }
             UiInvoke(delegate
             {
+                if (err == null) AppLog.Info(x.Log, "disconnect outcome: command ok");
+                else AppLog.Warn(x.Log, "disconnect outcome: failed");
                 x.PollSoon = true; x.CommandDone = DateTime.UtcNow; // a poll started before this must not mark the row connected again
                 if (err == null)
                 {
@@ -1419,7 +1439,8 @@ internal sealed class SearchForm : Form
         {
             string key = null; var ok = false;
             try { ok = x.Kind == VpnKind.Sophos ? SophosStore.TryConnectedName(out key) : WatchGuardStore.TryConnectedServer(out key); }
-            catch { ok = false; key = null; }
+            catch (Exception ex) { ok = false; key = null; AppLog.Limited(LogLevel.Warn, "poll-ex:" + x.Log, x.Log, "poll failed: " + ex.GetType().Name, null); }
+            if (!ok) AppLog.Limited(LogLevel.Warn, "poll:" + x.Log, x.Log, "poll returned no state", null);
             UiInvoke(delegate { x.Polling = false; x.LastPoll = DateTime.UtcNow; OnExtPoll(x, ok, key, started); });
         });
     }
@@ -1437,6 +1458,7 @@ internal sealed class SearchForm : Form
         var now = DateTime.UtcNow;
         if (x.ConnectingId != null && x.ConnectingId != x.ConnectedId && !x.Busy && (now - x.ConnectStart).TotalSeconds > VpnProviders.ConnectGiveUpSeconds)
         {
+            AppLog.Warn(x.Log, "connect outcome: not confirmed in time");
             list.CancelConnect(x.ConnectingId); x.ConnectingId = null;
             SetStatus(x.Label + " bağlantısı doğrulanamadı — " + x.Label + " penceresini kontrol edin");
         }
@@ -1453,6 +1475,7 @@ internal sealed class SearchForm : Form
         var now = DateTime.UtcNow;
         if (x.ConnectingId != null && id != x.ConnectingId && !x.Busy && (now - x.ConnectStart).TotalSeconds > VpnProviders.ConnectGiveUpSeconds)
         {
+            AppLog.Warn(x.Log, "connect outcome: not confirmed in time");
             list.CancelConnect(x.ConnectingId); x.ConnectingId = null;
             SetStatus(x.Label + " bağlantısı doğrulanamadı — " + x.Label + " penceresini kontrol edin");
         }
@@ -1466,6 +1489,7 @@ internal sealed class SearchForm : Form
             x.DisconnectingId = null; list.EndDisconnect();
         }
         if (id == x.ConnectedId) { UpdateIsland(); return; }
+        AppLog.Info(x.Log, id != null ? "state: connected" + (id == x.ConnectingId ? " (requested)" : "") : "state: disconnected");
         if (x.ConnectedId != null) RecordExtSession(x.ConnectedId, x.Since, now);
         x.ConnectedId = id;
         if (id != null)
@@ -1504,7 +1528,8 @@ internal sealed class SearchForm : Form
         ThreadPool.QueueUserWorkItem(delegate
         {
             var next = new List<KeyValuePair<string, string>>();
-            try { foreach (var p in SophosStore.Load()) next.Add(new KeyValuePair<string, string>(SophosStore.ConnectionName(p), p.Host)); } catch { }
+            try { foreach (var p in SophosStore.Load()) next.Add(new KeyValuePair<string, string>(SophosStore.ConnectionName(p), p.Host)); }
+            catch (Exception ex) { AppLog.Limited(LogLevel.Warn, "list:sophos", "sophos", "connection list failed: " + ex.GetType().Name, null); }
             UiInvoke(delegate
             {
                 sophosLoading = false; sophosLoadedUtc = DateTime.UtcNow;
@@ -1522,6 +1547,7 @@ internal sealed class SearchForm : Form
         var c = monitor.Current;
         var id = c != null && c.Connected ? c.ProfileId : null;
         if (id == connectedId) return;
+        AppLog.Info("openvpn", id != null ? "state: connected" + (id == connectingProfileId ? " (requested)" : "") : "state: disconnected");
         connectedId = id;
         var selected = list.SelectedProfile;
         ApplyFilter(selected != null ? selected.Id : null);
@@ -1548,8 +1574,8 @@ internal sealed class SearchForm : Form
     {
         string err;
         var id = connectedId;
-        if (ConnectionControl.Disconnect(out err)) { SetStatus("Bağlantı kesiliyor…"); if (id != null) list.BeginDisconnect(id); disconnectStarted = DateTime.UtcNow; ovpnWindowBack = false; }
-        else GlassDialog.Show(this, err ?? "Bağlantı kesilemedi.", "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        if (ConnectionControl.Disconnect(out err)) { AppLog.Info("openvpn", "disconnect requested"); SetStatus("Bağlantı kesiliyor…"); if (id != null) list.BeginDisconnect(id); disconnectStarted = DateTime.UtcNow; ovpnWindowBack = false; }
+        else { AppLog.Warn("openvpn", "disconnect request failed"); GlassDialog.Show(this, err ?? "Bağlantı kesilemedi.", "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
     }
 
     // ---------- Backup / restore / import ----------
@@ -1790,6 +1816,7 @@ internal sealed class SearchForm : Form
         if (Demo.On) { ReportUpdate("Demo modunda güncelleme denetlenmez"); return; }
         if (updateChecking) return;
         updateChecking = true;
+        AppLog.Info("update", "check started (" + (manual ? "manual" : "scheduled") + ")");
         ThreadPool.QueueUserWorkItem(delegate
         {
             string err; var r = UpdateClient.FetchLatest(out err);
@@ -1808,6 +1835,7 @@ internal sealed class SearchForm : Form
         updateChecking = false; updateCheckedThisRun = true;
         if (r == null)
         {
+            AppLog.Warn("update", "check failed: " + (err ?? "unknown"));
             if (!manual) { updateFailUtc = DateTime.UtcNow; return; }   // silent; retried at the next due time
             ReportUpdate("Denetlenemedi: " + (err ?? "bilinmeyen hata"));
             SetStatus("Güncelleme denetlenemedi");
@@ -1818,10 +1846,12 @@ internal sealed class SearchForm : Form
         var current = UpdateLogic.CurrentVersion;
         if (!UpdateLogic.ShouldOffer(r, current, settings.SkippedVersion, manual))
         {
+            AppLog.Info("update", "check: up to date (current " + current + ", latest " + r.Version + ")");
             if (manual) { ReportUpdate("Güncel (" + current + ")"); SetStatus("Uygulama güncel"); }
             return;
         }
         updateRelease = r;
+        AppLog.Info("update", "check: version " + r.Version + " available (mode " + settings.UpdateMode + ")");
         if (openSettings != null) openSettings.ReleaseNotesUrl = r.HtmlUrl;
         if (manual) ReportUpdate("Sürüm " + r.Version + " hazır");
         // A version whose install failed in the last 24 h (marker left by kur.ps1) is not installed automatically again.
@@ -1861,6 +1891,8 @@ internal sealed class SearchForm : Form
             UiInvoke(delegate
             {
                 updateDownloading = false;
+                if (pkg == null) AppLog.Warn("update", "download / verification failed: " + err);
+                else AppLog.Info("update", "package " + r.Version + " downloaded and verified");
                 if (pkg == null)
                 {
                     updateBadVersion = r.Version;
@@ -1923,10 +1955,12 @@ internal sealed class SearchForm : Form
         {
             string err = null; var ok = false;
             try { ok = UpdateClient.StartInstall(pkg, UpdateLogic.InstallDir, version, pid, background, out err); }
-            catch (Exception ex) { ok = false; err = ex.Message; }
+            catch (Exception ex) { ok = false; err = ex.Message; CrashReporter.HandledError("update", "start install", ex); }
             UiInvoke(delegate
             {
                 updateInstalling = false;
+                if (ok) { AppLog.Info("update", "installer started for " + (version ?? "?") + ", exiting"); AppLog.Flush(); }
+                else AppLog.Warn("update", "install start failed: " + err);
                 if (!ok)
                 {
                     updatePackage = null; updateBadVersion = version;
@@ -1950,6 +1984,8 @@ internal sealed class SearchForm : Form
             f.BackupNow = delegate { BackupNow(false); };
             f.OpenBackupFolder = OpenBackupFolder;
             f.CheckUpdates = delegate { CheckForUpdates(true); };
+            f.OpenLogFolder = CrashReporter.OpenLogFolder;
+            f.ReportLastError = CrashReporter.ReportLatest;
             if (updateRelease != null) f.ReleaseNotesUrl = updateRelease.HtmlUrl;
             f.Icon = Icon;
             openSettings = f;
@@ -1963,6 +1999,12 @@ internal sealed class SearchForm : Form
             settings = r;
             SaveSettings();
             if (r.AutoStart != AutoStart.IsEnabled()) try { AutoStart.SetEnabled(r.AutoStart); } catch (Exception ex) { SetStatus("Başlangıç ayarı değiştirilemedi: " + ex.Message); }
+            if (r.LogEnabled != old.LogEnabled)
+            {
+                if (!r.LogEnabled) AppLog.Info("app", "logging turned off by the user");
+                AppLog.Enabled = r.LogEnabled;
+                if (r.LogEnabled) AppLog.Info("app", "logging turned on by the user");
+            }
             if (r.Hotkey != old.Hotkey) { RegisterAppHotkey(true); search.Hotkey = r.Hotkey; }
             ApplyTheme();
             if (r.DockSide != old.DockSide) { autoSide = 0; lastRect = new NativeMethods.RECT(); docked = false; Sync(true); }
@@ -2323,7 +2365,7 @@ internal sealed class SearchForm : Form
         if (ext != null) { ConnectExt(ext, p); return; }
         if (p.Id == connectedId) { list.ConnectSucceeded(p.Id); SetStatus("\"" + p.Name + "\" zaten bağlı"); return; }
         if (p.Id == connectingProfileId) return;
-        if (!File.Exists(openVpnPath)) { list.ConnectFailed(p.Id); GlassDialog.Show(this, "OpenVPN Connect bulunamadı.", Text); return; }
+        if (!File.Exists(openVpnPath)) { AppLog.Warn("openvpn", "connect: OpenVPN Connect not found"); list.ConnectFailed(p.Id); GlassDialog.Show(this, "OpenVPN Connect bulunamadı.", Text); return; }
         try
         {
             var arg = "--connect-shortcut=" + p.Id;
@@ -2331,7 +2373,8 @@ internal sealed class SearchForm : Form
             QuietWindow.KeepProcessInBackground("OpenVPNConnect", 12);
             using (Process.Start(new ProcessStartInfo { FileName = openVpnPath, Arguments = arg, UseShellExecute = true })) { }
         }
-        catch (Exception ex) { list.ConnectFailed(p.Id); GlassDialog.Show(this, "Bağlantı başlatılamadı:\n" + ex.Message, Text); return; }
+        catch (Exception ex) { CrashReporter.HandledError("openvpn", "connect start", ex); list.ConnectFailed(p.Id); GlassDialog.Show(this, "Bağlantı başlatılamadı:\n" + ex.Message, Text); return; }
+        AppLog.Info("openvpn", "connect requested");
         connectingProfileId = p.Id; connectStarted = DateTime.UtcNow; ovpnWindowBack = false;
         list.BeginConnect(p.Id);
         SetStatus("\"" + p.Name + "\" bağlanıyor…");
@@ -2355,6 +2398,7 @@ internal sealed class SearchForm : Form
         }
         if (connectingProfileId != null && (DateTime.UtcNow - connectStarted).TotalSeconds > ConnectTimeoutSeconds)
         {
+            AppLog.Warn("openvpn", "connect outcome: not confirmed in " + ConnectTimeoutSeconds + " s");
             list.ConnectFailed(connectingProfileId); connectingProfileId = null;
             SetStatus("Bağlantı doğrulanamadı — OpenVPN Connect penceresini kontrol edin");
         }
@@ -2596,8 +2640,15 @@ internal static class Program
                     }
                     return 0;
                 }
+                // Diagnostics (README "Hata raporları ve günlükler"): the app log and crash capture.
+                // Demo mode writes nothing (no log folder) and never opens the browser.
+                var logDir = Demo.On ? null : CrashReporter.DefaultLogDir;
+                CrashReporter.Init(logDir);
+                AppLog.Init(logDir, SettingsStore.Load().LogEnabled);
+                CrashReporter.Install();   // before any control exists (SetUnhandledExceptionMode)
                 try { NativeMethods.SetProcessDPIAware(); } catch { }
                 using (var g = Graphics.FromHwnd(IntPtr.Zero)) Ui.Scale = devScale > 0 ? devScale : Math.Max(1F, g.DpiX / 96F);
+                CrashReporter.LogStartAsync(background);
                 using (var activation = new EventWaitHandle(false, EventResetMode.AutoReset, EventName))
                 {
                     Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -2609,15 +2660,19 @@ internal static class Program
                         using (var wizard = new SetupWizard()) Application.Run(wizard);
                     }
                     var settings = SettingsStore.Load();
+                    AppLog.Enabled = settings.LogEnabled;
                     Themes.Apply(settings.Theme); // before any control is created, so every control picks up the palette
                     Application.Run(new SearchForm(background, activation, settings));
                 }
+                AppLog.Info("app", "exit");
+                AppLog.Flush();
                 GC.KeepAlive(mutex);
             }
             return 0;
         }
         catch (Exception ex)
         {
+            CrashReporter.Fatal(ex);
             if (!background) MessageBox.Show(ex.Message, "OpenVPN Hızlı Arama");
             return 1;
         }
