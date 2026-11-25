@@ -147,6 +147,27 @@ internal static class VpnProviders
         return secondsSinceLast >= (busy ? WatchGuardBusyPollSeconds : WatchGuardIdlePollSeconds);
     }
 
+    // A shown connection is only dropped after this many "none" polls in a row (one transient
+    // miss must not end the session in the history and start a new one on the next poll).
+    public const int NoneToDrop = 2;
+
+    public enum PollUse { Apply, Keep }
+
+    // What to do with a status poll. ok: the check itself worked (false = failed / timed out);
+    // key: its result (null = none connected); hadConnected: a row is shown connected;
+    // expectingNone: a disconnect of this provider is in flight; stale: the poll started before the
+    // last connect / disconnect command finished. noneStreak counts consecutive "none" results.
+    // Keep = leave the shown state as it is.
+    public static PollUse UsePoll(bool ok, string key, bool hadConnected, bool expectingNone, bool stale, ref int noneStreak)
+    {
+        if (stale || !ok) return PollUse.Keep;
+        if (key != null || !hadConnected || expectingNone) { noneStreak = 0; return PollUse.Apply; }
+        noneStreak++;
+        if (noneStreak < NoneToDrop) return PollUse.Keep;
+        noneStreak = 0;
+        return PollUse.Apply;
+    }
+
     // Sophos / WatchGuard keep no last-connected time: it comes from the connection history.
     public static void ApplyLastConnected(IEnumerable<VpnProfile> profiles, IDictionary<string, long> lastStartMs)
     {

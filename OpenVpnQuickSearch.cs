@@ -1231,6 +1231,8 @@ internal sealed class SearchForm : Form
         public VpnKind Kind;
         public string ConnectedId, ConnectingId, DisconnectingId;
         public DateTime Since, ConnectStart, DisconnectStart, LastPoll = DateTime.MinValue;
+        public DateTime CommandDone = DateTime.MinValue; // last connect / disconnect command finished (polls started before it are stale)
+        public int NoneStreak;                          // consecutive "none connected" polls while a row is shown connected
         public bool Polling, Busy, PollSoon;
         public readonly Dictionary<string, long> Seen = new Dictionary<string, long>(StringComparer.Ordinal); // id -> start (Unix ms) since app start
         public string Label { get { return VpnProviders.Label(Kind); } }
@@ -1317,7 +1319,7 @@ internal sealed class SearchForm : Form
 
     void OnExtConnectResult(ExtVpn x, VpnProfile p, WatchGuardStore.ConnectOutcome outcome, string msg)
     {
-        x.Busy = false; x.PollSoon = true;
+        x.Busy = false; x.PollSoon = true; x.CommandDone = DateTime.UtcNow;
         if (outcome == WatchGuardStore.ConnectOutcome.Failed)
         {
             if (x.ConnectingId == p.Id) x.ConnectingId = null;
@@ -1351,7 +1353,7 @@ internal sealed class SearchForm : Form
             catch (Exception ex) { err = ex.Message; }
             UiInvoke(delegate
             {
-                x.PollSoon = true;
+                x.PollSoon = true; x.CommandDone = DateTime.UtcNow; // a poll started before this must not mark the row connected again
                 if (err == null)
                 {
                     // sccli disable only succeeds once the connection is down; WatchGuard is confirmed by the next poll
@@ -1413,18 +1415,41 @@ internal sealed class SearchForm : Form
         if (!Visible && x.ConnectedId == null && !x.InFlight) return;
         if (!profiles.Any(p => ExtFor(p) == x)) return;
         if (!VpnProviders.DuePoll(x.Kind, x.InFlight, x.PollSoon, (DateTime.UtcNow - x.LastPoll).TotalSeconds)) return;
-        x.Polling = true; x.PollSoon = false; x.LastPoll = DateTime.UtcNow;
+        var started = DateTime.UtcNow;
+        x.Polling = true; x.PollSoon = false; x.LastPoll = started;
         ThreadPool.QueueUserWorkItem(delegate
         {
-            string key = null;
-            try { key = x.Kind == VpnKind.Sophos ? SophosStore.ConnectedName() : WatchGuardStore.ConnectedServer(); } catch { }
-            UiInvoke(delegate { x.Polling = false; x.LastPoll = DateTime.UtcNow; OnExtState(x, key); });
+            string key = null; var ok = false;
+            try { ok = x.Kind == VpnKind.Sophos ? SophosStore.TryConnectedName(out key) : WatchGuardStore.TryConnectedServer(out key); }
+            catch { ok = false; key = null; }
+            UiInvoke(delegate { x.Polling = false; x.LastPoll = DateTime.UtcNow; OnExtPoll(x, ok, key, started); });
         });
+    }
+
+    // A failed poll, a stale one (started before the last command finished) and a single "none"
+    // while a row is shown connected keep the shown state (VpnProviders.UsePoll); only the
+    // give-up timers still run then.
+    void OnExtPoll(ExtVpn x, bool ok, string key, DateTime started)
+    {
+        if (VpnProviders.UsePoll(ok, key, x.ConnectedId != null, x.DisconnectingId != null, started < x.CommandDone, ref x.NoneStreak) == VpnProviders.PollUse.Apply)
+        {
+            OnExtState(x, key);
+            return;
+        }
+        var now = DateTime.UtcNow;
+        if (x.ConnectingId != null && x.ConnectingId != x.ConnectedId && !x.Busy && (now - x.ConnectStart).TotalSeconds > VpnProviders.ConnectGiveUpSeconds)
+        {
+            list.CancelConnect(x.ConnectingId); x.ConnectingId = null;
+            SetStatus(x.Label + " bağlantısı doğrulanamadı — " + x.Label + " penceresini kontrol edin");
+        }
+        if (x.DisconnectingId != null && (now - x.DisconnectStart).TotalSeconds > VpnProviders.DisconnectGiveUpSeconds) { x.DisconnectingId = null; list.EndDisconnect(); }
+        UpdateIsland();
     }
 
     // key: connection name (Sophos) / server entry (WatchGuard) that is up, "" = up but unnamed, null = none.
     void OnExtState(ExtVpn x, string key)
     {
+        x.NoneStreak = 0;
         var owned = profiles.Where(p => ExtFor(p) == x).ToList();
         var id = VpnProviders.ResolveConnectedId(key, owned, VpnProviders.CredentialKey, x.ConnectedId, x.ConnectingId);
         var now = DateTime.UtcNow;
@@ -1466,7 +1491,7 @@ internal sealed class SearchForm : Form
     {
         if (x.ConnectingId != null) list.CancelConnect(x.ConnectingId);
         if (x.DisconnectingId != null) list.EndDisconnect();
-        x.ConnectedId = null; x.ConnectingId = null; x.DisconnectingId = null;
+        x.ConnectedId = null; x.ConnectingId = null; x.DisconnectingId = null; x.NoneStreak = 0;
     }
 
     // Sophos connections come from sccli (a process per call): listed on a worker thread and

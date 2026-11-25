@@ -196,29 +196,38 @@ internal static class SophosStore
     }
 
     // Name of the connected Sophos connection, or null. Safe to call from a worker thread.
-    // Asks sccli for each connection's state; when the output is not understood, falls back to the
-    // Sophos virtual adapter being Up (then the only connection, or "" when ambiguous).
     public static string ConnectedName()
     {
+        string name;
+        return TryConnectedName(out name) ? name : null;
+    }
+
+    // False when the status could not be read (sccli failed or timed out): the caller keeps what it
+    // showed before. True with name = connected connection, "" (up, ambiguous) or null (none).
+    // Asks sccli for each connection's state; when the output is not understood, falls back to the
+    // Sophos virtual adapter being Up (then the only connection, or "" when ambiguous).
+    public static bool TryConnectedName(out string name)
+    {
+        name = null;
         try
         {
-            if (!IsInstalled) return null;
+            if (!IsInstalled) return true;
             string o, e;
-            if (!Run(new[] { "list" }, out o, out e)) return null;
+            if (!Run(new[] { "list" }, out o, out e)) return false;
             var names = ParseList(o);
-            if (names.Count == 0) return null;
-            var understood = false;
+            if (names.Count == 0) return true;
+            bool understood = false, failed = false;
             foreach (var n in names)
             {
                 string d, err;
-                if (!Run(new[] { "get", "-n", n, "-t", "dynamic" }, out d, out err)) continue;
-                if (ParseConnected(d)) return n;
+                if (!Run(new[] { "get", "-n", n, "-t", "dynamic" }, out d, out err)) { failed = true; continue; }
+                if (ParseConnected(d)) { name = n; return true; }
                 if (HasState(d)) understood = true;
             }
-            if (UseAdapterFallback(understood) && AdapterUp()) return names.Count == 1 ? names[0] : "";
+            if (UseAdapterFallback(understood) && AdapterUp()) { name = names.Count == 1 ? names[0] : ""; return true; }
+            return !failed;
         }
-        catch { }
-        return null;
+        catch { name = null; return false; }
     }
 
     public static bool AdapterUp()

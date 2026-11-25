@@ -241,21 +241,31 @@ internal static class WatchGuardStore
     // null. Cheap while the client is not running (one process lookup); safe on a worker thread.
     public static string ConnectedServer()
     {
+        string server;
+        return TryConnectedServer(out server) ? server : null;
+    }
+
+    // False when the check itself failed (an exception): the caller keeps what it showed before.
+    // True with server = entry, "" (connected, server unknown) or null (none).
+    public static bool TryConnectedServer(out string server)
+    {
+        server = null;
         try
         {
-            if (!IsInstalled || !ClientRunning) return null;
+            if (!IsInstalled || !ClientRunning) return true;
             var adapter = AdapterUp();
             var ovpn = OpenVpnRunning();
-            if (!adapter && !ovpn) return null;
+            if (!adapter && !ovpn) return true;
             var log = ParseLog(ReadLogTail(256 * 1024));
-            if (!Decide(true, adapter, ovpn, log)) return null;
+            if (!Decide(true, adapter, ovpn, log)) return true;
             var servers = Servers();
             var m = MatchServer(log.Server, servers);
-            if (m != null) return m;
-            if (servers.Count == 1) return servers[0];
-            return log.Server ?? "";
+            if (m != null) server = m;
+            else if (servers.Count == 1) server = servers[0];
+            else server = log.Server ?? "";
+            return true;
         }
-        catch { return null; }
+        catch { server = null; return false; }
     }
 
     public static bool AdapterUp()
@@ -833,7 +843,8 @@ internal static class WatchGuardGui
             RestoreHiddenParked();
             if (DateTime.UtcNow >= nextCheck)
             {
-                if (WatchGuardStore.ConnectedServer() == null) { RestoreHiddenParked(); return true; }
+                string up;
+                if (WatchGuardStore.TryConnectedServer(out up) && up == null) { RestoreHiddenParked(); return true; } // a failed check is not "disconnected"
                 nextCheck = DateTime.UtcNow.AddMilliseconds(700);
             }
             Thread.Sleep(50);

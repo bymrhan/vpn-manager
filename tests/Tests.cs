@@ -350,6 +350,18 @@ static class Tests
         Check(!VpnProviders.DuePoll(VpnKind.WatchGuard, false, false, 9) && VpnProviders.DuePoll(VpnKind.WatchGuard, false, false, 10), "WatchGuard boşta 10 sn");
         Check(VpnProviders.DuePoll(VpnKind.WatchGuard, false, true, 1) && !VpnProviders.DuePoll(VpnKind.WatchGuard, false, true, 0.5), "WatchGuard komut bitince hemen");
 
+        var streak = 0;
+        Check(VpnProviders.UsePoll(false, null, true, false, false, ref streak) == VpnProviders.PollUse.Keep && streak == 0, "başarısız yoklama: gösterilen durum korunur");
+        Check(VpnProviders.UsePoll(false, null, false, true, false, ref streak) == VpnProviders.PollUse.Keep, "başarısız yoklama kesme sırasında da bir şey değiştirmez");
+        Check(VpnProviders.UsePoll(true, null, true, false, false, ref streak) == VpnProviders.PollUse.Keep && streak == 1, "bağlıyken tek 'yok': henüz düşürülmez");
+        Check(VpnProviders.UsePoll(false, null, true, false, false, ref streak) == VpnProviders.PollUse.Keep && streak == 1, "araya giren başarısız yoklama sayacı sıfırlamaz/artırmaz");
+        Check(VpnProviders.UsePoll(true, null, true, false, false, ref streak) == VpnProviders.PollUse.Apply && streak == 0, "art arda iki 'yok': bağlantı düşer");
+        streak = 1;
+        Check(VpnProviders.UsePoll(true, "vpn1.example:443", true, false, false, ref streak) == VpnProviders.PollUse.Apply && streak == 0, "bağlı sonuç hemen uygulanır, sayaç sıfırlanır");
+        Check(VpnProviders.UsePoll(true, null, false, false, false, ref streak) == VpnProviders.PollUse.Apply, "zaten bağlı değilken 'yok' hemen uygulanır");
+        Check(VpnProviders.UsePoll(true, null, true, true, false, ref streak) == VpnProviders.PollUse.Apply, "kesme sürerken ilk 'yok' hemen uygulanır");
+        Check(VpnProviders.UsePoll(true, "ofis", false, false, true, ref streak) == VpnProviders.PollUse.Keep, "komut bitmeden başlamış (eski) yoklama satırı yeniden bağlı yapmaz");
+
         var s = SophosStore.MakeProfile("ofis", ""); var f = P("forti-ssl:ALFA"); var o = P("ovpn-1"); o.LastConnected = 5;
         var starts = new Dictionary<string, long> { { a.Id, 100 }, { s.Id, 200 }, { f.Id, 300 }, { o.Id, 400 } };
         VpnProviders.ApplyLastConnected(new[] { a, b, s, f, o }, starts);
