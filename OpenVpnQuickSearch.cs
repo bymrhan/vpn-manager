@@ -2544,7 +2544,7 @@ internal sealed class SearchForm : Form
 
     void UpdateDockState()
     {
-        // minimized from its taskbar button: leave the restore bounds alone until it comes back
+        // minimized by the system or another tool: leave the restore bounds alone until it comes back
         if (WindowState == FormWindowState.Minimized) return;
         var h = ovpnHwnd;
         var nowDocked = Visible && !userMoved && h != IntPtr.Zero && lastFound;
