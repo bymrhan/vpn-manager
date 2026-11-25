@@ -11,6 +11,9 @@ profiller/
 OpenVPN-Profilleri.zip
 FortiClient-Tunelleri.json
 
+# Build-time secrets (issue token for direct error reports): never committed
+secrets/
+
 # Hand-made copies from before version control
 *.v3-backup.cs
 *.old.exe
