@@ -21,15 +21,17 @@ internal sealed class VpnProfile
     public string Id, Name, Host, Username, Source, Initials;
     public long LastConnected;
     public string[] Keys; // search keys: name, host, username, source
+    public bool EstimatedId; // built from a .ovpn file: Id is the file name, not read from config.json (ProfileSources)
+    public string Origin;    // null = OpenVPN Connect / provider; "manual" = a folder or file picked in this app
 }
 
 internal static class ProfileStore
 {
     public static string ConfigPath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenVPN Connect", "config.json"); } }
 
-    static string TextValue(IDictionary<string, object> d, string k) { object v; return d.TryGetValue(k, out v) && v != null ? Convert.ToString(v) : ""; }
-    static long LongValue(IDictionary<string, object> d, string k) { object v; long n; return d.TryGetValue(k, out v) && long.TryParse(Convert.ToString(v, CultureInfo.InvariantCulture), out n) ? n : 0; }
-
+    // The primary config.json only (backups, setup wizard, --list). Throws when it is missing,
+    // unreadable or its layout is unknown; the list itself uses ProfileSources.Load (fallbacks).
+    // Parsing is tolerant (ProfileJson): the 3.9 layout gives the same profiles as before 2.1.2.
     public static List<VpnProfile> Load()
     {
         var path = ConfigPath;
@@ -39,47 +41,18 @@ internal static class ProfileStore
         using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
         using (var sr = new StreamReader(fs, Encoding.UTF8)) text = sr.ReadToEnd();
 
-        var js = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 256 };
-        var root = js.DeserializeObject(text) as IDictionary<string, object>;
-        if (root == null || !root.ContainsKey("persist:root")) throw new InvalidDataException("OpenVPN Connect profil deposu okunamadı.");
-        var persisted = js.DeserializeObject(Convert.ToString(root["persist:root"])) as IDictionary<string, object>;
-        if (persisted == null || !persisted.ContainsKey("status")) throw new InvalidDataException("OpenVPN Connect profil durumu bulunamadı.");
-        var status = js.DeserializeObject(Convert.ToString(persisted["status"])) as IDictionary<string, object>;
-        object raw;
-        if (status == null || !status.TryGetValue("profiles", out raw)) return new List<VpnProfile>();
-        var profiles = raw as IDictionary<string, object>;
-        if (profiles == null) return new List<VpnProfile>();
-
-        var result = new List<VpnProfile>();
-        foreach (var pair in profiles)
-        {
-            var item = pair.Value as IDictionary<string, object>;
-            if (item == null) continue;
-            var name = TextValue(item, "profileDisplayName");
-            if (string.IsNullOrWhiteSpace(name)) name = TextValue(item, "profileName");
-            if (string.IsNullOrWhiteSpace(name)) name = TextValue(item, "name");
-            var host = TextValue(item, "hostname");
-            if (string.IsNullOrWhiteSpace(host)) host = TextValue(item, "remoteHost");
-            var source = TextValue(item, "filePath");
-            var id = TextValue(item, "id");
-            if (string.IsNullOrWhiteSpace(id)) id = pair.Key;
-            var p = new VpnProfile
-            {
-                Id = id,
-                Name = string.IsNullOrWhiteSpace(name) ? "Adsız profil" : name.Trim(),
-                Host = host.Trim(),
-                Username = TextValue(item, "username").Trim(),
-                Source = string.IsNullOrWhiteSpace(source) ? "" : SafeFileName(source),
-                LastConnected = LongValue(item, "lastConnected")
-            };
-            p.Initials = MakeInitials(p.Name);
-            p.Keys = new[] { SearchKey(p.Name), SearchKey(p.Host), SearchKey(p.Username), SearchKey(p.Source) };
-            result.Add(p);
-        }
-        return result;
+        var r = ProfileJson.Parse(text);
+        if (r.Reason == ProfileReadReason.BadJson) throw new InvalidDataException("OpenVPN Connect profil deposu okunamadı.");
+        if (r.Reason == ProfileReadReason.UnknownLayout) throw new InvalidDataException("OpenVPN Connect profil listesi bulunamadı (tanınmayan düzen).");
+        return r.Profiles;
     }
 
-    static string SafeFileName(string path) { try { return Path.GetFileName(path); } catch { return path; } }
+    // Initials and search keys of a profile whose fields are set.
+    internal static void Finish(VpnProfile p)
+    {
+        p.Initials = MakeInitials(p.Name);
+        p.Keys = new[] { SearchKey(p.Name), SearchKey(p.Host), SearchKey(p.Username), SearchKey(p.Source) };
+    }
 
     internal static string MakeInitials(string name)
     {

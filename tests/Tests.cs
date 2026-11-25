@@ -86,6 +86,15 @@ static class Tests
         Run("GitHub gönderimi: güvenlik incelemesi korumaları", IssueReviewGuards);
         Run("Ayarlar: uygulama nerede görünsün (Presence, eski anahtar)", TaskbarSetting);
         Run("Tepsi / görev çubuğu kararları", TaskbarDecisions);
+        Run("Profil deposu: 3.9 düzeni öncekiyle aynı", ProfileJson39Layout);
+        Run("Profil deposu: esnek ayrıştırma", ProfileJsonTolerant);
+        Run("Profil deposu: zaman damgaları", ProfileJsonTimestamps);
+        Run("Profil deposu: neden sınıflandırma", ProfileJsonReasons);
+        Run("Profil deposu: düzen özeti değer içermez", ProfileSchemaOutline);
+        Run("Profil deposu: .ovpn yönerge taraması", OvpnDirectiveScan);
+        Run("Profil deposu: dosya arama sınırları", OvpnFindFilesBounds);
+        Run("Profil deposu: kaynak sırası ve elle eklenenler", ProfileSourcesOrder);
+        Run("Ayarlar: profil kaynağı (eski dosyalar)", ProfileSourceSettings);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -1431,5 +1440,348 @@ static class Tests
         var cut = GitHubIssueClient.CutTitle("[hata] NullReferenceException: " + new string('X', 300) + " (ab12cd34)");
         Check(cut.Length == GitHubIssueClient.MaxTitleChars && cut.StartsWith("[hata] NullReferenceException: ") && cut.EndsWith("… (ab12cd34)"), "ortadan kesilir, parmak izi kalır");
         Check(GitHubIssueClient.CutTitle("kısa (ab12cd34)") == "kısa (ab12cd34)", "kısa başlık değişmez");
+    }
+
+    // ---------- Profile sources (2.1.2) ----------
+
+    static string J(object o) { return new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(o); }
+
+    // OpenVPN Connect 3.9 layout: persist:root and status are JSON strings, profiles a map by id.
+    static string Config39(Dictionary<string, object> profiles)
+    {
+        var status = new Dictionary<string, object> { { "profiles", profiles }, { "connectedProfile", null } };
+        var persisted = new Dictionary<string, object> { { "status", J(status) }, { "settings", J(new Dictionary<string, object> { { "theme", "dark" } }) } };
+        return J(new Dictionary<string, object> { { "persist:root", J(persisted) } });
+    }
+
+    static Dictionary<string, object> FakeProfiles39()
+    {
+        return new Dictionary<string, object>
+        {
+            { "1700000000001", new Dictionary<string, object> { { "id", "1700000000001" }, { "profileDisplayName", "Contoso Enerji" }, { "profileName", "contoso" }, { "hostname", "vpn.contoso.example" }, { "filePath", @"C:\Users\x\AppData\Roaming\OpenVPN Connect\profiles\1700000000001.ovpn" }, { "username", "mehmet.kaya " }, { "lastConnected", 1731000000000L } } },
+            { "key-only",      new Dictionary<string, object> { { "profileName", "Northwind Gıda" }, { "remoteHost", "gw.northwind.example" }, { "lastConnected", "1731000000123" } } },
+            { "1700000000003", new Dictionary<string, object> { { "id", "1700000000003" }, { "name", "  Initech  " } } },
+            { "1700000000004", new Dictionary<string, object> { { "id", "1700000000004" } } },
+            { "skip",          "not an object" },
+        };
+    }
+
+    // The pre-2.1.2 parser, kept here as the reference: the 3.9 layout must give the same profiles.
+    static List<VpnProfile> OldLoad(string text)
+    {
+        var js = new System.Web.Script.Serialization.JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 256 };
+        Func<IDictionary<string, object>, string, string> tv = (d, k) => { object v; return d.TryGetValue(k, out v) && v != null ? Convert.ToString(v) : ""; };
+        Func<IDictionary<string, object>, string, long> lv = (d, k) => { object v; long n; return d.TryGetValue(k, out v) && long.TryParse(Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture), out n) ? n : 0; };
+        var root = js.DeserializeObject(text) as IDictionary<string, object>;
+        var persisted = js.DeserializeObject(Convert.ToString(root["persist:root"])) as IDictionary<string, object>;
+        var status = js.DeserializeObject(Convert.ToString(persisted["status"])) as IDictionary<string, object>;
+        var profiles = status["profiles"] as IDictionary<string, object>;
+        var result = new List<VpnProfile>();
+        foreach (var pair in profiles)
+        {
+            var item = pair.Value as IDictionary<string, object>;
+            if (item == null) continue;
+            var name = tv(item, "profileDisplayName");
+            if (string.IsNullOrWhiteSpace(name)) name = tv(item, "profileName");
+            if (string.IsNullOrWhiteSpace(name)) name = tv(item, "name");
+            var host = tv(item, "hostname");
+            if (string.IsNullOrWhiteSpace(host)) host = tv(item, "remoteHost");
+            var source = tv(item, "filePath");
+            var id = tv(item, "id");
+            if (string.IsNullOrWhiteSpace(id)) id = pair.Key;
+            var p = new VpnProfile { Id = id, Name = string.IsNullOrWhiteSpace(name) ? "Adsız profil" : name.Trim(), Host = host.Trim(), Username = tv(item, "username").Trim(),
+                Source = string.IsNullOrWhiteSpace(source) ? "" : Path.GetFileName(source), LastConnected = lv(item, "lastConnected") };
+            p.Initials = ProfileStore.MakeInitials(p.Name);
+            p.Keys = new[] { ProfileStore.SearchKey(p.Name), ProfileStore.SearchKey(p.Host), ProfileStore.SearchKey(p.Username), ProfileStore.SearchKey(p.Source) };
+            result.Add(p);
+        }
+        return result;
+    }
+
+    static string Sig(VpnProfile p)
+    {
+        return string.Join("|", new[] { p.Id, p.Name, p.Host, p.Username, p.Source, p.LastConnected.ToString(), p.Initials, string.Join(",", p.Keys), p.EstimatedId.ToString(), p.Origin ?? "" });
+    }
+
+    static void ProfileJson39Layout()
+    {
+        var text = Config39(FakeProfiles39());
+        var old = OldLoad(text).Select(Sig).ToList();
+        var r = ProfileJson.Parse(text);
+        var now = r.Profiles.Select(Sig).ToList();
+        Check(r.Reason == ProfileReadReason.Ok && now.Count == 4, "4 profil, sonuç Ok (" + r.Reason + ", " + now.Count + ")");
+        Check(old.SequenceEqual(now), "eski ayrıştırıcıyla birebir aynı alanlar");
+        Check(r.Layout == "persist:root/status/profiles", "düğüm 3.9 yolu (" + r.Layout + ")");
+        var p = r.Profiles[0];
+        Check(p.Name == "Contoso Enerji" && p.Host == "vpn.contoso.example" && p.Username == "mehmet.kaya" && p.Source == "1700000000001.ovpn" && p.LastConnected == 1731000000000L && !p.EstimatedId, "alanlar doğru");
+        Check(r.Profiles[1].Id == "key-only" && r.Profiles[1].LastConnected == 1731000000123L, "kimlik yoksa harita anahtarı, metin zaman damgası");
+        Check(r.Profiles[3].Name == "Adsız profil", "adsız profil");
+
+        // ProfileStore.Load semantics: a 3.9 file without a "profiles" key is 0 profiles, not an error
+        var persisted = new Dictionary<string, object> { { "status", J(new Dictionary<string, object> { { "connectedProfile", null } }) } };
+        var empty = ProfileJson.Parse(J(new Dictionary<string, object> { { "persist:root", J(persisted) } }));
+        Check(empty.Reason == ProfileReadReason.NoProfiles && empty.Profiles.Count == 0, "profiles anahtarı olmayan 3.9 dosyası: 0 profil");
+    }
+
+    static void ProfileJsonTolerant()
+    {
+        var item = new Dictionary<string, object> { { "id", "a1" }, { "displayName", "Fabrikam" }, { "server", "vpn.fabrikam.example" }, { "path", @"D:\p\fabrikam.ovpn" }, { "user", "can" } };
+        var item2 = new Dictionary<string, object> { { "id", "a2" }, { "title", "Globex" }, { "remote", "gw.globex.example" }, { "source", "globex.ovpn" } };
+        var item3 = new Dictionary<string, object> { { "id", "a3" }, { "name", "Stark" }, { "host", "vpn.stark.example" }, { "file", "stark.ovpn" }, { "remoteHost", new object[] { 1 } } };
+
+        // persist:root and status as objects, profiles as an array
+        var status = new Dictionary<string, object> { { "profiles", new object[] { item, item2, item3 } } };
+        var t1 = J(new Dictionary<string, object> { { "persist:root", new Dictionary<string, object> { { "status", status } } } });
+        var r1 = ProfileJson.Parse(t1);
+        Check(r1.Reason == ProfileReadReason.Ok && r1.Profiles.Count == 3, "nesne persist:root / status, dizi profiles (" + r1.Reason + ")");
+        Check(r1.Profiles[0].Name == "Fabrikam" && r1.Profiles[0].Host == "vpn.fabrikam.example" && r1.Profiles[0].Source == "fabrikam.ovpn" && r1.Profiles[0].Username == "can", "displayName / server / path / user");
+        Check(r1.Profiles[1].Name == "Globex" && r1.Profiles[1].Host == "gw.globex.example" && r1.Profiles[1].Source == "globex.ovpn", "title / remote / source");
+        Check(r1.Profiles[2].Host == "vpn.stark.example", "dizi değerli alan atlanır, sonraki anahtar kullanılır");
+
+        // persist:root string, status object
+        var t2 = J(new Dictionary<string, object> { { "persist:root", J(new Dictionary<string, object> { { "status", status } }) } });
+        Check(ProfileJson.Parse(t2).Profiles.Count == 3, "metin persist:root, nesne status");
+
+        // other levels
+        var map = new Dictionary<string, object> { { "a1", item }, { "a2", item2 } };
+        Check(ProfileJson.Parse(J(new Dictionary<string, object> { { "profiles", map } })).Layout == "profiles", "kökte profiles");
+        Check(ProfileJson.Parse(J(new Dictionary<string, object> { { "persist:root", J(new Dictionary<string, object> { { "profiles", map } }) } })).Layout == "persist:root/profiles", "persist:root/profiles");
+        var r3 = ProfileJson.Parse(J(new Dictionary<string, object> { { "persist:root", J(new Dictionary<string, object> { { "profile", J(new Dictionary<string, object> { { "items", new object[] { item, item2 } } }) } }) } }));
+        Check(r3.Layout == "persist:root/profile/items" && r3.Profiles.Count == 2, "persist:root/profile/items (" + r3.Layout + ")");
+
+        // generic walker: a collection deeper down, found by its shape
+        var deep = new Dictionary<string, object> { { "app", new Dictionary<string, object> { { "store", J(new Dictionary<string, object> { { "vpn", new Dictionary<string, object> { { "connections", new object[] { item, item2 } }, { "themes", new object[] { new Dictionary<string, object> { { "name", "dark" } } } } } } }) } } } };
+        var r4 = ProfileJson.Parse(J(deep));
+        Check(r4.Reason == ProfileReadReason.Ok && r4.Profiles.Count == 2 && r4.Layout.Contains("connections"), "gezgin iç içe koleksiyonu bulur (" + r4.Layout + ")");
+        // the walker ignores collections that do not look like profiles (name only)
+        var notProfiles = new Dictionary<string, object> { { "ui", new Dictionary<string, object> { { "themes", new object[] { new Dictionary<string, object> { { "name", "dark" } } } } } } };
+        Check(ProfileJson.Parse(J(notProfiles)).Reason == ProfileReadReason.UnknownLayout, "yalnız ad içeren koleksiyon profil sayılmaz");
+        // an empty known node does not hide profiles elsewhere
+        var mixed = new Dictionary<string, object> { { "profiles", new object[0] }, { "persist:root", J(new Dictionary<string, object> { { "profile", new Dictionary<string, object> { { "items", new object[] { item } } } } }) } };
+        Check(ProfileJson.Parse(J(mixed)).Profiles.Count == 1, "boş bilinen düğümden sonra diğerleri denenir");
+        // walker depth bound: a collection deeper than MaxDepth is not reached, and nothing blows up
+        object nest = new object[] { item };
+        for (var i = 0; i < 40; i++) nest = new Dictionary<string, object> { { "n", nest } };
+        Check(ProfileJson.Parse(J(nest)).Reason == ProfileReadReason.UnknownLayout, "derinlik sınırı (40 seviye)");
+        // ids from array elements without id are skipped; profileId accepted
+        var noId = J(new Dictionary<string, object> { { "profiles", new object[] { new Dictionary<string, object> { { "name", "X" }, { "host", "h.example" } }, new Dictionary<string, object> { { "profileId", "p9" }, { "name", "Y" } } } } });
+        var r5 = ProfileJson.Parse(noId);
+        Check(r5.Profiles.Count == 1 && r5.Profiles[0].Id == "p9", "kimliksiz dizi öğesi atlanır, profileId kabul edilir");
+    }
+
+    static void ProfileJsonTimestamps()
+    {
+        Check(ProfileJson.ParseTimestamp(1731000000000L) == 1731000000000L, "epoch ms");
+        Check(ProfileJson.ParseTimestamp(1731000000) == 1731000000000L, "epoch s -> ms");
+        Check(ProfileJson.ParseTimestamp("1731000000") == 1731000000000L, "metin epoch s");
+        Check(ProfileJson.ParseTimestamp("2024-11-07T17:20:00Z") == 1731000000000L, "ISO-8601 UTC");
+        Check(ProfileJson.ParseTimestamp("2024-11-07T20:20:00+03:00") == 1731000000000L, "ISO-8601 +03:00");
+        Check(ProfileJson.ParseTimestamp(null) == 0 && ProfileJson.ParseTimestamp("") == 0 && ProfileJson.ParseTimestamp("dün") == 0 && ProfileJson.ParseTimestamp(true) == 0 && ProfileJson.ParseTimestamp(-5) == 0, "geçersizler 0");
+        var item = new Dictionary<string, object> { { "id", "t" }, { "name", "T" }, { "lastConnectedAt", "2024-11-07T17:20:00Z" } };
+        Check(ProfileJson.FromItem(item, null).LastConnected == 1731000000000L, "lastConnectedAt kullanılır");
+    }
+
+    static void ProfileJsonReasons()
+    {
+        Check(ProfileJson.Parse("{").Reason == ProfileReadReason.BadJson, "bozuk JSON");
+        Check(ProfileJson.Parse("").Reason == ProfileReadReason.BadJson, "boş dosya");
+        Check(ProfileJson.Parse("{\"a\":1,\"persist:root\":\"{\\\"x\\\":2}\"}").Reason == ProfileReadReason.UnknownLayout, "bilinmeyen düzen");
+        Check(ProfileJson.Parse(Config39(new Dictionary<string, object>())).Reason == ProfileReadReason.NoProfiles, "0 profil");
+        Check(ProfileJson.Parse("[{\"id\":\"1\",\"name\":\"A\",\"host\":\"h.example\"}]").Reason == ProfileReadReason.Ok, "kökte profil dizisi");
+        foreach (ProfileReadReason r in Enum.GetValues(typeof(ProfileReadReason)))
+            if (r != ProfileReadReason.Ok) Check(ProfileSources.ReasonText(r).Length > 10, "neden metni: " + r);
+        var rep = new ProfileLoadReport { PrimaryReason = ProfileReadReason.UnknownLayout, PrimaryExists = true };
+        Check(ProfileSources.StatusText(rep).StartsWith("Okunamadı: "), "durum: okunamadı");
+        rep.Source = "config"; rep.SourceLabel = ProfileSources.PrimaryLabel; rep.Count = 12;
+        Check(ProfileSources.StatusText(rep) == "Kaynak: config.json (12 profil)", "durum: config.json (" + ProfileSources.StatusText(rep) + ")");
+        Check(!rep.Degraded && !rep.Transient, "birincil kaynak: bozulma yok");
+        rep.Source = "profiles-dir"; rep.Count = 5;
+        Check(ProfileSources.StatusText(rep).StartsWith("Kaynak: profil klasörü (5 profil") && rep.Degraded, "durum: profil klasörü");
+        Check(new ProfileLoadReport { PrimaryExists = true, PrimaryReason = ProfileReadReason.BadJson }.Transient, "yarım yazılmış dosya geçici sayılır");
+    }
+
+    static readonly string[] Secrets = { "Gizli Müşteri", "vpn.gizli-musteri.example", "ayse.gizli", "P@ssw0rd-FAKE", "FAKEPRIVATEKEYDATA", "10.20.30.40", "AcmeSecretCo", "secret-customer", "1700000000001" };
+
+    static void ProfileSchemaOutline()
+    {
+        var profiles = new Dictionary<string, object>
+        {
+            { "1700000000001", new Dictionary<string, object> { { "id", "1700000000001" }, { "profileDisplayName", "Gizli Müşteri A.Ş." }, { "hostname", "vpn.gizli-musteri.example" }, { "username", "ayse.gizli" }, { "password", "P@ssw0rd-FAKE" }, { "ca", "-----BEGIN PRIVATE KEY-----FAKEPRIVATEKEYDATA" }, { "lastConnected", 1731000000000L }, { "savedPassword", true } } },
+            { "AcmeSecretCo", new Dictionary<string, object> { { "id", "x" }, { "name", "secret-customer" }, { "remoteHost", "10.20.30.40" } } },
+        };
+        var status = new Dictionary<string, object> { { "profiles", profiles }, { "byName", new Dictionary<string, object> { { "secret-customer", new Dictionary<string, object> { { "a", 1 }, { "b", 2 }, { "c", 3 } } } } } };
+        var text = J(new Dictionary<string, object> { { "persist:root", J(new Dictionary<string, object> { { "status", J(status) }, { "list", new object[] { "ayse.gizli", 5 } } }) }, { "version", "3.6.0" } });
+        var outline = ProfileJson.SchemaOutline(text);
+        var leaks = Secrets.Where(s => outline.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        Check(leaks.Count == 0, "değer yok (" + string.Join(", ", leaks.ToArray()) + ")");
+        Check(outline.IndexOf("3.6.0", StringComparison.Ordinal) < 0, "sürüm değeri bile yok");
+        Check(outline.Contains("persist:root (string→object") && outline.Contains("status (string→object") && outline.Contains("profiles (object, 2 entries, keys <id>)"), "anahtar adları ve türler:\n" + outline);
+        Check(outline.Contains("<id> (object") && outline.Contains("profileDisplayName (string)") && outline.Contains("lastConnected (number)") && outline.Contains("savedPassword (bool)"), "öğe anahtarları ve JSON türleri");
+        Check(outline.Contains("list (array, 2 items)"), "dizi");
+        // the sanitizer leaves the outline readable
+        var san = new LogSanitizer().Sanitize(outline);
+        Check(san.Contains("persist:root") && san.Contains("profileDisplayName (string)") && san.Contains("username (string)"), "temizleyiciden sonra okunur");
+        Check(ProfileJson.SchemaOutline("{oops").StartsWith("(geçerli JSON değil"), "bozuk JSON: yalnız tür");
+
+        object nest = "x";
+        for (var i = 0; i < 30; i++) nest = new Dictionary<string, object> { { "n", nest } };
+        var lines = ProfileJson.SchemaOutlineLines(J(nest));
+        Check(lines.Count <= ProfileJson.MaxDepth + 3, "derinlik en çok 6 (" + lines.Count + " satır)");
+        var wide = new Dictionary<string, object>();
+        for (var i = 0; i < 400; i++) wide["k" + (char)('a' + i % 26) + (char)('a' + i / 26)] = i;
+        Check(ProfileJson.SchemaOutlineLines(J(wide)).Count <= ProfileJson.MaxOutlineLines + 1, "satır sınırı");
+        Check(ProfileJson.KeyLabel("profiles") == "profiles" && ProfileJson.KeyLabel("Acme VPN") == "<id>" && ProfileJson.KeyLabel("vpn.acme.example") == "<id>" && ProfileJson.KeyLabel("3f2504e0-4f89-11d3-9a0c-0305e82c3301") == "<id>" && ProfileJson.KeyLabel("Müşteri") == "<id>", "anahtar etiketleri");
+    }
+
+    static string TempDir()
+    {
+        var d = Path.Combine(Path.GetTempPath(), "ovpnqs-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(d);
+        return d;
+    }
+
+    const string FakeOvpn =
+        "# OVPN_ACCESS_SERVER_FRIENDLY_NAME=Wayne Makine\r\n" +
+        "client\r\ndev tun\r\n" +
+        "remote vpn.wayne.example 1194 udp\r\nremote yedek.wayne.example 1194\r\n" +
+        "auth-user-pass\r\n" +
+        "<ca>\r\n-----BEGIN CERTIFICATE-----\r\nFAKECERTDATA\r\nremote evil.example\r\n-----END CERTIFICATE-----\r\n</ca>\r\n" +
+        "<key>\r\n-----BEGIN PRIVATE KEY-----\r\nFAKEPRIVATEKEYDATA\r\n# OVPN_ACCESS_SERVER_FRIENDLY_NAME=FAKEINKEY\r\n-----END PRIVATE KEY-----\r\n</key>\r\n" +
+        "<tls-auth>\r\nsetenv PROFILE FAKETLS\r\n</tls-auth>\r\n";
+
+    static void OvpnDirectiveScan()
+    {
+        var dir = TempDir();
+        try
+        {
+            var f = Path.Combine(dir, "wayne.ovpn");
+            File.WriteAllText(f, FakeOvpn, Encoding.UTF8);
+            var p = OvpnScan.FromFile(f);
+            Check(p != null && p.Name == "Wayne Makine" && p.Host == "vpn.wayne.example" && p.Id == "wayne" && p.Source == "wayne.ovpn" && p.EstimatedId, "ad, ilk remote, kimlik = dosya adı, tahmini");
+            var all = Sig(p) + string.Join("", p.Keys);
+            Check(new[] { "FAKECERTDATA", "FAKEPRIVATEKEYDATA", "FAKEINKEY", "FAKETLS", "evil.example", "BEGIN" }.All(s => all.IndexOf(s, StringComparison.OrdinalIgnoreCase) < 0), "sertifika / anahtar içeriği sızmaz");
+
+            var id = Path.Combine(dir, "1700000000009.ovpn");
+            File.WriteAllText(id, "client\n<ca>\nremote evil.example\n</ca>\n<connection>\nremote conn.northwind.example 443 tcp\n</connection>\n");
+            var q = OvpnScan.FromFile(id);
+            Check(q.Name == "conn.northwind.example" && q.Host == "conn.northwind.example" && q.Id == "1700000000009", "kimlik gibi dosya adı: ad = <connection> içindeki remote");
+
+            Check(OvpnScan.FromText("setenv PROFILE \"Tailspin Turizm\"\nremote t.example\n", "x.ovpn").Name == "Tailspin Turizm", "setenv PROFILE");
+            Check(OvpnScan.FromText("# OVPN_ACCESS_SERVER_PROFILE=user@as.example/AUTOLOGIN\n", "x.ovpn").Name == "user@as.example/AUTOLOGIN", "OVPN_ACCESS_SERVER_PROFILE");
+            Check(OvpnScan.FromText("# friendly_name: Litware\n", "x.ovpn").Name == "Litware", "friendly_name yorumu");
+            Check(OvpnScan.FromText("remote r.example\n", "Acme Lojistik.ovpn").Name == "Acme Lojistik", "ad yoksa dosya adı (kimlik gibi değilse)");
+            Check(OvpnScan.FromText("", ".ovpn") == null, "adsız dosya atlanır");
+            Check(OvpnScan.FromFile(Path.Combine(dir, "yok.ovpn")) == null, "olmayan dosya: null");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void OvpnFindFilesBounds()
+    {
+        var dir = TempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "a.ovpn"), "remote a.example\n");
+            File.WriteAllText(Path.Combine(dir, "not.txt"), "x");
+            var l1 = Path.Combine(dir, "l1"); var l2 = Path.Combine(l1, "l2"); var l3 = Path.Combine(l2, "l3");
+            Directory.CreateDirectory(l3);
+            File.WriteAllText(Path.Combine(l1, "b.ovpn"), "");
+            File.WriteAllText(Path.Combine(l2, "c.ovpn"), "");
+            File.WriteAllText(Path.Combine(l3, "d.ovpn"), "");
+            Check(OvpnScan.FindFiles(new[] { dir }, 0, 500).Count == 1, "derinlik 0: yalnız kök");
+            Check(OvpnScan.FindFiles(new[] { dir }, 1, 500).Count == 2, "derinlik 1");
+            Check(OvpnScan.FindFiles(new[] { dir }, OvpnScan.MaxDepth, 500).Count == 3, "derinlik 2 (en çok)");
+            for (var i = 0; i < 12; i++) File.WriteAllText(Path.Combine(dir, "x" + i + ".ovpn"), "");
+            Check(OvpnScan.FindFiles(new[] { dir }, 2, 5).Count == 5, "dosya sınırı");
+            Check(OvpnScan.FindFiles(new[] { Path.Combine(dir, "yok"), null, "" }, 2, 5).Count == 0, "olmayan klasörler sorun çıkarmaz");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void ProfileSourcesOrder()
+    {
+        var root = TempDir();
+        var app = Path.Combine(root, "roaming"); var local = Path.Combine(root, "local"); var pd = Path.Combine(root, "programdata"); var manual = Path.Combine(root, "elle");
+        ProfileSources.AppDataOverride = app; ProfileSources.LocalAppDataOverride = local; ProfileSources.ProgramDataOverride = pd;
+        try
+        {
+            ProfileLoadReport r;
+            var none = ProfileSources.Load(null, out r);
+            Check(none.Count == 0 && r.Source == "none" && r.PrimaryReason == ProfileReadReason.FileMissing && !r.PrimaryExists, "hiçbir şey yok: dosya bulunamadı");
+            Check(ProfileSources.ConfigCandidates().Count == 3 && ProfileSources.ConfigCandidates()[0].Key == ProfileSources.PrimaryLabel, "3 aday, birincil önce");
+            Check(ProfileSources.ConfigCandidates().All(c => c.Value.IndexOf("Program Files", StringComparison.OrdinalIgnoreCase) < 0), "kurulum klasörü aday değil");
+
+            // primary: unknown layout; profiles folder has two files
+            Directory.CreateDirectory(Path.Combine(app, "OpenVPN Connect", "profiles"));
+            File.WriteAllText(Path.Combine(app, "OpenVPN Connect", "config.json"), "{\"persist:root\":\"{\\\"other\\\":{}}\"}");
+            File.WriteAllText(Path.Combine(app, "OpenVPN Connect", "profiles", "1700000000001.ovpn"), FakeOvpn);
+            File.WriteAllText(Path.Combine(app, "OpenVPN Connect", "profiles", "1700000000002.ovpn"), "remote gw.globex.example\n");
+            var fromDir = ProfileSources.Load(null, out r);
+            Check(r.Source == "profiles-dir" && fromDir.Count == 2 && fromDir.All(p => p.EstimatedId) && r.PrimaryReason == ProfileReadReason.UnknownLayout && r.PrimaryExists, "bilinmeyen düzen: profil klasöründen 2 tahmini profil");
+            Check(fromDir.Any(p => p.Id == "1700000000002" && p.Name == "gw.globex.example"), "kimlik = dosya adı, ad = sunucu");
+            Check(r.Degraded && !r.Transient, "yedek kaynak: bozulma işaretli");
+
+            // a good config.json under %LOCALAPPDATA% wins over the folder
+            Directory.CreateDirectory(Path.Combine(local, "OpenVPN Connect"));
+            File.WriteAllText(Path.Combine(local, "OpenVPN Connect", "config.json"), Config39(FakeProfiles39()));
+            var fromLocal = ProfileSources.Load(null, out r);
+            Check(r.Source == "config" && r.SourceLabel.StartsWith("%LOCALAPPDATA%") && fromLocal.Count == 4 && fromLocal.All(p => !p.EstimatedId), "ikinci aday config.json kazanır");
+            Check(ProfileSources.StatusText(r).Contains("%LOCALAPPDATA%") && r.Degraded, "durum metni adayı söyler");
+
+            // manual sources: folder (one level) + files, deduplicated, missing counted
+            Directory.CreateDirectory(Path.Combine(manual, "alt"));
+            File.WriteAllText(Path.Combine(manual, "Stark Elektrik.ovpn"), "remote vpn.stark.example\n");
+            File.WriteAllText(Path.Combine(manual, "alt", "Wingtip.ovpn"), "remote gw.wingtip.example\n");
+            var extra = Path.Combine(root, "Litware.ovpn");
+            File.WriteAllText(extra, "remote vpn.litware.example\n");
+            var s = AppSettings.Defaults();
+            s.ProfileFolder = manual;
+            s.ExtraProfileFiles = new List<string> { extra, Path.Combine(manual, "Stark Elektrik.ovpn"), Path.Combine(root, "yok.ovpn") };
+            var withManual = ProfileSources.Load(s, out r);
+            var manualOnes = withManual.Where(p => p.Origin == "manual").ToList();
+            Check(manualOnes.Count == 3 && r.ManualCount == 3 && r.ManualMissing == 1 && withManual.Count == 7, "elle: klasör + dosyalar, yinelenen bir kez, eksik sayılır (" + manualOnes.Count + "/" + withManual.Count + ")");
+            Check(manualOnes.All(p => p.EstimatedId) && manualOnes.Any(p => p.Name == "Stark Elektrik" && p.Id == "Stark Elektrik"), "elle eklenenler tahmini kimlikli");
+            Check(ProfileSources.StatusText(r).Contains("elle eklenen: 3"), "durum metni elle eklenenleri sayar");
+
+            // diagnosis: versions, candidates and layout; no profile, host or file names (sanitized as the app does)
+            File.Delete(Path.Combine(local, "OpenVPN Connect", "config.json"));
+            var diag = new LogSanitizer().Sanitize(ProfileSources.Diagnostic(s));
+            var leaks = new[] { "Wayne", "Stark", "Wingtip", "Litware", "globex", "1700000000001", "FAKE", root }.Where(x => diag.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            Check(leaks.Count == 0, "tanı metninde ad yok (" + string.Join(", ", leaks.ToArray()) + ")");
+            Check(diag.Contains("OpenVPN Connect: ") &&diag.Contains("%APPDATA%/OpenVPN Connect/config.json - var") && diag.Contains("UnknownLayout") && diag.Contains("persist:root (string→object"), "tanı metni sürüm, adaylar ve düzeni içerir:\n" + diag);
+        }
+        finally
+        {
+            ProfileSources.AppDataOverride = ProfileSources.LocalAppDataOverride = ProfileSources.ProgramDataOverride = null;
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    static void ProfileSourceSettings()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ovpnqs-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        SettingsStore.PathOverride = path;
+        try
+        {
+            File.WriteAllText(path, "{\"Hotkey\":\"Ctrl+Alt+V\",\"Presence\":\"both\"}");
+            var old = SettingsStore.Load();
+            Check(old.ProfileFolder == "" && old.ExtraProfileFiles != null && old.ExtraProfileFiles.Count == 0 && old.Presence == "both", "2.1.1 dosyası: boş kaynak, diğerleri korunur");
+            old.ProfileFolder = @"D:\Profiller "; old.ExtraProfileFiles.Add(@"D:\a.ovpn"); old.ExtraProfileFiles.Add(@"d:\A.ovpn"); old.ExtraProfileFiles.Add(" ");
+            var copy = old.Clone(); copy.ExtraProfileFiles.Add("x");
+            Check(old.ExtraProfileFiles.Count == 3, "Clone listeyi paylaşmaz");
+            SettingsStore.Save(old);
+            var back = SettingsStore.Load();
+            Check(back.ProfileFolder == @"D:\Profiller" && back.ExtraProfileFiles.Count == 1 && back.ExtraProfileFiles[0] == @"D:\a.ovpn", "kaydedilip geri okunur (kırpılır, yinelenen ve boş atılır)");
+            File.WriteAllText(path, "{\"ProfileFolder\":5,\"ExtraProfileFiles\":\"D:\\\\a.ovpn\"}");
+            var bad = SettingsStore.Load();
+            Check(bad.ProfileFolder == "" && bad.ExtraProfileFiles.Count == 0, "yanlış türler boşa döner");
+            File.WriteAllText(path, "{\"ExtraProfileFiles\":[1,\"D:\\\\b.ovpn\",null]}");
+            Check(SettingsStore.Load().ExtraProfileFiles.SequenceEqual(new[] { @"D:\b.ovpn" }), "dizide yalnız metinler");
+        }
+        finally
+        {
+            SettingsStore.PathOverride = null;
+            try { File.Delete(path); } catch { }
+        }
     }
 }
