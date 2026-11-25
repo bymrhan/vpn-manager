@@ -3,7 +3,7 @@
 OpenVPN Connect, FortiClient VPN, Sophos Connect ve WatchGuard Mobile VPN with SSL profillerinizi **tek bir cam (Liquid Glass) panelden** arayın, sabitleyin ve tek tıkla bağlanın.
 Yüzlerce profil arasında firma adı, sunucu adresi, kullanıcı adı veya `.ovpn` dosya adıyla anında filtreler; Windows 10/11, tek `exe`, yönetici izni gerektirmez.
 
-> **English summary:** A small Windows (WinForms/GDI+, .NET Framework 4.8) companion for OpenVPN Connect, FortiClient VPN, Sophos Connect and WatchGuard Mobile VPN with SSL. Instant fuzzy search over all saved profiles, one-click connect/disconnect, pinning, live connection state, server reachability dots, backups, duplicate cleanup, connection history, light/dark/system themes, a choice of where the app lives ("Uygulama nerede görünsün": tray icon only (default), tray icon plus a taskbar button while the window is shown, or a taskbar button for as long as the app runs with no tray icon, where hiding minimizes to the button and closing the window exits; applied live, the 2.1.0 "Görev çubuğunda göster" toggle migrates). Connecting runs in the background (client windows are not brought to the front; they appear only when you must act). Optional self-update from GitHub Releases (ask / automatic / off, SHA-256 verified, rollback). Own log (`%APPDATA%\OpenVpnQuickSearch\logs`) and a consent-based error report: after a crash the app offers to send a sanitized report (no passwords, usernames, profile/customer names, hosts, IPs, e-mail, machine name or user paths). Builds without a token open it as a pre-filled GitHub issue page in the user's browser (the report travels to GitHub inside that page's address but is published only when the user presses Submit). Release builds may embed a GitHub token (recommended: a classic `public_repo` token of a separate bot account, which can only open issues and comments here as a stranger; anyone can extract it from the exe); the app then creates the public issue itself after the user agreed, or without asking in the automatic mode, which needs a one-time confirmed warning (at most 3 a day per install). Local log files are not sanitized; only reports are. Sophos and WatchGuard get their filter tab as soon as the client is installed and enabled, even with no connection yet (the empty tab says how to add one). The app is unsigned. The Sophos list/state output format was verified only against an empty profile list, and WatchGuard (single connection, driven through its dialog) was not exercised against a live tunnel. Install with one PowerShell line (below). Screenshots use fictional sample companies (`--demo` mode).
+> **English summary:** A small Windows (WinForms/GDI+, .NET Framework 4.8) companion for OpenVPN Connect, FortiClient VPN, Sophos Connect and WatchGuard Mobile VPN with SSL. Instant fuzzy search over all saved profiles, one-click connect/disconnect, pinning, live connection state, server reachability dots, backups, duplicate cleanup, connection history, light/dark/system themes, a choice of where the app lives ("Uygulama nerede görünsün": tray icon only (default), tray icon plus a taskbar button while the window is shown, or a taskbar button for as long as the app runs with no tray icon, where hiding minimizes to the button and closing the window exits; applied live, the 2.1.0 "Görev çubuğunda göster" toggle migrates). Connecting runs in the background (client windows are not brought to the front; they appear only when you must act). Optional self-update from GitHub Releases (ask / automatic / off, SHA-256 verified, rollback). Own log (`%APPDATA%\OpenVpnQuickSearch\logs`) and a consent-based error report: after a crash the app offers to send a sanitized report (no passwords, usernames, profile/customer names, hosts, IPs, e-mail, machine name or user paths). Builds without a token open it as a pre-filled GitHub issue page in the user's browser (the report travels to GitHub inside that page's address but is published only when the user presses Submit). Release builds may embed a GitHub token (recommended: a classic `public_repo` token of a separate bot account, which can only open issues and comments here as a stranger; anyone can extract it from the exe); the app then creates the public issue itself after the user agreed, or without asking in the automatic mode, which needs a one-time confirmed warning (at most 3 a day per install). Local log files are not sanitized; only reports are. Sophos and WatchGuard get their filter tab as soon as the client is installed and enabled, even with no connection yet (the empty tab says how to add one). If OpenVPN Connect's `config.json` cannot be read (its layout was verified on 3.9.x only), the app parses it tolerantly, tries other locations, then lists the `.ovpn` files of OpenVPN Connect's `profiles` folder (ids guessed from file names); the empty list states the reason and offers "Profil klasörünü seç…" / "Dosya seç…", Settings › Genel › "Profil kaynağı" has the same actions plus "Tanı bilgisini kopyala" (versions, tried paths and the file's key names / JSON types only, no values). The app is unsigned. The Sophos list/state output format was verified only against an empty profile list, and WatchGuard (single connection, driven through its dialog) was not exercised against a live tunnel. Install with one PowerShell line (below). Screenshots use fictional sample companies (`--demo` mode).
 
 ## Kurulum (tek komut)
 
@@ -144,9 +144,23 @@ Bağlanma ve kesme sırasında istemci pencereleri **öne getirilmez**; çalış
 ## Ayarlar
 `⋯ > Ayarlar…` veya `Ctrl+,`; dört sayfa: *Genel*, *Yedekleme*, *Görünüm*, *Hakkında*. Dosya: `%APPDATA%\OpenVpnQuickSearch\settings.json`.
 - **Genel:** kısayol tuşu, Windows açılışında başlat, uygulama nerede görünsün (*Tepsi* / *Tepsi + düğme* / *Görev çubuğu*), panel tarafı, sunucu erişim testi ve her istemci için bir anahtar: *FortiClient profilleri*, *Sophos Connect profilleri*, *WatchGuard profilleri*. Sophos ve WatchGuard anahtarları yalnızca o istemci **algılanırsa** görünür. Bir anahtarı kapatmak o istemcinin satırlarını listeden kaldırır ve durumunu sıfırlar; anahtarlar yeniden başlatmada korunur.
+- **Genel > Profil kaynağı:** OpenVPN profillerinin nereden okunduğu (*Kaynak: config.json (12 profil)* / *Kaynak: profil klasörü (…)* / *Okunamadı: …*), *Yeniden tara*, *Klasör seç…*, *Kaynağı sıfırla*, *Tanı bilgisini kopyala*; bkz. [Profiller okunamazsa](#profiller-okunamazsa).
 - **Yedekleme** ve **Görünüm:** yedek sıklığı / sayısı / klasörü; tema.
 - **Hakkında > Güncelleme:** bkz. aşağıdaki [Güncelleme](#güncelleme).
 - **Hakkında > Tanılama:** *Hata kaydı tut*, *Çökmeden sonra rapor öner*, *Günlük klasörünü aç*, *Son hatayı bildir*; bkz. [Hata raporları ve günlükler](#hata-raporları-ve-günlükler).
+
+## Profiller okunamazsa
+OpenVPN Connect profilleri `%APPDATA%\OpenVPN Connect\config.json` içinde tutar; bu dosyanın iç düzeni yalnızca 3.9.x sürümlerinde doğrulandı. Liste boş kalırsa uygulama sırasıyla şunları dener:
+1. `config.json`'ı esnek okur (iç içe metin ya da nesne, harita ya da dizi, farklı alan adları; profil listesi başka bir düzeydeyse onu arar).
+2. `%LOCALAPPDATA%\OpenVPN Connect\config.json` ve `%PROGRAMDATA%\OpenVPN Connect\config.json` (kurulum klasörü okunmaz).
+3. OpenVPN Connect'in `profiles` klasöründeki `.ovpn` dosyaları (en çok 500 dosya, 2 düzey). Kimlik dosya adından **tahmin edilir**; bağlantı doğrulanamazsa durum satırı bunu söyler. `.ovpn` içinden yalnızca ad ve `remote` satırları okunur; sertifika ve anahtarlar okunmaz.
+4. Sizin seçtiğiniz klasör ve dosyalar (her yenilemede eklenir).
+
+Yedek bir kaynak kullanıldığı sürece kaynaklar 30 saniyede bir yeniden denenir; hangi kaynağın kullanıldığı günlüğe yazılır.
+
+**Elle:** boş liste nedenini yazar (dosya yok / okunamadı / düzen tanınmıyor / 0 profil) ve iki düğme gösterir: **Profil klasörünü seç…** (klasör ayarlara kaydedilir, bir alt klasör düzeyiyle taranır) ve **Dosya seç…** (seçilen `.ovpn` dosyaları "elle eklenen" olarak listelenir; ardından *İçe aktar* akışı bunları OpenVPN Connect'e eklemeyi önerir). Aynı işlemler Ayarlar > Genel > **Profil kaynağı** altındadır; *Kaynağı sıfırla* elle eklenenleri listeden çıkarır (dosyalar silinmez).
+
+**Tanı bilgisi gönderme:** Ayarlar > Genel > Profil kaynağı > **Tanı bilgisini kopyala** panoya şunu koyar: uygulama ve OpenVPN Connect sürümü, denenen konumlar (var/yok, boyut) ve `config.json`'ın yalnızca anahtar adlarıyla JSON türleri (kimlikler `<id>` olur; değer, profil, sunucu ve kullanıcı adı yoktur; metin rapor temizleyicisinden geçer). Bunu bir [hata kaydına](https://github.com/bymrhan/vpn-manager/issues) yapıştırın. Aynı özet, dosya var ama profil okunamadığında uygulama günlüğüne bir kez `profiles` etiketiyle yazılır.
 
 ## Güncelleme
 Uygulama, bu deponun [Releases](https://github.com/bymrhan/vpn-manager/releases) sayfasındaki son sürümü denetler. Ayarlar > Hakkında > **Güncelleme** bloğu:
@@ -220,7 +234,7 @@ Gerçek profilleriniz yerine uydurma örnek firmalarla arayüzü denemek (ekran 
 & "$env:LOCALAPPDATA\Programs\OpenVPN Hizli Arama\OpenVPN-Hizli-Arama.exe" --demo --instance=demo --settings="$env:TEMP\vpnm-demo.json"
 ```
 
-Ek anahtarlar: `--demo-connected=Acme` (örnek profili bağlı göster), `--demo-search=en`, `--demo-settings=0..3` (Ayarlar sayfası), `--scale=1.5`. Demo modu uydurma Sophos ve WatchGuard satırları da gösterir. Demo modunda OpenVPN Connect / FortiClient / Sophos / WatchGuard'a, sabitleme dosyasına ve ayarlara **dokunulmaz**; hiçbir bağlantı başlatılmaz, günlük yazılmaz, hata raporu ve tarayıcı açılmaz.
+Ek anahtarlar: `--demo-connected=Acme` (örnek profili bağlı göster), `--demo-search=en`, `--demo-settings=0..3` (Ayarlar sayfası), `--demo-empty` (profil okunamadı boş durumu), `--scale=1.5`. Demo modu uydurma Sophos ve WatchGuard satırları da gösterir. Demo modunda OpenVPN Connect / FortiClient / Sophos / WatchGuard'a, sabitleme dosyasına ve ayarlara **dokunulmaz**; hiçbir bağlantı başlatılmaz, günlük yazılmaz, hata raporu ve tarayıcı açılmaz.
 
 ## Geliştirme
 
@@ -248,6 +262,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `modules\QuietWindow.cs` | İstemci pencerelerini arka planda tutma |
 | `modules\Updater.cs` | Güncelleme denetimi, doğrulama, kurulum yardımcısı |
 | `modules\Diagnostics.cs` | Uygulama günlüğü, çökme yakalama, rapor temizleyici, GitHub kayıt bağlantısı |
+| `modules\ProfileSources.cs` | OpenVPN profil kaynakları: esnek `config.json` okuma, `.ovpn` taraması, elle seçilen kaynaklar, düzen özeti |
 | `modules\BackupService.cs`, `ImportService.cs`, `Duplicates.cs` | Yedek, içe/dışa aktarma, yinelenen profiller |
 | `modules\Demo.cs` | `--demo` örnek verisi |
 | `paket\` | Kurulum paketi şablonları (`kur.ps1`, `kaldir.ps1`, `BENIOKU.txt`, kullanım) |
@@ -266,6 +281,8 @@ Kaynak dosyalar UTF-8 **BOM'lu** ve CRLF'dir (Türkçe metin için `csc` ve Wind
 
 ## Sürüm
 **2.0.0** — Liquid Glass yeniden tasarımı: cam malzeme sistemi, bağlantı kapsülü, yeni liste/menü/ayarlar, SVG ikon kütüphanesi, FortiClient entegrasyonu, uzaktan kurulum.
+
+**2.1.2** — Profiller okunamazsa yedek kaynaklar (esnek `config.json`, diğer konumlar, `.ovpn` klasörü), nedenini söyleyen boş liste, elle klasör/dosya seçimi ve *Tanı bilgisini kopyala*.
 
 **2.1.1** — *Uygulama nerede görünsün* seçeneği (*Tepsi* / *Tepsi + düğme* / *Görev çubuğu*); eski *Görev çubuğunda göster* ayarı taşınır.
 

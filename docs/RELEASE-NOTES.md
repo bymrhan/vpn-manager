@@ -3,6 +3,12 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.2
+
+- **Profiller okunamazsa:** OpenVPN Connect'in `config.json` dosyası esnek okunur (farklı iç düzenler, başka konumlar); okunamazsa profiller OpenVPN Connect'in `profiles` klasöründeki `.ovpn` dosyalarından listelenir ve kaynak 30 sn'de bir yeniden denenir.
+- Boş liste nedenini söyler (dosya yok / okunamadı / düzen tanınmıyor / 0 profil) ve *Profil klasörünü seç…* ile *Dosya seç…* düğmelerini gösterir; aynı işlemler Ayarlar > Genel > *Profil kaynağı* altında da var.
+- *Tanı bilgisini kopyala*: sürümler, denenen konumlar ve `config.json`'ın yalnızca anahtar adlarıyla türleri (değer, ad ve sunucu içermez); aynı özet bir kez uygulama günlüğüne yazılır.
+
 ## 2.1.1
 
 - **Uygulama nerede görünsün:** Ayarlar > Genel'de üç seçenek: *Tepsi* (varsayılan), *Tepsi + düğme* (pencere açıkken görev çubuğunda da düğme), *Görev çubuğu* (tepsi simgesi yok; düğme uygulama açık olduğu sürece durur, gizlemek pencereyi düğmeye küçültür, pencereyi kapatmak uygulamadan çıkar). Kaydedince yeniden başlatmadan uygulanır.
