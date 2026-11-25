@@ -207,6 +207,25 @@ internal static class UpdateLogic
         catch { return false; }
     }
 
+    // kur.ps1 -Update writes this file into the install dir when an update fails (rolled back or not
+    // applied): line 1 the version, line 2 the UTC time (yyyy-MM-ddTHH:mm:ssZ). Success deletes it.
+    public const string FailureMarkerName = "guncelleme-basarisiz.txt";
+    public static readonly TimeSpan FailureBlock = TimeSpan.FromHours(24);
+
+    // True when the marker says this version failed less than 24 h ago: no automatic install of it
+    // (the "ask" notice is shown instead), so a failing update cannot loop install -> rollback -> restart.
+    // A marker with an unreadable time counts as fresh; one dated more than a day in the future is ignored.
+    public static bool FailureMarkerBlocks(string markerText, string version, DateTime nowUtc)
+    {
+        if (string.IsNullOrWhiteSpace(markerText) || string.IsNullOrEmpty(version)) return false;
+        var lines = markerText.Replace("\r", "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length == 0 || CompareVersions(lines[0].Trim(), version) != 0 || NormalizeTag(lines[0].Trim()) == null) return false;
+        DateTime when;
+        if (lines.Length < 2 || !DateTime.TryParseExact(lines[1].Trim(), "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out when)) return true;
+        var age = nowUtc - when;
+        return age < FailureBlock && age > -FailureBlock;
+    }
+
     // First lines of the release notes for the notice (markdown markers removed).
     public static string NotesPreview(string notes, int maxChars)
     {
@@ -306,8 +325,10 @@ internal static class UpdateClient
         if (!string.Equals(expected, actual, StringComparison.Ordinal)) { TryDeleteFile(zipPath); error = "SHA-256 doğrulanamadı; güncelleme durduruldu"; return null; }
         var pkg = Path.Combine(workDir, "paket");
         if (Directory.Exists(pkg)) Directory.Delete(pkg, true);
-        // .NET 4.6.2+ refuses entries that would land outside pkg ("..\" paths).
-        ZipFile.ExtractToDirectory(zipPath, pkg);
+        // .NET 4.6.2+ refuses entries that would land outside pkg ("..\" paths, zip slip): the whole
+        // package is then rejected and whatever was extracted is removed.
+        try { ZipFile.ExtractToDirectory(zipPath, pkg); }
+        catch (Exception ex) { TryDelete(pkg); TryDeleteFile(zipPath); error = "paket açılamadı: " + ex.Message; return null; }
         if (!File.Exists(Path.Combine(pkg, "kur.ps1")) || !File.Exists(Path.Combine(pkg, "uygulama", UpdateLogic.ExeName)))
         {
             TryDelete(pkg); error = "paket beklenmeyen biçimde"; return null;
@@ -321,7 +342,9 @@ internal static class UpdateClient
     // this process to end, backs up every file it replaces, copies the new files, restores the
     // backup if any copy fails (the old exe stays), and starts the app again. Settings, pins,
     // history (%APPDATA%) and the profile pack in the install dir are not touched.
-    public static bool StartInstall(string packageDir, string installDir, int waitPid, bool background, out string error)
+    public const string HelperReadyFile = ".bekliyor";
+
+    public static bool StartInstall(string packageDir, string installDir, string version, int waitPid, bool background, out string error)
     {
         error = null;
         try
@@ -330,9 +353,24 @@ internal static class UpdateClient
             if (!File.Exists(kur)) { error = "kur.ps1 bulunamadı"; return false; }
             var ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
             var args = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Quote(kur) +
-                       " -Update -InstallDir " + Quote(installDir.TrimEnd('\\')) + " -WaitPid " + waitPid.ToString(CultureInfo.InvariantCulture) + (background ? " -Background" : "");
+                       " -Update -InstallDir " + Quote(installDir.TrimEnd('\\')) + " -WaitPid " + waitPid.ToString(CultureInfo.InvariantCulture) + (background ? " -Background" : "") +
+                       (UpdateLogic.NormalizeTag(version) != null ? " -Version " + UpdateLogic.NormalizeTag(version) : "");
             var psi = new ProcessStartInfo(ps, args) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, WorkingDirectory = packageDir };
-            using (Process.Start(psi)) { }
+            using (var helper = Process.Start(psi))
+            {
+                // The app exits right after this returns. If PowerShell is blocked or dies at once,
+                // stay up and report it instead of leaving the user without the app. kur.ps1 writes
+                // <package>\.bekliyor once its checks passed and it is waiting for this process; give
+                // it up to 10 s (PowerShell can take a few seconds to start).
+                if (helper == null) { error = "güncelleme yardımcısı başlatılamadı"; return false; }
+                var ready = Path.Combine(packageDir, HelperReadyFile);
+                var sw = Stopwatch.StartNew();
+                while (!File.Exists(ready))
+                {
+                    if (helper.WaitForExit(200)) { error = "güncelleme yardımcısı hemen kapandı (kod " + helper.ExitCode + ")"; return false; }
+                    if (sw.ElapsedMilliseconds > 10000) break;   // slow start, still running: it will wait for this process
+                }
+            }
             return true;
         }
         catch (Exception ex) { error = ex.Message; return false; }
@@ -383,6 +421,13 @@ internal static class UpdateClient
     static void TryDelete(string dir) { try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { } }
     static void TryDeleteFile(string f) { try { if (File.Exists(f)) File.Delete(f); } catch { } }
 
+    // Contents of the install dir's failure marker, or null.
+    public static string ReadFailureMarker(string installDir)
+    {
+        try { var f = Path.Combine(installDir, UpdateLogic.FailureMarkerName); return File.Exists(f) ? File.ReadAllText(f) : null; }
+        catch { return null; }
+    }
+
     // Opens a page of this repository's releases in the browser (other addresses are ignored).
     public static void OpenReleasePage(string url)
     {
@@ -409,7 +454,8 @@ internal sealed class UpdateNotice : Form
         var canInstall = installedCopy && r.CanInstall;
         AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.Manual; DoubleBuffered = true;
-        BackColor = Ui.GlassPrimary; // the buttons paint their parent's color behind them: same as the glass card ForeColor = Ui.Text; Font = SFonts.Nav;
+        BackColor = Ui.GlassPrimary; // the buttons paint their parent's color behind them: same as the glass card
+        ForeColor = Ui.Text; Font = SFonts.Nav;
         Text = "Güncelleme";
         caption = "Sürüm " + r.Version + " hazır";
         var notes = UpdateLogic.NotesPreview(r.Notes, 160);

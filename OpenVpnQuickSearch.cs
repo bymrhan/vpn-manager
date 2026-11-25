@@ -1798,7 +1798,9 @@ internal sealed class SearchForm : Form
         updateRelease = r;
         if (openSettings != null) openSettings.ReleaseNotesUrl = r.HtmlUrl;
         if (manual) ReportUpdate("Sürüm " + r.Version + " hazır");
-        if (!manual && settings.UpdateMode == "auto" && IsInstalledCopy && r.CanInstall && r.Version != updateBadVersion)
+        // A version whose install failed in the last 24 h (marker left by kur.ps1) is not installed automatically again.
+        if (!manual && settings.UpdateMode == "auto" && IsInstalledCopy && r.CanInstall && r.Version != updateBadVersion &&
+            !UpdateLogic.FailureMarkerBlocks(UpdateClient.ReadFailureMarker(UpdateLogic.InstallDir), r.Version, DateTime.UtcNow))
         {
             StartUpdateDownload(r, false);
             return;
@@ -1884,7 +1886,7 @@ internal sealed class SearchForm : Form
         if (updatePackage == null || exiting) return;
         if (!IsInstalledCopy) { updatePackage = null; return; }   // guarded before download; never replace a portable copy
         string err;
-        if (!UpdateClient.StartInstall(updatePackage, UpdateLogic.InstallDir, Process.GetCurrentProcess().Id, background, out err))
+        if (!UpdateClient.StartInstall(updatePackage, UpdateLogic.InstallDir, updateRelease != null ? updateRelease.Version : null, Process.GetCurrentProcess().Id, background, out err))
         {
             updatePackage = null; updateBadVersion = updateRelease != null ? updateRelease.Version : null;
             SetStatus("Güncelleme başlatılamadı: " + err);

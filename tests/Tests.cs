@@ -53,6 +53,8 @@ static class Tests
         Run("Güncelleme: boşta mı / kurulu kopya mı", UpdateIdleAndInstall);
         Run("Güncelleme: paket doğrulama", UpdateVerifyPackage);
         Run("Ayarlar: güncelleme", UpdateSettings);
+        Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
+        Run("Güncelleme: zip slip", UpdateZipSlip);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -565,5 +567,56 @@ static class Tests
             SettingsStore.PathOverride = null;
             try { File.Delete(path); } catch { }
         }
+    }
+
+    static void UpdateFailureMarker()
+    {
+        var now = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+        Func<string, DateTime, string> marker = (v, t) => v + "\r\n" + t.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture) + "\r\n";
+        Check(!UpdateLogic.FailureMarkerBlocks(null, "2.1.0", now) && !UpdateLogic.FailureMarkerBlocks("", "2.1.0", now), "işaret yok: otomatik kurulur");
+        Check(UpdateLogic.FailureMarkerBlocks(marker("2.1.0", now.AddHours(-2)), "2.1.0", now), "aynı sürüm 2 saat önce başarısız: otomatik kurulmaz");
+        Check(UpdateLogic.FailureMarkerBlocks(marker("v2.1.0", now.AddHours(-23)), "2.1.0", now), "23 saat sonra hâlâ engelli (v öneki)");
+        Check(!UpdateLogic.FailureMarkerBlocks(marker("2.1.0", now.AddHours(-25)), "2.1.0", now), "24 saat geçince süresi doldu");
+        Check(!UpdateLogic.FailureMarkerBlocks(marker("2.0.5", now.AddHours(-1)), "2.1.0", now), "başka sürümün işareti engellemez");
+        Check(UpdateLogic.FailureMarkerBlocks("2.1.0\r\nbozuk", "2.1.0", now), "okunamayan zaman: engelli sayılır");
+        Check(!UpdateLogic.FailureMarkerBlocks(marker("2.1.0", now.AddDays(3)), "2.1.0", now), "gelecekte tarihli işaret yok sayılır");
+        Check(!UpdateLogic.FailureMarkerBlocks("bozuk\r\n", "2.1.0", now), "bozuk işaret yok sayılır");
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-marker-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Check(UpdateClient.ReadFailureMarker(dir) == null, "kurulum klasöründe işaret yok");
+            File.WriteAllText(Path.Combine(dir, UpdateLogic.FailureMarkerName), marker("2.1.0", now));
+            Check(UpdateLogic.FailureMarkerBlocks(UpdateClient.ReadFailureMarker(dir), "2.1.0", now.AddHours(1)), "kur.ps1'in yazdığı işaret okunur");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void UpdateZipSlip()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ovpnqs-zipslip-" + Guid.NewGuid().ToString("N"));
+        var work = Path.Combine(root, "work");
+        Directory.CreateDirectory(work);
+        try
+        {
+            var zip = Path.Combine(work, "paket.zip");
+            using (var z = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                using (var w = new StreamWriter(z.CreateEntry("kur.ps1").Open())) w.Write("# sahte kur.ps1");
+                using (var w = new StreamWriter(z.CreateEntry("uygulama/OpenVPN-Hizli-Arama.exe").Open())) w.Write("sahte exe");
+                using (var w = new StreamWriter(z.CreateEntry("../evil.txt").Open())) w.Write("dışarı");
+                using (var w = new StreamWriter(z.CreateEntry("../../evil2.txt").Open())) w.Write("dışarı");
+            }
+            string hash;
+            using (var sha = System.Security.Cryptography.SHA256.Create()) using (var fs = File.OpenRead(zip))
+                hash = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
+            string err; string pkg = null; Exception thrown = null;
+            try { pkg = UpdateClient.VerifyAndExtract(zip, UpdateLogic.Sha256Line(hash, "OpenVPN-Hizli-Arama-Kurulum.zip"), work, out err); }
+            catch (Exception ex) { thrown = ex; err = null; }
+            Check(thrown == null && pkg == null && err != null, "doğru özetli ama ../ içeren paket reddedilir");
+            Check(!File.Exists(Path.Combine(work, "evil.txt")) && !File.Exists(Path.Combine(root, "evil.txt")) && !File.Exists(Path.Combine(root, "evil2.txt")) && !File.Exists(Path.Combine(Path.GetDirectoryName(root), "evil2.txt")), "açma klasörü dışına hiçbir şey yazılmaz");
+            Check(!Directory.Exists(Path.Combine(work, "paket")), "yarım açılan paket silinir");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 }
