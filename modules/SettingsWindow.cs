@@ -709,7 +709,7 @@ internal sealed class SettingsForm : Form
             .Add(presenceRow)
             .Add(new SRow("Panel tarafı", "Yapışılacak taraf", side, Glyph.Panel))
             .Add(new SRow("Sunucu erişim testi", "Profil avatarında yeşil / kırmızı durum noktası.", reach, Glyph.Server))
-            .Add(new SRow("Sık kullanılanları göster", "Son 60 günde en az 3 kez bağlanılan profiller, son kullanılanların altında.", often, Glyph.Refresh))
+            .Add(new SRow("Sık kullanılanları göster", "Son 60 günde en az 3 kez bağlanılan profiller.", often, Glyph.Refresh))
             .Add(new SRow("FortiClient profilleri", "FortiClient VPN tünellerini de listele.", forti, Glyph.ShieldLock));
         // Sophos / WatchGuard toggles only for clients found on this PC (demo: always, nothing is read).
         if (Demo.On || SophosStore.IsInstalled)
