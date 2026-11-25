@@ -174,6 +174,11 @@ static class Tests
         Check(SophosStore.HasState("State: Disconnected\n") && !SophosStore.HasState("garbage\nlines") && !SophosStore.HasState(""), "durum anahtarı anlaşıldı mı");
         Check(!SophosStore.UseAdapterFallback(true) && SophosStore.UseAdapterFallback(false), "adaptör yedeği yalnız çıktı anlaşılmadıysa");
         Check(SophosStore.Load() != null, "Load hata vermez");
+
+        var fm = SophosStore.FailureMessage("Sophos bağlantısı başlatılamadı", 3);
+        Check(fm == "Sophos bağlantısı başlatılamadı (sccli çıkış kodu 3).", "hata metni: sabit ileti + çıkış kodu");
+        Check(SophosStore.FailureMessage("Sophos bağlantısı kesilemedi", SophosStore.TimedOut) == "Sophos bağlantısı kesilemedi (sccli yanıt vermedi).", "hata metni: zaman aşımı");
+        Check(SophosStore.FailureMessage("x", -1).IndexOf("-1", StringComparison.Ordinal) > 0, "negatif çıkış kodu da yazılır");
     }
 
     // Forti's stored target must stay "OpenVpnQuickSearch:forti:<name>" (existing saved credentials).

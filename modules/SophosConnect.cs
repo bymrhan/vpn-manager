@@ -178,8 +178,8 @@ internal static class SophosStore
             if (!string.IsNullOrEmpty(cred.Username)) { args.Add("-u"); args.Add(cred.Username); }
             args.Add("-p"); args.Add(cred.Password);
         }
-        string o, e;
-        try { if (!Run(args.ToArray(), out o, out e)) return "Sophos bağlantısı başlatılamadı" + FirstLine(e, o); }
+        string o, e; int code;
+        try { if (!Run(args.ToArray(), out o, out e, out code)) return FailureMessage("Sophos bağlantısı başlatılamadı", code); }
         catch (Exception ex) { return "Sophos bağlantısı başlatılamadı: " + ex.Message; }
         return null;
     }
@@ -189,8 +189,8 @@ internal static class SophosStore
     {
         if (!IsInstalled) return "Sophos Connect bulunamadı.";
         if (string.IsNullOrEmpty(name)) return "Sophos bağlantı adı boş.";
-        string o, e;
-        try { if (!Run(new[] { "disable", "-n", name }, out o, out e)) return "Sophos bağlantısı kesilemedi" + FirstLine(e, o); }
+        string o, e; int code;
+        try { if (!Run(new[] { "disable", "-n", name }, out o, out e, out code)) return FailureMessage("Sophos bağlantısı kesilemedi", code); }
         catch (Exception ex) { return "Sophos bağlantısı kesilemedi: " + ex.Message; }
         return null;
     }
@@ -245,21 +245,26 @@ internal static class SophosStore
         return false;
     }
 
-    static string FirstLine(string a, string b)
+    // Status text for a failed sccli command: a fixed message and the exit code only. sccli's own
+    // output is never shown (a command that echoes its arguments could reveal the password).
+    // exitCode TimedOut: sccli did not finish in time.
+    internal const int TimedOut = int.MinValue;
+    internal static string FailureMessage(string action, int exitCode)
     {
-        foreach (var s in new[] { a, b })
-        {
-            if (string.IsNullOrEmpty(s)) continue;
-            foreach (var l in s.Replace("\r", "").Split('\n')) { var t = l.Trim(); if (t.Length > 0) return ": " + (t.Length > 120 ? t.Substring(0, 120) : t); }
-        }
-        return ".";
+        return action + (exitCode == TimedOut ? " (sccli yanıt vermedi)." : " (sccli çıkış kodu " + exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + ").");
+    }
+
+    static bool Run(string[] args, out string stdout, out string stderr)
+    {
+        int code;
+        return Run(args, out stdout, out stderr, out code);
     }
 
     // Runs sccli hidden with a 10 s timeout. True when it exited with code 0. Arguments are quoted;
     // they are never written to any log.
-    static bool Run(string[] args, out string stdout, out string stderr)
+    static bool Run(string[] args, out string stdout, out string stderr, out int exitCode)
     {
-        stdout = ""; stderr = "";
+        stdout = ""; stderr = ""; exitCode = TimedOut;
         var psi = new ProcessStartInfo
         {
             FileName = CliPath, Arguments = JoinArgs(args), UseShellExecute = false, CreateNoWindow = true,
@@ -282,7 +287,8 @@ internal static class SophosStore
             pr.WaitForExit(); // flush the async readers
             lock (so) stdout = so.ToString();
             lock (se) stderr = se.ToString();
-            return pr.ExitCode == 0;
+            exitCode = pr.ExitCode;
+            return exitCode == 0;
         }
     }
 
