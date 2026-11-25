@@ -403,7 +403,6 @@ internal sealed class ProfileList : Control
         var success = id == successId ? (now - successT0) : -1F; var fail = id == failId ? (now - failT0) : -1F;
         var live = LiveText(p);
         var providerIcon = VpnProviders.Asset(VpnProviders.KindOf(p));
-        var providerLabel = VpnProviders.RowLabel(p); // null for OpenVPN rows
         if (fail >= 0) rr.Offset((int)(Math.Sin(fail * 44) * S(6) * Math.Max(0F, 1 - fail / FailDuration)), 0);
         var active = selected || hover;
         var radius = S(12);
@@ -483,8 +482,7 @@ internal sealed class ProfileList : Control
         var x = (int)(av.Right + S(14));
         var textRight = right - sw - iconW - S(10);
         DrawHighlighted(g, p.Name, Ui.RowNameFont, Fade(Ui.Text, appear), new Rectangle(x, rr.Y + S(10), Math.Max(10, textRight - x), S(20)));
-        var sub = providerLabel != null ? providerLabel + (p.Host.Length > 0 ? "  ·  " + p.Host : "") : p.Host.Length > 0 ? p.Host : "Sunucu adresi yok";
-        if (p.Username.Length > 0) sub += "  ·  " + p.Username;
+        var sub = VpnProviders.RowSubLine(p);
         var sx = x;
         var reach = ReachOf(p);
         if (reach != ReachState.Unknown)
@@ -494,6 +492,9 @@ internal sealed class ProfileList : Control
             Assets.Draw(g, reach == ReachState.Up ? "reach-up" : reach == ReachState.Down ? "reach-down" : "reach-checking", new RectangleF(sx, rr.Y + S(32), S(12), S(12)), Fade(rc, appear), 1.25F);
             sx += S(17);
         }
+        // provider logo before the provider name: [logo] Provider · server · user
+        Assets.Draw(g, providerIcon, new RectangleF(sx, rr.Y + S(32.5F), S(13), S(13)), Fade(Ui.Muted, appear), 1.2F);
+        sx += S(18);
         DrawHighlighted(g, sub, Ui.SubFont, Fade(Ui.Muted, appear), new Rectangle(sx, rr.Y + S(31), Math.Max(10, right - sw - iconW - S(10) - sx), S(18)));
     }
 

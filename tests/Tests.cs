@@ -362,6 +362,9 @@ static class Tests
         Check(VpnProviders.Asset(VpnKind.Sophos) == "provider-sophos" && VpnProviders.Asset(VpnKind.WatchGuard) == "provider-watchguard" && VpnProviders.Asset(VpnKind.Forti) == "provider-forti" && VpnProviders.Asset(VpnKind.OpenVpn) == "provider-openvpn", "rozet simgeleri");
         Check(VpnProviders.RowLabel(ovpn) == null && VpnProviders.RowLabel(forti) == "FortiClient SSL", "OpenVPN satırı etiketsiz, Forti kendi kaynağını gösterir");
         Check(VpnProviders.RowLabel(sophos) == "Sophos Connect" && VpnProviders.RowLabel(wg) == "WatchGuard SSL", "Sophos / WatchGuard satır etiketi");
+        Check(VpnProviders.RowSubLine(new VpnProfile { Id = "ovpn-9", Name = "x", Host = "vpn.example", Username = "ayse" }) == "OpenVPN  ·  vpn.example  ·  ayse", "alt satır: sağlayıcı · sunucu · kullanıcı (OpenVPN de adını gösterir)");
+        Check(VpnProviders.RowSubLine(new VpnProfile { Id = "ovpn-9", Name = "x", Host = "", Username = "" }) == "OpenVPN  ·  Sunucu adresi yok", "alt satır: sunucusuz OpenVPN");
+        Check(VpnProviders.RowSubLine(new VpnProfile { Id = "forti-ssl:ALFA", Name = "ALFA", Source = "FortiClient SSL", Host = "gw.example:10443", Username = null }) == "FortiClient SSL  ·  gw.example:10443", "alt satır: Forti kaynağı ve sunucu");
         Check(VpnProviders.GroupTitle(VpnKind.Sophos) == "SOPHOS CONNECT" && VpnProviders.GroupTitle(VpnKind.WatchGuard) == "WATCHGUARD SSL VPN" && VpnProviders.GroupTitle(VpnKind.Forti) == "FORTICLIENT VPN", "grup başlıkları");
 
         Check(VpnProviders.CredentialPrefix(VpnKind.Sophos) == SophosStore.CredentialPrefix && VpnProviders.CredentialPrefix(VpnKind.WatchGuard) == WatchGuardStore.CredentialPrefix && VpnProviders.CredentialPrefix(VpnKind.Forti) == null, "kimlik bilgisi önekleri");

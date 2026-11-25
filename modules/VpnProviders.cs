@@ -89,6 +89,17 @@ internal static class VpnProviders
         return k == VpnKind.Sophos ? "Sophos Connect" : k == VpnKind.WatchGuard ? "WatchGuard SSL" : SegmentName(k);
     }
 
+    // A row's second line, drawn after the provider logo: provider name · server · user name.
+    // OpenVPN rows name their provider too, so every row reads the same way.
+    public static string RowSubLine(VpnProfile p)
+    {
+        var k = KindOf(p); var host = p.Host ?? ""; var user = p.Username ?? "";
+        var s = RowLabel(p) ?? Label(k);
+        if (host.Length > 0) s += "  ·  " + host; else if (k == VpnKind.OpenVpn) s += "  ·  Sunucu adresi yok";
+        if (user.Length > 0) s += "  ·  " + user;
+        return s;
+    }
+
     // Filter bar segments: "Tümü" (null), OpenVPN, then each enabled provider in a fixed order.
     public static List<VpnKind?> Segments(bool forti, bool sophos, bool watchGuard)
     {
