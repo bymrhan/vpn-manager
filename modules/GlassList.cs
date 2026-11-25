@@ -45,6 +45,11 @@ internal sealed class ProfileList : Control
     public event Action<VpnProfile> Activated, PinToggled, DisconnectRequested;
     public event Action<string> ConnectFailedId;
     public event Action<VpnProfile, Point> MenuRequested;
+    // Buttons under the empty-state text (e.g. "Profil klasörünü seç…"); set before SetRows.
+    public string[] EmptyActions = new string[0];
+    public event Action<int> EmptyActionClicked;
+    Rectangle[] emptyActionRects = new Rectangle[0];
+    int hoverAction = -1;
 
     public ProfileList()
     {
@@ -266,6 +271,13 @@ internal sealed class ProfileList : Control
     {
         base.OnMouseMove(e);
         mouseX = e.X;
+        if (rows.Count == 0)
+        {
+            var a = EmptyActionAt(e.Location);
+            if (a != hoverAction) { hoverAction = a; Invalidate(); }
+            Cursor = a >= 0 ? Cursors.Hand : Cursors.Default;
+            return;
+        }
         if (dragThumb)
         {
             var th = ThumbRect().Height; var range = Height - th;
@@ -330,6 +342,12 @@ internal sealed class ProfileList : Control
         plugPress.Target = 0; anim.Kick();
         if (dragThumb) { dragThumb = false; Capture = false; Invalidate(); return; }
         if (e.Button != MouseButtons.Left) return;
+        if (rows.Count == 0)
+        {
+            var a = EmptyActionAt(e.Location);
+            if (a >= 0 && EmptyActionClicked != null) EmptyActionClicked(a);
+            return;
+        }
         var i = HitRow(e.Location);
         if (i < 0 || i != downIndex) return;
         var p = rows[i].Profile; var rr = RowRect(rows[i]);
@@ -579,5 +597,37 @@ internal sealed class ProfileList : Control
             foreach (var l in lines) { var h = GText.Measure(l, font).Height; GText.Draw(g, l, font, new Rectangle(S(30), y, maxW, h), line == emptyTitle ? Ui.Text : Ui.Muted, true); y += h + S(2); }
             y += S(4);
         }
+        PaintEmptyActions(g, y + S(8));
+    }
+
+    // Glass pill buttons, side by side when they fit, else stacked; centered.
+    void PaintEmptyActions(Graphics g, int y)
+    {
+        var actions = EmptyActions ?? new string[0];
+        var rects = new Rectangle[actions.Length];
+        if (actions.Length > 0)
+        {
+            var h = S(34); var gap = S(10);
+            var widths = actions.Select(a => GText.Measure(a, Ui.SubFont).Width + S(32)).ToArray();
+            var row = widths.Sum() + gap * (actions.Length - 1) <= Width - S(40);
+            var x = (Width - (row ? widths.Sum() + gap * (actions.Length - 1) : 0)) / 2;
+            for (var i = 0; i < actions.Length; i++)
+            {
+                rects[i] = row ? new Rectangle(x, y, widths[i], h) : new Rectangle((Width - widths[i]) / 2, y + i * (h + gap), widths[i], h);
+                if (row) x += widths[i] + gap;
+                var r = new RectangleF(rects[i].X + 0.5F, rects[i].Y + 0.5F, rects[i].Width - 1, rects[i].Height - 1);
+                Glass.Paint(g, r, h / 2F, i == hoverAction ? GlassKind.Selected : GlassKind.Secondary, i == hoverAction ? 1F : 1.6F);
+                GText.Draw(g, actions[i], Ui.SubFont, rects[i], i == hoverAction ? Ui.Text : Ui.Highlight, true);
+            }
+        }
+        emptyActionRects = rects;
+    }
+
+    int EmptyActionAt(Point p)
+    {
+        var rects = emptyActionRects;
+        if (EmptyActions == null || rects.Length != EmptyActions.Length) return -1;
+        for (var i = 0; i < rects.Length; i++) if (rects[i].Contains(p)) return i;
+        return -1;
     }
 }

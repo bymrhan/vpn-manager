@@ -726,7 +726,67 @@ internal sealed class SettingsForm : Form
             wg.CheckedChanged += delegate { work.ShowWatchGuard = wg.Checked; Dirty(); };
             card.Add(new SRow("WatchGuard profilleri", "WatchGuard SSL VPN sunucularını da listele.", wg, Glyph.ShieldLock));
         }
+        BuildProfileSource(page);
         pages.Add(page);
+    }
+
+    // ---------- Profile source (2.1.2, modules\ProfileSources.cs) ----------
+
+    SRow sourceRow, profileFolderRow;
+    public Func<AppSettings, string> RescanProfiles;      // main form: reads the sources with these settings, returns StatusText
+    public Func<AppSettings, string> ProfileDiagnostic;   // main form: sanitized diagnostic text (key names, versions, paths with flags)
+
+    string ProfileFolderText()
+    {
+        var n = work.ExtraProfileFiles != null ? work.ExtraProfileFiles.Count : 0;
+        var folder = string.IsNullOrEmpty(work.ProfileFolder) ? "Seçilmedi" : ShortPath(work.ProfileFolder);
+        return folder + (n > 0 ? "  ·  elle eklenen dosya: " + n : "");
+    }
+
+    public void SetProfileSourceStatus(string text)
+    {
+        if (sourceRow == null) return;
+        sourceRow.Description = text; sourceRow.Invalidate();
+    }
+
+    void BuildProfileSource(SPage page)
+    {
+        var rescan = new SButton("Yeniden tara", SButtonKind.Secondary, Glyph.Refresh);
+        sourceRow = new SRow("OpenVPN profil kaynağı", "—", rescan, Glyph.Server);
+        rescan.Click += delegate { if (RescanProfiles != null) { SetProfileSourceStatus("Taranıyor…"); sourceRow.Update(); SetProfileSourceStatus(RescanProfiles(work)); } };
+        var pick = new SButton("Klasör seç…", SButtonKind.Secondary, Glyph.Folder);
+        profileFolderRow = new SRow("Profil klasörü", ProfileFolderText(), pick, Glyph.Folder);
+        pick.Click += delegate
+        {
+            using (var dlg = new FolderBrowserDialog { Description = ".ovpn profillerinin bulunduğu klasörü seçin (bir alt klasör düzeyi de taranır).", ShowNewFolderButton = false })
+            {
+                if (!string.IsNullOrEmpty(work.ProfileFolder) && Directory.Exists(work.ProfileFolder)) dlg.SelectedPath = work.ProfileFolder;
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                work.ProfileFolder = dlg.SelectedPath; profileFolderRow.Description = ProfileFolderText(); profileFolderRow.Invalidate(); Dirty();
+            }
+        };
+        var reset = new SButton("Kaynağı sıfırla", SButtonKind.Secondary, Glyph.Delete);
+        reset.Click += delegate
+        {
+            work.ProfileFolder = ""; if (work.ExtraProfileFiles != null) work.ExtraProfileFiles.Clear();
+            profileFolderRow.Description = ProfileFolderText(); profileFolderRow.Invalidate(); Dirty();
+        };
+        var copy = new SButton("Tanı bilgisini kopyala", SButtonKind.Secondary, Glyph.Copy);
+        copy.Click += delegate
+        {
+            if (ProfileDiagnostic == null) return;
+            var text = ProfileDiagnostic(work);
+            try { Clipboard.SetText(text); }
+            catch (Exception ex) { GlassDialog.Show(this, "Panoya kopyalanamadı:\n" + ex.Message, "Tanı bilgisi", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            GlassDialog.Show(this, "Tanı bilgisi panoya kopyalandı (" + text.Split('\n').Length + " satır). Hata bildirimine ya da iletinize yapıştırın.\n\n" +
+                "İçerik: uygulama ve OpenVPN Connect sürümü, denenen konumlar (var/yok, boyut) ve config.json'ın yalnızca anahtar adları ile JSON türleri. " +
+                "Profil, sunucu ve kullanıcı adları ile değerler yoktur.", "Tanı bilgisi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+        page.Add(new SCard(), caption: "PROFİL KAYNAĞI")
+            .Add(sourceRow)
+            .Add(profileFolderRow)
+            .Add(new SRow("Elle eklenenleri kaldır", "Seçilen klasör ve dosyalar listeden çıkar; dosyalar silinmez.", reset, Glyph.Delete))
+            .Add(new SRow("Tanı bilgisi", "Profiller okunamazsa geliştiriciye gönderin", copy, Glyph.Info));
     }
 
     void BuildBackup()

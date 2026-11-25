@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -37,6 +38,8 @@ internal sealed class AppSettings
     public bool LogEnabled;             // app log + crash / error records in %APPDATA%\OpenVpnQuickSearch\logs
     public string CrashPrompt;          // "ask" (offer the GitHub report after a crash), "auto" (send without asking; needs the embedded token), "never"
     public bool CrashAutoConsent;       // the one-time public-issue warning for "auto" was confirmed
+    public string ProfileFolder;        // 2.1.2: extra .ovpn folder picked by hand ("" = none; ProfileSources)
+    public List<string> ExtraProfileFiles; // 2.1.2: .ovpn files picked by hand ("elle eklenen")
 
     public static AppSettings Defaults()
     {
@@ -62,7 +65,9 @@ internal sealed class AppSettings
             SkippedVersion = "",
             LogEnabled = true,
             CrashPrompt = "ask",
-            CrashAutoConsent = false
+            CrashAutoConsent = false,
+            ProfileFolder = "",
+            ExtraProfileFiles = new List<string>()
         };
     }
 
@@ -73,7 +78,9 @@ internal sealed class AppSettings
 
     public AppSettings Clone()
     {
-        return (AppSettings)MemberwiseClone();
+        var c = (AppSettings)MemberwiseClone();
+        c.ExtraProfileFiles = ExtraProfileFiles != null ? new List<string>(ExtraProfileFiles) : new List<string>(); // no shared list
+        return c;
     }
 
     // Brings every field into its allowed set or range. Invalid values fall back to the default.
@@ -95,6 +102,12 @@ internal sealed class AppSettings
         SkippedVersion = UpdateLogic.NormalizeTag(SkippedVersion) ?? "";
         if (CrashPrompt != "ask" && CrashPrompt != "auto" && CrashPrompt != "never") CrashPrompt = d.CrashPrompt;
         if (CrashPrompt != "auto") CrashAutoConsent = false;   // the consent belongs to the auto mode only
+        ProfileFolder = string.IsNullOrWhiteSpace(ProfileFolder) ? "" : ProfileFolder.Trim();
+        var files = new List<string>();
+        if (ExtraProfileFiles != null)
+            foreach (var f in ExtraProfileFiles)
+                if (!string.IsNullOrWhiteSpace(f) && files.Count < 500 && !files.Contains(f.Trim(), StringComparer.OrdinalIgnoreCase)) files.Add(f.Trim());
+        ExtraProfileFiles = files;
     }
 }
 
@@ -149,6 +162,8 @@ internal static class SettingsStore
             s.LogEnabled = Bool(d, "LogEnabled", s.LogEnabled);
             s.CrashPrompt = Str(d, "CrashPrompt", s.CrashPrompt);
             s.CrashAutoConsent = Bool(d, "CrashAutoConsent", s.CrashAutoConsent);
+            s.ProfileFolder = Str(d, "ProfileFolder", s.ProfileFolder);         // 2.1.2; missing = ""
+            s.ExtraProfileFiles = StrList(d, "ExtraProfileFiles");              // 2.1.2; missing or wrong type = empty
         }
         catch
         {
@@ -187,6 +202,8 @@ internal static class SettingsStore
         d["LogEnabled"] = n.LogEnabled;
         d["CrashPrompt"] = n.CrashPrompt;
         d["CrashAutoConsent"] = n.CrashAutoConsent;
+        d["ProfileFolder"] = n.ProfileFolder;
+        d["ExtraProfileFiles"] = n.ExtraProfileFiles.ToArray();
         var json = new JavaScriptSerializer().Serialize(d);
 
         var path = FilePath;
@@ -210,6 +227,18 @@ internal static class SettingsStore
     {
         object v;
         return (d.TryGetValue(k, out v) && v is string) ? (string)v : def;
+    }
+
+    // Strings of a JSON array; anything else (missing, wrong type) gives an empty list.
+    static List<string> StrList(IDictionary<string, object> d, string k)
+    {
+        var list = new List<string>();
+        object v;
+        if (!d.TryGetValue(k, out v) || v == null || v is string) return list;
+        var items = v as System.Collections.IEnumerable;
+        if (items == null || v is IDictionary<string, object>) return list;
+        foreach (var x in items) { var s = x as string; if (s != null) list.Add(s); }
+        return list;
     }
 
     static bool Bool(IDictionary<string, object> d, string k, bool def)
