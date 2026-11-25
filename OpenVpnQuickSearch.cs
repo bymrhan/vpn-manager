@@ -1730,6 +1730,160 @@ internal sealed class SearchForm : Form
 
     void SaveSettings() { try { SettingsStore.Save(settings); } catch (Exception ex) { SetStatus("Ayarlar kaydedilemedi: " + ex.Message); } }
 
+    // ---------- Updates (modules\Updater.cs) ----------
+    // One schedule inside the 500 ms watcher, no extra polling thread: the first check about 30 s
+    // after start, then once a minute "is a check due?" (UpdateLogic.IsDue). The network work runs
+    // on the thread pool. Never in demo mode. A failed automatic check is silent.
+    //   ask : the UpdateNotice offers Şimdi güncelle / Sonra / Bu sürümü atla.
+    //   auto: download + verify in the background, install once the app is idle (UpdateLogic.IsIdle).
+    //   off : only "Şimdi denetle" in the settings.
+    // A copy outside the install dir only notifies (release page).
+
+    bool updateChecking, updateDownloading, updateCheckedThisRun;
+    DateTime updateFailUtc = DateTime.MinValue;
+    ReleaseInfo updateRelease;          // newest offered release found in this run
+    string updatePackage;               // verified, extracted package waiting for an idle moment (auto)
+    string updateBadVersion;            // a version whose download / verification failed: not retried this run
+    UpdateNotice updateNotice;
+
+    bool IsInstalledCopy { get { return UpdateLogic.IsInstalledCopy(Application.ExecutablePath, UpdateLogic.InstallDir); } }
+
+    void UpdateTick()
+    {
+        if (exiting || tick < 60) return;                                    // ~30 s after start
+        if (updatePackage != null && tick % 10 == 0) InstallWhenIdle();      // every 5 s while a package waits
+        if (tick % 120 != 60) return;                                        // once a minute
+        if (settings.UpdateMode == "off" || updateChecking || updateDownloading || updatePackage != null) return;
+        if (!UpdateLogic.IsDue(settings.UpdateInterval, settings.LastUpdateCheckUtc, updateFailUtc, updateCheckedThisRun, DateTime.UtcNow)) return;
+        CheckForUpdates(false);
+    }
+
+    void CheckForUpdates(bool manual)
+    {
+        if (Demo.On) { ReportUpdate("Demo modunda güncelleme denetlenmez"); return; }
+        if (updateChecking) return;
+        updateChecking = true;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            string err; var r = UpdateClient.FetchLatest(out err);
+            if (!manual) UpdateClient.CleanupOld();
+            UiInvoke(delegate { OnUpdateChecked(r, err, manual); });
+        });
+    }
+
+    void ReportUpdate(string text)
+    {
+        if (openSettings != null) openSettings.SetUpdateResult(text, settings.LastUpdateCheckUtc);
+    }
+
+    void OnUpdateChecked(ReleaseInfo r, string err, bool manual)
+    {
+        updateChecking = false; updateCheckedThisRun = true;
+        if (r == null)
+        {
+            if (!manual) { updateFailUtc = DateTime.UtcNow; return; }   // silent; retried at the next due time
+            ReportUpdate("Denetlenemedi: " + (err ?? "bilinmeyen hata"));
+            SetStatus("Güncelleme denetlenemedi");
+            return;
+        }
+        updateFailUtc = DateTime.MinValue;
+        settings.LastUpdateCheckUtc = DateTime.UtcNow; SaveSettings();
+        var current = UpdateLogic.CurrentVersion;
+        if (!UpdateLogic.ShouldOffer(r, current, settings.SkippedVersion, manual))
+        {
+            if (manual) { ReportUpdate("Güncel (" + current + ")"); SetStatus("Uygulama güncel"); }
+            return;
+        }
+        updateRelease = r;
+        if (openSettings != null) openSettings.ReleaseNotesUrl = r.HtmlUrl;
+        if (manual) ReportUpdate("Sürüm " + r.Version + " hazır");
+        if (!manual && settings.UpdateMode == "auto" && IsInstalledCopy && r.CanInstall && r.Version != updateBadVersion)
+        {
+            StartUpdateDownload(r, false);
+            return;
+        }
+        ShowUpdateNotice(r);
+    }
+
+    void ShowUpdateNotice(ReleaseInfo r)
+    {
+        if (exiting) return;
+        if (updateNotice != null && !updateNotice.IsDisposed) updateNotice.Close();
+        var n = new UpdateNotice(r, UpdateLogic.CurrentVersion, IsInstalledCopy && r.CanInstall);
+        n.UpdateNow += delegate { StartUpdateDownload(r, true); };
+        n.Skip += delegate { settings.SkippedVersion = r.Version; SaveSettings(); SetStatus("Sürüm " + r.Version + " atlandı"); };
+        n.Notes += delegate { UpdateClient.OpenReleasePage(r.HtmlUrl); };
+        n.FormClosed += delegate { if (updateNotice == n) updateNotice = null; n.Dispose(); };
+        updateNotice = n;
+        n.Show();
+    }
+
+    // userAsked: "Şimdi güncelle" (install right after verification, restart in the foreground).
+    // Otherwise (auto mode) the package waits for an idle moment and the app restarts with --background.
+    void StartUpdateDownload(ReleaseInfo r, bool userAsked)
+    {
+        if (updateDownloading || Demo.On) return;
+        if (updatePackage != null) { if (userAsked) InstallUpdate(false); return; }
+        updateDownloading = true;
+        if (userAsked) SetStatus("Sürüm " + r.Version + " indiriliyor…");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            string err; var pkg = UpdateClient.Download(r, out err);
+            UiInvoke(delegate
+            {
+                updateDownloading = false;
+                if (pkg == null)
+                {
+                    updateBadVersion = r.Version;
+                    SetStatus("Güncelleme başarısız: " + err);
+                    ReportUpdate("Güncelleme başarısız: " + err);
+                    return;
+                }
+                updatePackage = pkg;
+                if (userAsked) InstallUpdate(false);
+                else InstallWhenIdle();
+            });
+        });
+    }
+
+    // Nothing in flight that an exit would cut short. A connected VPN is fine (the clients run on their own).
+    bool UpdateBusy
+    {
+        get
+        {
+            return busy || list.IsConnecting || list.IsDisconnecting || connectingProfileId != null || disconnectStarted != DateTime.MinValue ||
+                   fortiConnectingId != null || fortiDisconnectingId != null || Exts.Any(x => x.InFlight) || updateChecking;
+        }
+    }
+
+    // Any other window of ours open (settings, dialogs, history, password prompt); the notice does not count.
+    bool UpdateDialogOpen
+    {
+        get { return openSettings != null || Application.OpenForms.Cast<Form>().Any(f => f != this && f != updateNotice && f.Visible); }
+    }
+
+    void InstallWhenIdle()
+    {
+        if (updatePackage == null || exiting || settings.UpdateMode != "auto") return;
+        if (!UpdateLogic.IsIdle(Visible && WindowState != FormWindowState.Minimized, UpdateClient.IdleMilliseconds(), UpdateBusy, UpdateDialogOpen)) return;
+        InstallUpdate(true);
+    }
+
+    void InstallUpdate(bool background)
+    {
+        if (updatePackage == null || exiting) return;
+        if (!IsInstalledCopy) { updatePackage = null; return; }   // guarded before download; never replace a portable copy
+        string err;
+        if (!UpdateClient.StartInstall(updatePackage, UpdateLogic.InstallDir, Process.GetCurrentProcess().Id, background, out err))
+        {
+            updatePackage = null; updateBadVersion = updateRelease != null ? updateRelease.Version : null;
+            SetStatus("Güncelleme başlatılamadı: " + err);
+            return;
+        }
+        // kur.ps1 -Update waits for this process to end, copies the new files and starts the app again.
+        ExitApp();
+    }
+
     void ShowSettings()
     {
         if (openSettings != null) { openSettings.Activate(); return; }
@@ -1740,6 +1894,8 @@ internal sealed class SearchForm : Form
             f.ProfileCount = profiles.Count;
             f.BackupNow = delegate { BackupNow(false); };
             f.OpenBackupFolder = OpenBackupFolder;
+            f.CheckUpdates = delegate { CheckForUpdates(true); };
+            if (updateRelease != null) f.ReleaseNotesUrl = updateRelease.HtmlUrl;
             f.Icon = Icon;
             openSettings = f;
             DialogResult dr;
@@ -1747,6 +1903,7 @@ internal sealed class SearchForm : Form
             if (dr != DialogResult.OK || f.Result == null) { ApplyTheme(); return; } // undo live theme preview
             var r = f.Result;
             r.LastBackupUtc = settings.LastBackupUtc; // a backup may have run while the window was open
+            r.LastUpdateCheckUtc = settings.LastUpdateCheckUtc; r.SkippedVersion = settings.SkippedVersion; // same for an update check
             var old = settings;
             settings = r;
             SaveSettings();
@@ -2199,6 +2356,7 @@ internal sealed class SearchForm : Form
         if (!Demo.On && settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (Visible || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
         if (!Demo.On) { MaybePollExt(sophos); MaybePollExt(watchGuard); }
         if (!Demo.On && tick % 600 == 450 && Visible && ExtEnabled(sophos)) RefreshSophosAsync(); // new / removed Sophos connections, every 5 min
+        if (!Demo.On) UpdateTick();
 
         // The process scan (~8 ms, allocates) only runs when the tracked window is gone, and at most every 2 s.
         // Otherwise the cached handle is checked (microseconds); WinEvent hooks cover moves in between.

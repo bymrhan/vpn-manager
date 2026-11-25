@@ -690,7 +690,32 @@ internal sealed class SettingsForm : Form
 
     void BuildAbout()
     {
-        var page = NewPage("Hakkında", "OpenVPN Hızlı Arama · sürüm 2.0");
+        var page = NewPage("Hakkında", "OpenVPN Hızlı Arama · sürüm " + UpdateLogic.CurrentVersion);
+
+        // Updates: current version + last check + "Şimdi denetle", mode, interval, release notes.
+        checkUpdates = new SButton("Şimdi denetle", SButtonKind.Secondary, Glyph.Refresh);
+        checkUpdates.Click += delegate
+        {
+            if (CheckUpdates == null) return;
+            SetUpdateStatus("Denetleniyor…");
+            CheckUpdates();
+        };
+        updateRow = new SRow("Sürüm " + UpdateLogic.CurrentVersion, LastCheckText(original.LastUpdateCheckUtc), checkUpdates, Glyph.Info);
+        var modes = new[] { "ask", "auto", "off" };
+        var mode = new SSegmented("Sor", "Otomatik", "Kapalı") { SelectedIndex = Math.Max(0, Array.IndexOf(modes, work.UpdateMode)) };
+        var modeRow = new SRow("Güncellemeler", ModeText(work.UpdateMode), mode, Glyph.Refresh);
+        mode.Changed += delegate { work.UpdateMode = modes[mode.SelectedIndex]; modeRow.Description = ModeText(work.UpdateMode); modeRow.Invalidate(); Dirty(); };
+        var intervals = new[] { "startup", "daily", "weekly" };
+        var interval = new SSegmented("Açılışta", "Günlük", "Haftalık") { SelectedIndex = Math.Max(0, Array.IndexOf(intervals, work.UpdateInterval)) };
+        interval.Changed += delegate { work.UpdateInterval = intervals[interval.SelectedIndex]; Dirty(); };
+        var notes = new SButton("Aç", SButtonKind.Secondary, Glyph.Open);
+        notes.Click += delegate { UpdateClient.OpenReleasePage(ReleaseNotesUrl); };
+        page.Add(new SCard(), caption: "GÜNCELLEME")
+            .Add(updateRow)
+            .Add(modeRow)
+            .Add(new SRow("Denetleme sıklığı", "Profil bilgisi gönderilmez", interval, Glyph.History))
+            .Add(new SRow("Sürüm notları", "GitHub sürüm sayfası", notes, Glyph.Open));
+
         var dataDir = Path.GetDirectoryName(SettingsStore.FilePath);
         var openData = new SButton("Aç", SButtonKind.Secondary, Glyph.Folder);
         openData.Click += delegate { try { Directory.CreateDirectory(dataDir); Process.Start("explorer.exe", "\"" + dataDir + "\""); } catch { } };
@@ -719,6 +744,34 @@ internal sealed class SettingsForm : Form
         }
         hero.Subtitle = (count >= 0 ? count : profileCount) + " profil  ·  " + ShortPath(work.BackupFolder);
         hero.Invalidate();
+    }
+
+    // ---------- Updates ----------
+
+    SButton checkUpdates; SRow updateRow;
+    public Action CheckUpdates;                                   // main form runs the check (off the UI thread)
+    public string ReleaseNotesUrl = UpdateLogic.ReleasesPage;      // newest release page once a check found one
+
+    static string ModeText(string mode)
+    {
+        return mode == "auto" ? "Otomatik: boştayken sessizce kurar"
+             : mode == "off" ? "Kapalı: yalnızca elle denetim"
+             : "Sor: haber verir, siz seçersiniz";
+    }
+
+    static string LastCheckText(DateTime utc)
+    {
+        if (utc <= DateTime.MinValue.AddYears(1)) return "Henüz denetlenmedi";
+        var local = utc.ToLocalTime();
+        var day = local.Date == DateTime.Today ? "bugün" : local.Date == DateTime.Today.AddDays(-1) ? "dün" : local.ToString("d MMMM", System.Globalization.CultureInfo.GetCultureInfo("tr-TR"));
+        return "Son denetim " + day + " " + local.ToString("HH:mm");
+    }
+
+    // Result of a check: "Güncel", "Sürüm X hazır", "Denetlenemedi: …" (shown under the version).
+    public void SetUpdateStatus(string text) { if (updateRow == null) return; updateRow.Description = text; updateRow.Invalidate(); }
+    public void SetUpdateResult(string text, DateTime lastCheckUtc)
+    {
+        SetUpdateStatus(lastCheckUtc > DateTime.MinValue.AddYears(1) ? text + "  ·  " + LastCheckText(lastCheckUtc) : text);
     }
 
     static string OpenVpnInfo()
@@ -790,7 +843,8 @@ internal sealed class SettingsForm : Form
             return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.BackupFolder != original.BackupFolder ||
                    work.BackupFrequency != original.BackupFrequency || work.BackupKeep != original.BackupKeep || work.DockSide != original.DockSide ||
                    work.Theme != original.Theme || work.ReachabilityCheck != original.ReachabilityCheck || work.ShowForti != original.ShowForti ||
-                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard;
+                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard ||
+                   work.UpdateMode != original.UpdateMode || work.UpdateInterval != original.UpdateInterval;
         }
     }
 

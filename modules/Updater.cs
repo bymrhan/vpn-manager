@@ -405,7 +405,8 @@ internal sealed class UpdateNotice : Form
     public UpdateNotice(ReleaseInfo r, string current, bool canInstall)
     {
         AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
-        StartPosition = FormStartPosition.Manual; DoubleBuffered = true; BackColor = Ui.Bg; ForeColor = Ui.Text; Font = SFonts.Nav;
+        StartPosition = FormStartPosition.Manual; DoubleBuffered = true;
+        BackColor = Ui.GlassPrimary; // the buttons paint their parent's color behind them: same as the glass card ForeColor = Ui.Text; Font = SFonts.Nav;
         Text = "Güncelleme";
         caption = "Sürüm " + r.Version + " hazır";
         var notes = UpdateLogic.NotesPreview(r.Notes, 160);
