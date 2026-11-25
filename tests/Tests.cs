@@ -41,6 +41,11 @@ static class Tests
         Run("WatchGuard kimlik bilgisi öneki", WatchGuardCredentialPrefix);
         Run("WatchGuard Load hiçbir şey başlatmaz", WatchGuardLoad);
         Run("WatchGuard pencere kararları", WatchGuardWindowRules);
+        Run("Sağlayıcı yönlendirme", ProviderRouting);
+        Run("Sağlayıcı bağlantı durumu ve yoklama", ProviderState);
+        Run("Erişim testi uç noktası", ReachabilityEndpoints);
+        Run("Ayarlar: sağlayıcı anahtarları", ProviderSettings);
+        Run("Demo sağlayıcı satırları", DemoProviders);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -278,6 +283,113 @@ static class Tests
         Check(!WatchGuardGui.IsExitQuestionText("Example question: leaving closes the tunnel.", questions), "sorunun bir parçası eşleşmez");
         Check(!WatchGuardGui.IsExitQuestionText("", questions) && !WatchGuardGui.IsExitQuestionText("x", null) && !WatchGuardGui.IsExitQuestionText("", new[] { "" }), "boş metin / boş liste eşleşmez");
         Check(WatchGuardGui.NormalizeText(" a \r\n\r\n b\t") == "a b", "boşluk sadeleştirme");
+    }
+
+    static VpnProfile P(string id, string name = "x", string source = "") { return new VpnProfile { Id = id, Name = name, Host = "", Username = "", Source = source }; }
+
+    static void ProviderRouting()
+    {
+        var ovpn = P("ovpn-1"); var forti = P("forti-ssl:ALFA", "ALFA", "FortiClient SSL"); var ipsec = P("forti-ipsec:BETA");
+        var sophos = SophosStore.MakeProfile("ofis-ornek", "vpn.example"); var wg = WatchGuardStore.MakeProfile("vpn1.example:443", "", 1);
+        Check(VpnProviders.KindOf(ovpn) == VpnKind.OpenVpn && VpnProviders.KindOf(forti) == VpnKind.Forti && VpnProviders.KindOf(ipsec) == VpnKind.Forti, "OpenVPN ve Forti (SSL/IPsec)");
+        Check(VpnProviders.KindOf(sophos) == VpnKind.Sophos && VpnProviders.KindOf(wg) == VpnKind.WatchGuard, "Sophos ve WatchGuard");
+        Check(VpnProviders.KindOf(null) == VpnKind.OpenVpn && VpnProviders.KindOf(new VpnProfile()) == VpnKind.OpenVpn, "boş profil OpenVPN sayılır, hata vermez");
+        Check(VpnProviders.IsOpenVpn(ovpn) && !VpnProviders.IsOpenVpn(forti) && !VpnProviders.IsOpenVpn(sophos) && !VpnProviders.IsOpenVpn(wg), "yalnız OpenVPN profilleri dışa aktarılır / silinir / yinelenen aranır");
+        Check(VpnProviders.IsExternal(VpnKind.Sophos) && VpnProviders.IsExternal(VpnKind.WatchGuard) && !VpnProviders.IsExternal(VpnKind.Forti) && !VpnProviders.IsExternal(VpnKind.OpenVpn), "Sophos/WatchGuard ortak yoldan sürülür");
+
+        Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(true, true, true))) == "Tümü,OpenVPN,FortiClient,Sophos,WatchGuard", "tüm bölümler sırasıyla");
+        Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(false, false, false))) == "Tümü,OpenVPN", "sağlayıcı yoksa iki bölüm");
+        Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(true, false, true))) == "Tümü,OpenVPN,FortiClient,WatchGuard", "Sophos yoksa bölümü yok");
+        var all = VpnProviders.Segments(true, true, true); var some = VpnProviders.Segments(false, false, true);
+        Check(VpnProviders.IndexOf(some, VpnProviders.SegmentAt(all, 4)) == 2, "seçili WatchGuard bölümü sıra değişince korunur");
+        Check(VpnProviders.IndexOf(some, VpnProviders.SegmentAt(all, 3)) == 0, "kaybolan bölüm Tümü'ne döner");
+        Check(VpnProviders.SegmentAt(all, 9) == null && VpnProviders.SegmentAt(all, -1) == null && VpnProviders.SegmentAt(null, 0) == null, "aralık dışı indeks Tümü");
+        Check(VpnProviders.InSegment(wg, null) && VpnProviders.InSegment(wg, VpnKind.WatchGuard) && !VpnProviders.InSegment(wg, VpnKind.OpenVpn) && !VpnProviders.InSegment(sophos, VpnKind.Forti), "bölüm filtresi");
+
+        Check(VpnProviders.Asset(VpnKind.Sophos) == "provider-sophos" && VpnProviders.Asset(VpnKind.WatchGuard) == "provider-watchguard" && VpnProviders.Asset(VpnKind.Forti) == "provider-forti" && VpnProviders.Asset(VpnKind.OpenVpn) == "provider-openvpn", "rozet simgeleri");
+        Check(VpnProviders.RowLabel(ovpn) == null && VpnProviders.RowLabel(forti) == "FortiClient SSL", "OpenVPN satırı etiketsiz, Forti kendi kaynağını gösterir");
+        Check(VpnProviders.RowLabel(sophos) == "Sophos Connect" && VpnProviders.RowLabel(wg) == "WatchGuard SSL", "Sophos / WatchGuard satır etiketi");
+        Check(VpnProviders.GroupTitle(VpnKind.Sophos) == "SOPHOS CONNECT" && VpnProviders.GroupTitle(VpnKind.WatchGuard) == "WATCHGUARD SSL VPN" && VpnProviders.GroupTitle(VpnKind.Forti) == "FORTICLIENT VPN", "grup başlıkları");
+
+        Check(VpnProviders.CredentialPrefix(VpnKind.Sophos) == SophosStore.CredentialPrefix && VpnProviders.CredentialPrefix(VpnKind.WatchGuard) == WatchGuardStore.CredentialPrefix && VpnProviders.CredentialPrefix(VpnKind.Forti) == null, "kimlik bilgisi önekleri");
+        Check(VpnProviders.CredentialKey(sophos) == "ofis-ornek" && VpnProviders.CredentialKey(wg) == "vpn1.example:443" && VpnProviders.CredentialKey(forti) == "ALFA", "kimlik bilgisi / durum anahtarı");
+    }
+
+    static void ProviderState()
+    {
+        var a = WatchGuardStore.MakeProfile("vpn1.example:443", "", 2); var b = WatchGuardStore.MakeProfile("vpn2.example:10443", "", 2);
+        var two = new List<VpnProfile> { a, b }; var one = new List<VpnProfile> { a };
+        Func<VpnProfile, string> key = VpnProviders.CredentialKey;
+        Check(VpnProviders.ResolveConnectedId("VPN2.example:10443", two, key, null, null) == b.Id, "sunucu adı profile eşlenir");
+        Check(VpnProviders.ResolveConnectedId("vpn3.example:1", two, key, null, null) == null, "bilinmeyen ad hiçbir satırı bağlı yapmaz");
+        Check(VpnProviders.ResolveConnectedId(null, two, key, a.Id, a.Id) == null, "null: bağlı değil");
+        Check(VpnProviders.ResolveConnectedId("", two, key, b.Id, a.Id) == b.Id, "adsız bağlantı: gösterilen profil kalır");
+        Check(VpnProviders.ResolveConnectedId("", two, key, null, a.Id) == a.Id, "adsız bağlantı: bağlanılan profil");
+        Check(VpnProviders.ResolveConnectedId("", one, key, null, null) == a.Id && VpnProviders.ResolveConnectedId("", two, key, null, null) == null, "adsız bağlantı: tek profil, yoksa belirsiz");
+        Check(VpnProviders.ResolveConnectedId("", two, key, "watchguard-ssl:gone", null) == null, "listede olmayan eski kimlik kullanılmaz");
+        Check(VpnProviders.ResolveConnectedId("x", new List<VpnProfile>(), key, null, null) == null && VpnProviders.ResolveConnectedId("x", null, key, null, null) == null, "profil yok");
+
+        Check(!VpnProviders.DuePoll(VpnKind.Sophos, true, true, 9.9) && VpnProviders.DuePoll(VpnKind.Sophos, false, false, 10), "Sophos en fazla 10 sn'de bir (meşgulken de)");
+        Check(VpnProviders.DuePoll(VpnKind.WatchGuard, true, false, 2) && !VpnProviders.DuePoll(VpnKind.WatchGuard, true, false, 1.5), "WatchGuard işlem sürerken 2 sn");
+        Check(!VpnProviders.DuePoll(VpnKind.WatchGuard, false, false, 9) && VpnProviders.DuePoll(VpnKind.WatchGuard, false, false, 10), "WatchGuard boşta 10 sn");
+        Check(VpnProviders.DuePoll(VpnKind.WatchGuard, false, true, 1) && !VpnProviders.DuePoll(VpnKind.WatchGuard, false, true, 0.5), "WatchGuard komut bitince hemen");
+
+        var s = SophosStore.MakeProfile("ofis", ""); var f = P("forti-ssl:ALFA"); var o = P("ovpn-1"); o.LastConnected = 5;
+        var starts = new Dictionary<string, long> { { a.Id, 100 }, { s.Id, 200 }, { f.Id, 300 }, { o.Id, 400 } };
+        VpnProviders.ApplyLastConnected(new[] { a, b, s, f, o }, starts);
+        Check(a.LastConnected == 100 && s.LastConnected == 200 && b.LastConnected == 0, "Sophos / WatchGuard son bağlanma geçmişten");
+        Check(f.LastConnected == 0 && o.LastConnected == 5, "Forti ve OpenVPN'e dokunulmaz");
+    }
+
+    static void ReachabilityEndpoints()
+    {
+        var wg = Reachability.FromHint("watchguard-ssl:vpn1.example:10443", "vpn1.example:10443");
+        Check(wg != null && wg.Host == "vpn1.example" && wg.Port == 10443 && wg.Proto == "tcp", "WatchGuard host:port → TCP");
+        var wg2 = Reachability.FromHint("watchguard-ssl:vpn1.example", "vpn1.example");
+        Check(wg2.Port == 443 && wg2.Proto == "tcp", "WatchGuard portsuz → TCP 443");
+        var fo = Reachability.FromHint("forti-ssl:X", "gw.example");
+        Check(fo.Port == 443 && fo.Proto == "tcp", "Forti portsuz → TCP 443 (değişmedi)");
+        var so = Reachability.FromHint("sophos:ofis", "gw.example");
+        Check(so.Host == "gw.example" && so.Proto == "udp", "Sophos portsuz → DNS + ping");
+        var so2 = Reachability.FromHint("sophos:ofis", "gw.example:8443");
+        Check(so2.Port == 8443 && so2.Proto == "tcp", "Sophos host:port → TCP");
+        Check(Reachability.FromHint("sophos:ofis", "") == null && Reachability.FromHint(null, null) == null, "host yoksa test yok");
+    }
+
+    static void ProviderSettings()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ovpnqs-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        SettingsStore.PathOverride = path;
+        try
+        {
+            var d = SettingsStore.Load();
+            Check(d.ShowForti && d.ShowSophos && d.ShowWatchGuard, "varsayılan: tüm sağlayıcılar açık");
+            d.ShowForti = false; d.ShowSophos = false; d.ShowWatchGuard = true;
+            SettingsStore.Save(d);
+            var back = SettingsStore.Load();
+            Check(!back.ShowForti && !back.ShowSophos && back.ShowWatchGuard, "anahtarlar kaydedilip geri okunur");
+            File.WriteAllText(path, "{\"ShowSophos\":\"evet\"}");
+            Check(SettingsStore.Load().ShowSophos, "yanlış türde değer varsayılana döner");
+        }
+        finally
+        {
+            SettingsStore.PathOverride = null;
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    static void DemoProviders()
+    {
+        var rows = Demo.Profiles();
+        var kinds = new HashSet<VpnKind>();
+        foreach (var p in rows) kinds.Add(VpnProviders.KindOf(p));
+        Check(kinds.Count == 4, "demo dört sağlayıcıdan da satır içerir");
+        var fake = true;
+        foreach (var p in rows) if (p.Host.Length > 0 && !p.Host.Split(':')[0].EndsWith(".example", StringComparison.Ordinal)) fake = false;
+        Check(fake, "demo sunucuları kurgusal (.example)");
+        var reach = 0;
+        foreach (var p in rows) if (Demo.Reach(p.Id) != ReachState.Unknown) reach++;
+        Check(reach == rows.Count, "her demo satırının erişim durumu var");
     }
 
     // Load() reads the registry only: as many profiles as Server entries, and no client process.
