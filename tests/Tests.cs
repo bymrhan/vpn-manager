@@ -54,6 +54,9 @@ static class Tests
         Run("Güncelleme: boşta mı / kurulu kopya mı", UpdateIdleAndInstall);
         Run("Güncelleme: paket doğrulama", UpdateVerifyPackage);
         Run("Ayarlar: güncelleme", UpdateSettings);
+        Run("Tema: Derin Mavi kimliği ve eşleme", ThemeIds);
+        Run("Tema: Derin Mavi paleti", OceanPalette);
+        Run("Ayarlar: tema kaydı ve eski dosyalar", ThemeSettings);
         Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
         Run("Güncelleme: zip slip", UpdateZipSlip);
         Run("OpenVPN penceresi geri getirme", OpenVpnWindowRestore);
@@ -721,6 +724,88 @@ static class Tests
             Check(UpdateClient.Download(new ReleaseInfo { Tag = "v9.9.9", Version = "9.9.9", ZipUrl = "https://mirror.example/a.zip", ShaUrl = "https://mirror.example/a.zip.sha256" }, out dl) == null && dl != null, "yabancı adresten indirme yapılmaz");
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void ThemeIds()
+    {
+        foreach (var t in new[] { "dark", "light", "system", "ocean" })
+        {
+            var s = AppSettings.Defaults(); s.Theme = t; s.Normalize();
+            Check(s.Theme == t, "Normalize kabul eder: " + t);
+            Check(s.Clone().Theme == t, "Clone korur: " + t);
+        }
+        foreach (var t in new[] { "Ocean", "blue", "", null, "derin mavi" })
+        {
+            var s = AppSettings.Defaults(); s.Theme = t; s.Normalize();
+            Check(s.Theme == "dark", "bilinmeyen tema varsayılana döner: " + (t ?? "null"));
+        }
+        // tile / wizard segment order: Glass Dark, Glass Light, Sistem, Derin Mavi
+        Check(Themes.Ids.Length == 4 && Themes.Ids[3] == "ocean", "dördüncü seçenek ocean");
+        for (var i = 0; i < Themes.Ids.Length; i++)
+            Check(Themes.IndexOf(Themes.FromIndex(i)) == i, "dizin -> kimlik -> dizin: " + i);
+        Check(Themes.IndexOf("ocean") == 3 && Themes.FromIndex(3) == "ocean", "ocean <-> 3");
+        Check(Themes.IndexOf("x") == 0 && Themes.FromIndex(7) == "dark" && Themes.FromIndex(-1) == "dark", "geçersiz dizin / kimlik Glass Dark");
+        try
+        {
+            Themes.Apply("system");
+            var sysLight = Themes.SystemPrefersLight();
+            Check(Themes.IsLight == sysLight, "Sistem yalnızca açık / koyu izler");
+            if (!sysLight) { Themes.Apply("dark"); var bg = Ui.Bg; Themes.Apply("system"); Check(Ui.Bg == bg, "Sistem (koyu) Glass Dark paletini kullanır, Derin Mavi'yi değil"); }
+            Themes.Apply("ocean");
+            Check(!Themes.IsLight, "Derin Mavi koyu bir tema (IsLight false)");
+        }
+        finally { Themes.Apply("dark"); }
+    }
+
+    static void OceanPalette()
+    {
+        try
+        {
+            Themes.Apply("dark");
+            var darkBg = Ui.Bg; var darkWin = Ui.WindowBg;
+            Themes.Apply("ocean");
+            Check(Ui.Bg != darkBg && Ui.WindowBg != darkWin, "Derin Mavi kendi paletini kurar");
+            var opaque = new[] { Ui.Bg, Ui.Surface, Ui.SurfaceHover, Ui.SelectedFill, Ui.Border, Ui.BorderStrong, Ui.Brand, Ui.Accent, Ui.Accent2, Ui.Text, Ui.Muted, Ui.Faint,
+                                 Ui.Gold, Ui.Success, Ui.Danger, Ui.Warning, Ui.Field, Ui.Highlight, Ui.GlassPrimary, Ui.GlassSecondary, Ui.WindowBg,
+                                 Ui.GlassFloating, Ui.GlassSelected, Ui.WindowTop, Ui.WindowBottom, Ui.MenuSolid, Ui.MenuFrame };
+            Check(opaque.All(c => c.A == 255), "taban renkler opak");
+            Check(Ui.MenuTint.A == 200, "menü akrilik tonu Glass Dark ile aynı saydamlıkta");
+            // body text >= 4.5:1, secondary / faint captions >= 3:1 on every surface they sit on
+            foreach (var surf in new[] { Ui.Bg, Ui.Surface, Ui.SurfaceHover, Ui.SelectedFill, Ui.Field, Ui.WindowBg, Ui.GlassFloating, Ui.MenuSolid })
+            {
+                Check(Themes.Contrast(Ui.Text, surf) >= 4.5, "metin kontrastı >= 4.5");
+                Check(Themes.Contrast(Ui.Muted, surf) >= 4.5, "ikincil metin kontrastı >= 4.5");
+                Check(Themes.Contrast(Ui.Faint, surf) >= 3, "soluk metin kontrastı >= 3");
+                Check(Themes.Contrast(Ui.Danger, surf) >= 3 && Themes.Contrast(Ui.Success, surf) >= 3 && Themes.Contrast(Ui.Warning, surf) >= 3, "durum renkleri >= 3");
+            }
+            Check(Themes.Contrast(System.Drawing.Color.White, Ui.Accent) >= 3, "birincil düğme metni (beyaz) >= 3");
+            Check(Themes.Luminance(Ui.Bg) < 0.05 && Themes.Luminance(Ui.Text) > 0.7, "koyu zemin, açık metin");
+            // the helper itself
+            Check(Math.Abs(Themes.Contrast(System.Drawing.Color.Black, System.Drawing.Color.White) - 21) < 0.01 && Math.Abs(Themes.Contrast(System.Drawing.Color.Gray, System.Drawing.Color.Gray) - 1) < 1e-9, "WCAG kontrast hesabı");
+        }
+        finally { Themes.Apply("dark"); }
+    }
+
+    static void ThemeSettings()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ovpnqs-theme-" + Guid.NewGuid().ToString("N") + ".json");
+        SettingsStore.PathOverride = path;
+        try
+        {
+            var s = AppSettings.Defaults(); s.Theme = "ocean";
+            SettingsStore.Save(s);
+            Check(SettingsStore.Load().Theme == "ocean", "ocean kaydedilip geri okunur");
+            Check(File.ReadAllText(path).Contains("\"Theme\":\"ocean\""), "dosyada \"ocean\" yazar");
+            File.WriteAllText(path, "{\"Hotkey\":\"Ctrl+Alt+V\",\"ShowForti\":true}");
+            Check(SettingsStore.Load().Theme == "dark", "Theme anahtarı olmayan eski dosya: Glass Dark");
+            File.WriteAllText(path, "{\"Theme\":\"system\"}");
+            Check(SettingsStore.Load().Theme == "system", "eski \"system\" değeri korunur");
+            File.WriteAllText(path, "{\"Theme\":\"okyanus\"}");
+            Check(SettingsStore.Load().Theme == "dark", "bilinmeyen değer Glass Dark olur");
+            File.WriteAllText(path, "{\"Theme\":3}");
+            Check(SettingsStore.Load().Theme == "dark", "yanlış türde değer Glass Dark olur");
+        }
+        finally { SettingsStore.PathOverride = null; try { File.Delete(path); } catch { } }
     }
 
     static void UpdateSettings()
