@@ -29,6 +29,7 @@ internal sealed class AppSettings
     public bool ShowForti;              // list FortiClient VPN tunnels too
     public bool ShowSophos;             // list Sophos Connect connections too (when installed)
     public bool ShowWatchGuard;         // list WatchGuard SSL VPN servers too (when installed)
+    public bool ShowFrequent;           // "SIK KULLANILANLAR" group under the recent ones (missing key = on)
     public string UpdateMode;           // "ask" (tell the user), "auto" (install silently when idle), "off" (manual check only)
     public string UpdateInterval;       // "startup", "daily", "weekly"
     public DateTime LastUpdateCheckUtc; // last successful update check
@@ -54,6 +55,7 @@ internal sealed class AppSettings
             ShowForti = true,
             ShowSophos = true,
             ShowWatchGuard = true,
+            ShowFrequent = true,
             UpdateMode = "ask",
             UpdateInterval = "daily",
             LastUpdateCheckUtc = DateTime.MinValue,
@@ -138,6 +140,7 @@ internal static class SettingsStore
             s.ShowForti = Bool(d, "ShowForti", s.ShowForti);
             s.ShowSophos = Bool(d, "ShowSophos", s.ShowSophos);
             s.ShowWatchGuard = Bool(d, "ShowWatchGuard", s.ShowWatchGuard);
+            s.ShowFrequent = Bool(d, "ShowFrequent", s.ShowFrequent);
             s.UpdateMode = Str(d, "UpdateMode", s.UpdateMode);
             s.UpdateInterval = Str(d, "UpdateInterval", s.UpdateInterval);
             long uticks = Long(d, "LastUpdateCheckUtcTicks", 0);
@@ -176,6 +179,7 @@ internal static class SettingsStore
         d["ShowForti"] = n.ShowForti;
         d["ShowSophos"] = n.ShowSophos;
         d["ShowWatchGuard"] = n.ShowWatchGuard;
+        d["ShowFrequent"] = n.ShowFrequent;
         d["UpdateMode"] = n.UpdateMode;
         d["UpdateInterval"] = n.UpdateInterval;
         d["LastUpdateCheckUtcTicks"] = n.LastUpdateCheckUtc.Kind == DateTimeKind.Local ? n.LastUpdateCheckUtc.ToUniversalTime().Ticks : n.LastUpdateCheckUtc.Ticks;

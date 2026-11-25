@@ -529,6 +529,8 @@ internal sealed class SearchForm : Form
     NotifyIcon tray;
     List<VpnProfile> profiles = new List<VpnProfile>();
     HashSet<string> pins = PinStore.Load();
+    Dictionary<string, FrequentStat> frequent = new Dictionary<string, FrequentStat>(StringComparer.Ordinal); // "SIK KULLANILANLAR" counts
+    string frequentSignature = "";
     RegisteredWaitHandle activationWait;
     NativeMethods.RECT lastRect;
     IntPtr ovpnHwnd, processHook, foregroundHook;
@@ -2077,6 +2079,7 @@ internal sealed class SearchForm : Form
                 if (!r.ShowWatchGuard) ForgetExt(watchGuard);
                 ReloadProfiles(true);
             }
+            if (r.ShowFrequent != old.ShowFrequent) { RefreshFrequent(); list.AnimateNext = true; ApplyFilter(list.SelectedProfile != null ? list.SelectedProfile.Id : null); }
             list.Invalidate();
             SetStatus("Ayarlar kaydedildi");
         }
@@ -2326,7 +2329,7 @@ internal sealed class SearchForm : Form
             {
                 var forti = FortiStore.Load();
                 Dictionary<string, long> starts;
-                try { starts = ConnectionHistory.LastStarts(ConnectionHistory.Load()); } catch { starts = new Dictionary<string, long>(); }
+                try { starts = ConnectionHistory.LastStarts(History()); } catch { starts = new Dictionary<string, long>(); }
                 foreach (var kv in fortiSeen) { long old; if (!starts.TryGetValue(kv.Key, out old) || kv.Value > old) starts[kv.Key] = kv.Value; }
                 FortiStore.ApplyLastConnected(forti, starts);
                 loaded.AddRange(forti);
@@ -2346,7 +2349,7 @@ internal sealed class SearchForm : Form
             if (extra.Count > 0)
             {
                 Dictionary<string, long> starts;
-                try { starts = ConnectionHistory.LastStarts(ConnectionHistory.Load()); } catch { starts = new Dictionary<string, long>(); }
+                try { starts = ConnectionHistory.LastStarts(History()); } catch { starts = new Dictionary<string, long>(); }
                 foreach (var x in Exts)
                     foreach (var kv in x.Seen) { long old; if (!starts.TryGetValue(kv.Key, out old) || kv.Value > old) starts[kv.Key] = kv.Value; }
                 VpnProviders.ApplyLastConnected(extra, starts);
@@ -2361,8 +2364,14 @@ internal sealed class SearchForm : Form
             return;
         }
         configStamp = stamp; loadError = null;
+        var frequentChanged = RefreshFrequent();
         var signature = string.Join("\u0002", loaded.Select(p => p.Id + "\u0001" + p.Name + "\u0001" + p.Host + "\u0001" + p.Username + "\u0001" + p.Source + "\u0001" + p.LastConnected).ToArray());
-        if (!force && signature == profileSignature) { if (installChanged) { RefreshSegments(); ApplyFilter(list.SelectedProfile != null ? list.SelectedProfile.Id : null); } return; }
+        if (!force && signature == profileSignature)
+        {
+            if (installChanged) RefreshSegments();
+            if (installChanged || frequentChanged) ApplyFilter(list.SelectedProfile != null ? list.SelectedProfile.Id : null);
+            return;
+        }
         profileSignature = signature; profiles = loaded;
         RefreshSegments();
         var selected = list.SelectedProfile;
@@ -2375,6 +2384,34 @@ internal sealed class SearchForm : Form
         DateTime stamp;
         try { stamp = File.GetLastWriteTimeUtc(ProfileStore.ConfigPath); } catch { return; }
         if (stamp != configStamp) ReloadProfiles();
+        else if (RefreshFrequent()) ApplyFilter(list.SelectedProfile != null ? list.SelectedProfile.Id : null); // a session ended (history.csv grew)
+    }
+
+    // Connection history for the list: demo history in --demo, otherwise history.csv, read again
+    // only after it changed (ConnectionHistory.LoadCached).
+    static List<HistoryEntry> History()
+    {
+        if (Demo.On) return Demo.History();
+        try { return ConnectionHistory.LoadCached(); } catch { return new List<HistoryEntry>(); }
+    }
+
+    // Recounts "SIK KULLANILANLAR" from the (cached) history; true when the counts changed.
+    // One pass over the history, and only when it was read again or an hour passed (the 60-day
+    // window slides). Off in the settings: no counts, no history read.
+    List<HistoryEntry> frequentSource; DateTime frequentAtUtc;
+    bool RefreshFrequent()
+    {
+        var source = settings.ShowFrequent ? History() : null;
+        var now = DateTime.UtcNow;
+        if (source != null && source == frequentSource && (now - frequentAtUtc).TotalHours < 1) return false;
+        frequentSource = source; frequentAtUtc = now;
+        var next = source != null ? FrequentProfiles.Count(source, now) : new Dictionary<string, FrequentStat>(StringComparer.Ordinal);
+        var sig = string.Join("\u0002", next.Values.Where(s => s.Count >= FrequentProfiles.MinCount).OrderBy(s => s.Id, StringComparer.Ordinal)
+            .Select(s => s.Id + "\u0001" + s.Count + "\u0001" + s.LastStartUtc.Ticks).ToArray());
+        frequent = next;
+        if (sig == frequentSignature) return false;
+        frequentSignature = sig;
+        return true;
     }
 
     static void AddGroup(List<ListRow> rows, string title, IEnumerable<VpnProfile> items, Glyph icon = Glyph.Layers)
@@ -2402,12 +2439,16 @@ internal sealed class SearchForm : Form
             var pinned = pool.Where(p => pins.Contains(p.Id) && !liveIds.Contains(p.Id)).OrderBy(p => p.Name, byName).ToList();
             var recent = pool.Where(p => !pins.Contains(p.Id) && !liveIds.Contains(p.Id) && p.LastConnected > 0).OrderByDescending(p => p.LastConnected).Take(5).ToList();
             var used = new HashSet<string>(live.Concat(pinned).Concat(recent).Select(p => p.Id));
+            // most used profiles not shown above (connected > pinned > recent > frequent > rest)
+            var often = settings.ShowFrequent ? FrequentProfiles.Pick(pool, frequent, used) : new List<VpnProfile>();
+            used.UnionWith(often.Select(p => p.Id));
             var rest = pool.Where(p => !used.Contains(p.Id) && VpnProviders.IsOpenVpn(p)).OrderBy(p => p.Name, byName).ToList();
             var others = new[] { VpnKind.Forti, VpnKind.Sophos, VpnKind.WatchGuard }
                 .Select(k => pool.Where(p => !used.Contains(p.Id) && VpnProviders.KindOf(p) == k).OrderBy(p => p.Name, byName).ToList()).ToList();
             AddGroup(rows, "BAĞLI", live, Glyph.Plug);
             AddGroup(rows, "SABİTLENENLER", pinned, Glyph.Star);
             AddGroup(rows, "SON KULLANILAN", recent, Glyph.History);
+            AddGroup(rows, "SIK KULLANILANLAR", often, Glyph.Refresh);
             AddGroup(rows, others.Any(o => o.Count > 0) ? VpnProviders.GroupTitle(VpnKind.OpenVpn) : used.Count > 0 ? "TÜM PROFİLLER" : null, rest);
             foreach (var bucket in others) if (bucket.Count > 0) AddGroup(rows, VpnProviders.GroupTitle(VpnProviders.KindOf(bucket[0])), bucket, Glyph.ShieldLock);
             shownCount = pool.Count;

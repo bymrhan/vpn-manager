@@ -47,6 +47,10 @@ static class Tests
         Run("Erişim testi uç noktası", ReachabilityEndpoints);
         Run("Ayarlar: sağlayıcı anahtarları", ProviderSettings);
         Run("Demo sağlayıcı satırları", DemoProviders);
+        Run("Sık kullanılanlar: sayım", FrequentCounting);
+        Run("Sık kullanılanlar: grup seçimi", FrequentPick);
+        Run("Sık kullanılanlar: ayar", FrequentSettings);
+        Run("Sık kullanılanlar: demo geçmişi", FrequentDemo);
         Run("Güncelleme: sürüm karşılaştırma", UpdateVersions);
         Run("Güncelleme: sürüm JSON'u", UpdateReleaseJson);
         Run("Güncelleme: SHA-256 dosyası", UpdateSha256);
@@ -608,6 +612,127 @@ static class Tests
         for (var i = 0; i < 3; i++) if (WizardLogic.ThemeIndex(WizardLogic.ThemeKey(i)) != i) ok = false;
         Check(ok && WizardLogic.ThemeKey(1) == "light" && WizardLogic.ThemeKey(2) == "system", "tema dizini <-> anahtar");
         Check(WizardLogic.ThemeIndex("bilinmeyen") == 0 && WizardLogic.ThemeIndex(null) == 0 && WizardLogic.ThemeKey(9) == "dark", "geçersiz tema koyuya döner");
+    }
+
+    // ---------- Frequent profiles ("SIK KULLANILANLAR") ----------
+
+    static readonly DateTime FreqNow = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+
+    static HistoryEntry Session(string id, double daysAgo, double seconds = 1800)
+    {
+        var start = FreqNow.AddDays(-daysAgo);
+        return new HistoryEntry { ProfileId = id, ProfileName = id, StartUtc = start, EndUtc = start.AddSeconds(seconds) };
+    }
+
+    static List<HistoryEntry> Sessions(string id, int count, double newestDaysAgo)
+    {
+        var list = new List<HistoryEntry>();
+        for (var i = 0; i < count; i++) list.Add(Session(id, newestDaysAgo + i));
+        return list;
+    }
+
+    static VpnProfile FreqProfile(string id) { return new VpnProfile { Id = id, Name = id, Host = "", Username = "", Source = "" }; }
+
+    static void FrequentCounting()
+    {
+        var h = new List<HistoryEntry>();
+        h.AddRange(Sessions("demo-a", 3, 1));
+        h.Add(Session("demo-a", 59.9));            // inside the window
+        h.Add(Session("demo-a", 60.5));            // outside the window
+        h.Add(Session("demo-a", 90));
+        var s = FrequentProfiles.Count(h, FreqNow);
+        Check(FrequentProfiles.CountOf(s, "demo-a") == 4, "yalnızca son 60 gün sayılır");
+
+        var dup = Session("demo-b", 2);
+        var dup2 = new HistoryEntry { ProfileId = "demo-b", ProfileName = "B", StartUtc = dup.StartUtc.AddMilliseconds(400), EndUtc = dup.EndUtc };
+        var other = Session("demo-c", 2);          // same second, other profile: counted on its own
+        s = FrequentProfiles.Count(new[] { dup, dup2, dup, Session("demo-b", 3), other }, FreqNow);
+        Check(FrequentProfiles.CountOf(s, "demo-b") == 2, "aynı başlangıç saniyesindeki kopya satırlar bir kez sayılır");
+        Check(FrequentProfiles.CountOf(s, "demo-c") == 1, "kopya denetimi profil başınadır");
+
+        s = FrequentProfiles.Count(new[] { Session("demo-d", 1, 2.9), Session("demo-d", 2, 0), Session("demo-d", 3, -50), Session("demo-d", 4, 3), Session("demo-d", 5, 3600) }, FreqNow);
+        Check(FrequentProfiles.CountOf(s, "demo-d") == 2, "3 saniyeden kısa oturumlar sayılmaz");
+
+        s = FrequentProfiles.Count(new[] { Session("", 1), Session(null, 1), null, Session("demo-e", 10), Session("demo-e", 4) }, FreqNow);
+        Check(s.Count == 1 && s["demo-e"].LastStartUtc == FreqNow.AddDays(-4), "boş kimlik yok sayılır, son başlangıç tutulur");
+        Check(FrequentProfiles.CountOf(s, "yok") == 0 && FrequentProfiles.CountOf(null, "demo-e") == 0, "bilinmeyen profilin sayısı 0");
+        Check(FrequentProfiles.Count(null, FreqNow).Count == 0, "geçmiş yoksa boş");
+    }
+
+    static void FrequentPick()
+    {
+        var h = new List<HistoryEntry>();
+        h.AddRange(Sessions("demo-a", 9, 5));
+        h.AddRange(Sessions("demo-b", 7, 5));
+        h.AddRange(Sessions("demo-c", 7, 2));      // same count as b, used more recently: before b
+        h.AddRange(Sessions("demo-d", 5, 1));
+        h.AddRange(Sessions("demo-e", 4, 1));
+        h.AddRange(Sessions("demo-f", 3, 1));
+        h.AddRange(Sessions("demo-g", 3, 8));
+        h.AddRange(Sessions("demo-h", 2, 1));      // below the minimum
+        h.AddRange(Sessions("forti-ssl:demo-i", 6, 1));
+        h.AddRange(Sessions("watchguard-ssl:vpn.demo.example", 4, 1));
+        var stats = FrequentProfiles.Count(h, FreqNow);
+        var pool = new[] { "demo-a", "demo-b", "demo-c", "demo-d", "demo-e", "demo-f", "demo-g", "demo-h", "forti-ssl:demo-i", "watchguard-ssl:vpn.demo.example", "demo-j" }.Select(FreqProfile).ToList();
+        var ovpn = pool.Where(p => VpnProviders.InSegment(p, VpnKind.OpenVpn)).ToList();
+
+        var ids = FrequentProfiles.Pick(ovpn, stats, null).Select(p => p.Id).ToArray();
+        Check(string.Join(",", ids) == "demo-a,demo-c,demo-b,demo-d,demo-e", "en çok bağlanılan önce, eşitlikte en son kullanılan; en fazla 5 (" + string.Join(",", ids) + ")");
+        Check(!ids.Contains("demo-h") && !ids.Contains("demo-j"), "3'ten az bağlantı listelenmez");
+
+        // connected > pinned > recent > frequent: profiles shown above are skipped, the next ones move up
+        var above = new HashSet<string> { "demo-a", "demo-c", "demo-d" };
+        ids = FrequentProfiles.Pick(ovpn, stats, above).Select(p => p.Id).ToArray();
+        Check(string.Join(",", ids) == "demo-b,demo-e,demo-f,demo-g", "bağlı / sabitlenen / son kullanılan profiller tekrar gösterilmez (" + string.Join(",", ids) + ")");
+        var all = new HashSet<string>(ovpn.Select(p => p.Id));
+        Check(FrequentProfiles.Pick(ovpn, stats, all).Count == 0, "hepsi yukarıda gösteriliyorsa grup boş (gizlenir)");
+
+        var forti = pool.Where(p => VpnProviders.InSegment(p, VpnKind.Forti)).ToList();
+        ids = FrequentProfiles.Pick(forti, stats, null).Select(p => p.Id).ToArray();
+        Check(ids.Length == 1 && ids[0] == "forti-ssl:demo-i", "FortiClient bölümü yalnızca Forti profillerini gösterir");
+        var wg = pool.Where(p => VpnProviders.InSegment(p, VpnKind.WatchGuard)).ToList();
+        Check(FrequentProfiles.Pick(wg, stats, null).Select(p => p.Id).SequenceEqual(new[] { "watchguard-ssl:vpn.demo.example" }), "WatchGuard sağlayıcı kimlikleriyle sayılır");
+        Check(FrequentProfiles.Pick(pool, stats, null).Count == FrequentProfiles.MaxShown, "Tümü: en fazla 5");
+
+        var deleted = ovpn.Where(p => p.Id != "demo-a").ToList();   // deleted profile: not in the pool any more
+        Check(!FrequentProfiles.Pick(deleted, stats, null).Any(p => p.Id == "demo-a"), "silinen profil gruptan kalkar");
+        Check(FrequentProfiles.Pick(ovpn, new Dictionary<string, FrequentStat>(), null).Count == 0, "geçmiş yoksa grup yok");
+    }
+
+    static void FrequentSettings()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ovpnqs-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        SettingsStore.PathOverride = path;
+        try
+        {
+            Check(AppSettings.Defaults().ShowFrequent && SettingsStore.Load().ShowFrequent, "varsayılan: açık");
+            File.WriteAllText(path, "{\"Hotkey\":\"Ctrl+Alt+V\",\"ShowForti\":true}");
+            Check(SettingsStore.Load().ShowFrequent, "eski settings.json (anahtar yok): açık");
+            var s = SettingsStore.Load(); s.ShowFrequent = false; SettingsStore.Save(s);
+            Check(!SettingsStore.Load().ShowFrequent, "kapalı kaydedilip geri okunur");
+            Check(File.ReadAllText(path).Contains("\"ShowFrequent\":false"), "ShowFrequent anahtarı yazılır");
+            File.WriteAllText(path, "{\"ShowFrequent\":\"hayır\"}");
+            Check(SettingsStore.Load().ShowFrequent, "yanlış türde değer varsayılana döner");
+        }
+        finally
+        {
+            SettingsStore.PathOverride = null;
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    static void FrequentDemo()
+    {
+        var profiles = Demo.Profiles();
+        var stats = FrequentProfiles.Count(Demo.History(), DateTime.UtcNow);
+        var pins = Demo.Pins();
+        var recent = profiles.Where(p => !pins.Contains(p.Id) && p.LastConnected > 0).OrderByDescending(p => p.LastConnected).Take(5).Select(p => p.Id);
+        var above = new HashSet<string>(pins.Concat(recent));
+        var often = FrequentProfiles.Pick(profiles, stats, above);
+        Check(often.Count >= 3 && often.Count <= FrequentProfiles.MaxShown, "demo listesinde sık kullanılanlar grubu dolu (" + often.Count + ")");
+        Check(often.Any(p => VpnProviders.KindOf(p) != VpnKind.OpenVpn), "demo grubunda başka sağlayıcı da var");
+        var ids = new HashSet<string>(profiles.Select(p => p.Id));
+        Check(Demo.History().All(e => ids.Contains(e.ProfileId)), "demo geçmişi yalnızca demo profillerine ait");
     }
 
     // Load() reads the registry only: as many profiles as Server entries, and no client process.

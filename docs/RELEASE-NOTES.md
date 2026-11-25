@@ -6,6 +6,7 @@ bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta dur
 ## 2.1.2
 
 - **Kurulum yardımcısı:** OpenVPN Connect ve FortiClient'ın yanında Sophos Connect ile WatchGuard SSL VPN de taranır ve listelenir (bağlantı / sunucu sayısıyla); FortiClient, Sophos ve WatchGuard profillerini gösterme anahtarları eklendi (kurulu olmayan istemci için soluk). Tema seçimi sihirbazda anında uygulanır ve ana pencereye taşınır.
+- **Sık kullanılanlar:** listede *Son kullanılanlar*'ın altında yeni *Sık kullanılanlar* grubu: son 60 günde en az 3 kez bağlanılan profiller (en çok kullanılan önce, en fazla 5; 3 saniyeden kısa oturumlar ve yinelenen geçmiş kayıtları sayılmaz). Bağlı, sabitlenen veya son kullanılan olarak zaten görünen profil tekrar listelenmez, boş kalırsa grup gizlenir; sağlayıcı filtresine uyar. Ayarlar > Genel > *Sık kullanılanları göster* ile kapatılabilir.
 
 ## 2.1.1
 

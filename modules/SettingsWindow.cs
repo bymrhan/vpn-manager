@@ -702,6 +702,8 @@ internal sealed class SettingsForm : Form
         side.Changed += delegate { work.DockSide = new[] { "auto", "left", "right" }[side.SelectedIndex]; Dirty(); };
         var reach = new SToggle(); reach.SetInstant(work.ReachabilityCheck);
         reach.CheckedChanged += delegate { work.ReachabilityCheck = reach.Checked; Dirty(); };
+        var often = new SToggle(); often.SetInstant(work.ShowFrequent);
+        often.CheckedChanged += delegate { work.ShowFrequent = often.Checked; Dirty(); };
         var forti = new SToggle(); forti.SetInstant(work.ShowForti);
         forti.CheckedChanged += delegate { work.ShowForti = forti.Checked; Dirty(); };
         var card = page.Add(new SCard(), caption: "DAVRANIŞ")
@@ -709,6 +711,7 @@ internal sealed class SettingsForm : Form
             .Add(presenceRow)
             .Add(new SRow("Panel tarafı", "Yapışılacak taraf", side, Glyph.Panel))
             .Add(new SRow("Sunucu erişim testi", "Profil avatarında yeşil / kırmızı durum noktası.", reach, Glyph.Server))
+            .Add(new SRow("Sık kullanılanları göster", "Son 60 günde en az 3 kez bağlanılan profiller.", often, Glyph.Refresh))
             .Add(new SRow("FortiClient profilleri", "FortiClient VPN tünellerini de listele.", forti, Glyph.ShieldLock));
         // Sophos / WatchGuard toggles only for clients found on this PC (demo: always, nothing is read).
         if (Demo.On || SophosStore.IsInstalled)
@@ -997,7 +1000,7 @@ internal sealed class SettingsForm : Form
             return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.Presence != original.Presence || work.BackupFolder != original.BackupFolder ||
                    work.BackupFrequency != original.BackupFrequency || work.BackupKeep != original.BackupKeep || work.DockSide != original.DockSide ||
                    work.Theme != original.Theme || work.ReachabilityCheck != original.ReachabilityCheck || work.ShowForti != original.ShowForti ||
-                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard ||
+                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard || work.ShowFrequent != original.ShowFrequent ||
                    work.UpdateMode != original.UpdateMode || work.UpdateInterval != original.UpdateInterval ||
                    work.LogEnabled != original.LogEnabled || work.CrashPrompt != original.CrashPrompt || work.CrashAutoConsent != original.CrashAutoConsent;
         }

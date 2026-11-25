@@ -370,6 +370,25 @@ internal static class ConnectionHistory
         return list;
     }
 
+    // Load() kept while history.csv is unchanged (same write time and size): list rebuilds reuse it
+    // instead of reading the file again. Callers must not modify the returned list.
+    static List<HistoryEntry> cached;
+    static string cachedStamp;
+    public static List<HistoryEntry> LoadCached()
+    {
+        string stamp;
+        try
+        {
+            var fi = new FileInfo(FilePath);
+            stamp = fi.Exists ? FilePath + "|" + fi.LastWriteTimeUtc.Ticks + "|" + fi.Length : FilePath + "|-";
+        }
+        catch { stamp = null; }
+        lock (gate) { if (stamp != null && stamp == cachedStamp && cached != null) return cached; }
+        var list = Load();
+        lock (gate) { cached = list; cachedStamp = stamp; }
+        return list;
+    }
+
     // Latest session start per profile id, as Unix milliseconds (the unit of VpnProfile.LastConnected).
     public static Dictionary<string, long> LastStarts(IEnumerable<HistoryEntry> entries)
     {
