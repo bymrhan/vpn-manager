@@ -123,6 +123,18 @@ internal static class SophosStore
         return false;
     }
 
+    // True when the `sccli get` output has a state/status key at all (connected or not).
+    public static bool HasState(string text)
+    {
+        foreach (var kv in ParsePairs(text))
+            if (kv.Key == "state" || kv.Key == "status" || kv.Key == "connection state" || kv.Key == "connection status" || kv.Key == "connectionstate") return true;
+        return false;
+    }
+
+    // The adapter is only consulted when sccli's output was not understood for any connection;
+    // a clear "Disconnected" must not be overridden by an adapter that happens to be Up.
+    public static bool UseAdapterFallback(bool anyStateUnderstood) { return !anyStateUnderstood; }
+
     // Builds the profile the same way FortiStore.Load does.
     public static VpnProfile MakeProfile(string name, string host)
     {
@@ -167,7 +179,8 @@ internal static class SophosStore
             args.Add("-p"); args.Add(cred.Password);
         }
         string o, e;
-        if (!Run(args.ToArray(), out o, out e)) return "Sophos bağlantısı başlatılamadı" + FirstLine(e, o);
+        try { if (!Run(args.ToArray(), out o, out e)) return "Sophos bağlantısı başlatılamadı" + FirstLine(e, o); }
+        catch (Exception ex) { return "Sophos bağlantısı başlatılamadı: " + ex.Message; }
         return null;
     }
 
@@ -177,7 +190,8 @@ internal static class SophosStore
         if (!IsInstalled) return "Sophos Connect bulunamadı.";
         if (string.IsNullOrEmpty(name)) return "Sophos bağlantı adı boş.";
         string o, e;
-        if (!Run(new[] { "disable", "-n", name }, out o, out e)) return "Sophos bağlantısı kesilemedi" + FirstLine(e, o);
+        try { if (!Run(new[] { "disable", "-n", name }, out o, out e)) return "Sophos bağlantısı kesilemedi" + FirstLine(e, o); }
+        catch (Exception ex) { return "Sophos bağlantısı kesilemedi: " + ex.Message; }
         return null;
     }
 
@@ -193,12 +207,15 @@ internal static class SophosStore
             if (!Run(new[] { "list" }, out o, out e)) return null;
             var names = ParseList(o);
             if (names.Count == 0) return null;
+            var understood = false;
             foreach (var n in names)
             {
                 string d, err;
-                if (Run(new[] { "get", "-n", n, "-t", "dynamic" }, out d, out err) && ParseConnected(d)) return n;
+                if (!Run(new[] { "get", "-n", n, "-t", "dynamic" }, out d, out err)) continue;
+                if (ParseConnected(d)) return n;
+                if (HasState(d)) understood = true;
             }
-            if (AdapterUp()) return names.Count == 1 ? names[0] : "";
+            if (UseAdapterFallback(understood) && AdapterUp()) return names.Count == 1 ? names[0] : "";
         }
         catch { }
         return null;

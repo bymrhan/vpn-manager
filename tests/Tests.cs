@@ -35,6 +35,7 @@ static class Tests
         Run("Forti son bağlanma zamanı", FortiLastConnected);
         Run("Sophos Connect ayrıştırma", SophosParsing);
         Run("Sophos kimlik bilgisi öneki", SophosCredentialPrefix);
+        Run("Forti kimlik hedefi sabit", FortiTargetPinned);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -150,7 +151,22 @@ static class Tests
         Check(p.Id == "sophos:ofis-ornek" && SophosStore.IsSophos(p) && !SophosStore.IsSophos(new VpnProfile { Id = "forti-ssl:x" }), "kimlik öneki");
         Check(SophosStore.ConnectionName(p) == "ofis-ornek" && p.Source == "" && p.Keys.Length > 0 && p.Initials.Length > 0, "profil alanları");
         Check(SophosStore.Quote("a b") == "\"a b\"" && SophosStore.Quote("x") == "x" && SophosStore.Quote("a\"b") == "\"a\\\"b\"", "argüman tırnaklama");
+        Check(SophosStore.HasState("State: Disconnected\n") && !SophosStore.HasState("garbage\nlines") && !SophosStore.HasState(""), "durum anahtarı anlaşıldı mı");
+        Check(!SophosStore.UseAdapterFallback(true) && SophosStore.UseAdapterFallback(false), "adaptör yedeği yalnız çıktı anlaşılmadıysa");
         Check(SophosStore.Load() != null, "Load hata vermez");
+    }
+
+    // Forti's stored target must stay "OpenVpnQuickSearch:forti:<name>" (existing saved credentials).
+    static void FortiTargetPinned()
+    {
+        const string name = "__oqs_test_target__";
+        FortiCredentialStore.Delete(name);
+        try
+        {
+            Check(FortiCredentialStore.Save(name, new FortiCredential { Username = "u", Password = "p" }) == null, "önek vermeden kaydet");
+            Check(FortiCredentialStore.Has(name, "OpenVpnQuickSearch:forti:"), "hedef OpenVpnQuickSearch:forti:<ad>");
+        }
+        finally { FortiCredentialStore.Delete(name); }
     }
 
     // Sophos and Forti credentials with the same name must not collide in Credential Manager.
