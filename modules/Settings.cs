@@ -18,7 +18,8 @@ internal sealed class AppSettings
 {
     public string Hotkey;               // "Ctrl+Alt+V"
     public bool AutoStart;
-    public string BackupFolder;         // Documents\OpenVPN Yedekleri
+    public bool ShowInTaskbar;          // main window gets a taskbar button (and an Alt+Tab entry) while it is shown
+    public string BackupFolder;        // Documents\OpenVPN Yedekleri
     public string BackupFrequency;      // "off", "change", "daily", "weekly"
     public int BackupKeep;              // 1..100
     public DateTime LastBackupUtc;
@@ -42,6 +43,7 @@ internal sealed class AppSettings
         {
             Hotkey = "Ctrl+Alt+V",
             AutoStart = false,
+            ShowInTaskbar = false,
             BackupFolder = DefaultBackupFolder(),
             BackupFrequency = "daily",
             BackupKeep = 10,
@@ -120,6 +122,7 @@ internal static class SettingsStore
 
             s.Hotkey = Str(d, "Hotkey", s.Hotkey);
             s.AutoStart = Bool(d, "AutoStart", s.AutoStart);
+            s.ShowInTaskbar = Bool(d, "ShowInTaskbar", s.ShowInTaskbar);
             s.BackupFolder = Str(d, "BackupFolder", s.BackupFolder);
             s.BackupFrequency = Str(d, "BackupFrequency", s.BackupFrequency);
             s.BackupKeep = Int(d, "BackupKeep", s.BackupKeep);
@@ -158,6 +161,7 @@ internal static class SettingsStore
         var d = new Dictionary<string, object>();
         d["Hotkey"] = n.Hotkey;
         d["AutoStart"] = n.AutoStart;
+        d["ShowInTaskbar"] = n.ShowInTaskbar;
         d["BackupFolder"] = n.BackupFolder;
         d["BackupFrequency"] = n.BackupFrequency;
         d["BackupKeep"] = n.BackupKeep;

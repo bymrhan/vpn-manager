@@ -682,6 +682,8 @@ internal sealed class SettingsForm : Form
 
         var auto = new SToggle(); auto.SetInstant(work.AutoStart);
         auto.CheckedChanged += delegate { work.AutoStart = auto.Checked; Dirty(); };
+        var taskbar = new SToggle(); taskbar.SetInstant(work.ShowInTaskbar);
+        taskbar.CheckedChanged += delegate { work.ShowInTaskbar = taskbar.Checked; Dirty(); };
         var side = new SSegmented("Otomatik", "Sol", "Sağ") { SelectedIndex = work.DockSide == "left" ? 1 : work.DockSide == "right" ? 2 : 0 };
         side.Changed += delegate { work.DockSide = new[] { "auto", "left", "right" }[side.SelectedIndex]; Dirty(); };
         var reach = new SToggle(); reach.SetInstant(work.ReachabilityCheck);
@@ -690,6 +692,7 @@ internal sealed class SettingsForm : Form
         forti.CheckedChanged += delegate { work.ShowForti = forti.Checked; Dirty(); };
         var card = page.Add(new SCard(), caption: "DAVRANIŞ")
             .Add(new SRow("Windows açılışında başlat", "Oturum açılınca arka planda başlar, OpenVPN açılınca görünür.", auto, Glyph.Power))
+            .Add(new SRow("Görev çubuğunda göster", "Açıkken uygulama penceresi görev çubuğunda görünür.", taskbar, Glyph.Layers))
             .Add(new SRow("Panel tarafı", "Yapışılacak taraf", side, Glyph.Panel))
             .Add(new SRow("Sunucu erişim testi", "Profil avatarında yeşil / kırmızı durum noktası.", reach, Glyph.Server))
             .Add(new SRow("FortiClient profilleri", "FortiClient VPN tünellerini de listele.", forti, Glyph.ShieldLock));
@@ -970,7 +973,7 @@ internal sealed class SettingsForm : Form
     {
         get
         {
-            return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.BackupFolder != original.BackupFolder ||
+            return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.ShowInTaskbar != original.ShowInTaskbar || work.BackupFolder != original.BackupFolder ||
                    work.BackupFrequency != original.BackupFrequency || work.BackupKeep != original.BackupKeep || work.DockSide != original.DockSide ||
                    work.Theme != original.Theme || work.ReachabilityCheck != original.ReachabilityCheck || work.ShowForti != original.ShowForti ||
                    work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard ||
