@@ -617,7 +617,8 @@ internal sealed class SearchForm : Form
 
     // ---------- Layout ----------
 
-    static readonly string[] SegmentNames = { "Tümü", "OpenVPN", "FortiClient" };
+    // Filter bar segments in order (null = "Tümü"); providerFilter indexes this list.
+    List<VpnKind?> segmentKinds = VpnProviders.Segments(false, false, false);
 
     void BuildLayout()
     {
@@ -655,18 +656,28 @@ internal sealed class SearchForm : Form
         list.Activated += Connect;
         list.PinToggled += TogglePin;
         list.MenuRequested += ShowRowMenu;
-        list.DisconnectRequested += delegate(VpnProfile p) { if (p.Id == connectedId) Disconnect(); else if (p.Id == fortiConnectedId) DisconnectForti(p); };
+        list.DisconnectRequested += delegate(VpnProfile p)
+        {
+            if (p.Id == connectedId) Disconnect();
+            else if (p.Id == fortiConnectedId) DisconnectForti(p);
+            else { var x = ExtFor(p); if (x != null && p.Id == x.ConnectedId) DisconnectExt(x, p); }
+        };
         list.ConnectFailedId += delegate(string id) { islandError = "Bağlantı kurulamadı"; islandErrorUntil = DateTime.UtcNow.AddSeconds(5); UpdateIsland(); };
         Controls.Add(list);
         Controls.Add(toast); toast.BringToFront();
     }
 
-    // FortiClient segment only exists while FortiClient profiles are enabled.
+    // FortiClient segment only exists while FortiClient profiles are enabled; Sophos and WatchGuard
+    // segments only while that client is installed, enabled and has profiles in the list.
+    // The selected provider stays selected when other segments come and go.
     void RefreshSegments()
     {
-        var items = settings.ShowForti ? SegmentNames : new[] { "Tümü", "OpenVPN" };
-        if (providerFilter == 2 && !settings.ShowForti) providerFilter = 0;
-        segmented.Items = items;
+        var current = VpnProviders.SegmentAt(segmentKinds, providerFilter);
+        segmentKinds = VpnProviders.Segments(settings.ShowForti,
+            settings.ShowSophos && profiles.Any(SophosStore.IsSophos),
+            settings.ShowWatchGuard && profiles.Any(WatchGuardStore.IsWatchGuard));
+        providerFilter = VpnProviders.IndexOf(segmentKinds, current);
+        segmented.Items = VpnProviders.SegmentNames(segmentKinds);
         segmented.Selected = providerFilter;
     }
 
@@ -770,7 +781,7 @@ internal sealed class SearchForm : Form
     void UpdateIsland()
     {
         if (island == null) return;
-        var live = ConnectedProfile() ?? FortiConnectedProfile();
+        var live = ConnectedProfile() ?? FortiConnectedProfile() ?? ExtConnectedProfile();
         UpdateTrayIcon(live != null ? "connected" : list.IsConnecting ? "connecting" : islandError != null && DateTime.UtcNow < islandErrorUntil ? "error" : null);
         if (list.IsDisconnecting) { island.SetState(IslandState.Disconnecting, "Bağlantı kesiliyor…", "", DateTime.MinValue); return; }
         if (islandError != null && DateTime.UtcNow < islandErrorUntil) { island.SetState(IslandState.Error, islandError, "", DateTime.MinValue); return; }
@@ -783,7 +794,8 @@ internal sealed class SearchForm : Form
         }
         if (live != null)
         {
-            var since = live.Id == fortiConnectedId ? fortiSince : (monitor != null ? monitor.Current.SinceUtc : DateTime.MinValue);
+            var ext = ExtFor(live);
+            var since = live.Id == fortiConnectedId ? fortiSince : ext != null && live.Id == ext.ConnectedId ? ext.Since : (monitor != null ? monitor.Current.SinceUtc : DateTime.MinValue);
             island.SetState(IslandState.Connected, live.Name, "", since);
             return;
         }
@@ -811,8 +823,10 @@ internal sealed class SearchForm : Form
     void DisconnectCurrent()
     {
         if (Demo.On) { DemoConnect(null); return; }
-        if (connectedId != null) Disconnect();
-        else { var f = FortiConnectedProfile(); if (f != null) DisconnectForti(f); }
+        if (connectedId != null) { Disconnect(); return; }
+        var f = FortiConnectedProfile();
+        if (f != null) { DisconnectForti(f); return; }
+        foreach (var x in Exts) { var e = ExtProfile(x); if (e != null) { DisconnectExt(x, e); return; } }
     }
 
     // ---------- Menus ----------
@@ -839,7 +853,7 @@ internal sealed class SearchForm : Form
     // Status card for the top of the menus: connection + last backup.
     MenuStatusItem StatusCard()
     {
-        var connected = ConnectedProfile() ?? FortiConnectedProfile();
+        var connected = ConnectedProfile() ?? FortiConnectedProfile() ?? ExtConnectedProfile();
         var backup = settings.LastBackupUtc > DateTime.MinValue.AddYears(1) ? "Son yedek: " + Ui.Relative((long)(settings.LastBackupUtc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds) : "Henüz yedek alınmadı";
         if (connected != null)
             return new MenuStatusItem(connected.Name, (LiveTextFor(connected) ?? "Bağlı") + "  ·  " + backup, Ui.Success);
@@ -855,6 +869,7 @@ internal sealed class SearchForm : Form
         if (connected != null) trayMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { Disconnect(); }));
         var fortiLive = FortiConnectedProfile();
         if (fortiLive != null) trayMenu.Items.Add(Danger("FortiClient bağlantısını kes", Glyph.Disconnect, delegate { DisconnectForti(fortiLive); }));
+        AddExtDisconnectItems(trayMenu);
         trayMenu.Items.Add(Item("Paneli aç", Glyph.Open, delegate { manualOverride = true; ShowAndFocus(true); }, settings.Hotkey));
         var quick = profiles.Where(p => pins.Contains(p.Id)).OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)
             .Concat(profiles.Where(p => !pins.Contains(p.Id) && p.LastConnected > 0).OrderByDescending(p => p.LastConnected).Take(5))
@@ -885,6 +900,7 @@ internal sealed class SearchForm : Form
         if (ConnectedProfile() != null) mainMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { Disconnect(); }));
         var fortiOn = FortiConnectedProfile();
         if (fortiOn != null) mainMenu.Items.Add(Danger("FortiClient bağlantısını kes", Glyph.Disconnect, delegate { DisconnectForti(fortiOn); }));
+        AddExtDisconnectItems(mainMenu);
 
         mainMenu.Items.Add(Caption("YEDEKLEME"));
         mainMenu.Items.Add(new MenuEntry("Şimdi yedekle", Glyph.Backup, delegate { BackupNow(false); }) { Badge = profiles.Count + " profil" });
@@ -917,6 +933,7 @@ internal sealed class SearchForm : Form
         rowMenu.Items.Add(head);
         if (p.Id == connectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { Disconnect(); }));
         else if (p.Id == fortiConnectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { DisconnectForti(p); }));
+        else if (ExtFor(p) != null && p.Id == ExtFor(p).ConnectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { DisconnectExt(ExtFor(p), p); }));
         else rowMenu.Items.Add(Item("Bağlan", Glyph.Connect, delegate { Connect(p); }, "Enter"));
         rowMenu.Items.Add(Item(pins.Contains(p.Id) ? "Sabitlemeyi kaldır" : "Sabitle", Glyph.Star, delegate { TogglePin(p); }, "Ctrl+P"));
         rowMenu.Items.Add(Caption("KOPYALA"));
@@ -931,8 +948,15 @@ internal sealed class SearchForm : Form
             rowMenu.Items.Add(Item(hasCred ? "Kayıtlı parolayı değiştir…" : "Parolayı kaydet…", Glyph.Settings, delegate { EditFortiCredential(p); }));
             if (hasCred) rowMenu.Items.Add(Danger("Kayıtlı parolayı sil", Glyph.Delete, delegate { DeleteFortiCredential(p); }));
         }
-        if (!FortiStore.IsForti(p)) rowMenu.Items.Add(Item(".ovpn olarak dışa aktar…", Glyph.Export, delegate { ExportProfile(p); }));
-        if (!FortiStore.IsForti(p)) rowMenu.Items.Add(Danger("Profili sil…", Glyph.Delete, delegate { DeleteProfile(p); }));
+        if (ExtFor(p) != null && !Demo.On)
+        {
+            var hasCred = false;
+            try { hasCred = FortiCredentialStore.Has(VpnProviders.CredentialKey(p), VpnProviders.CredentialPrefix(ExtFor(p).Kind)); } catch { }
+            rowMenu.Items.Add(Item(hasCred ? "Kayıtlı parolayı değiştir…" : "Parolayı kaydet…", Glyph.Settings, delegate { EditExtCredential(p); }));
+            if (hasCred) rowMenu.Items.Add(Danger("Kayıtlı parolayı sil", Glyph.Delete, delegate { DeleteExtCredential(p); }));
+        }
+        if (VpnProviders.IsOpenVpn(p)) rowMenu.Items.Add(Item(".ovpn olarak dışa aktar…", Glyph.Export, delegate { ExportProfile(p); }));
+        if (VpnProviders.IsOpenVpn(p)) rowMenu.Items.Add(Danger("Profili sil…", Glyph.Delete, delegate { DeleteProfile(p); }));
         MenuKit.Fit(rowMenu);
         rowMenu.Show(list, at);
     }
@@ -954,6 +978,8 @@ internal sealed class SearchForm : Form
     string LiveTextFor(VpnProfile p)
     {
         if (fortiConnectedId != null && p.Id == fortiConnectedId) return "Bağlı · " + Since(fortiSince);
+        var ext = ExtFor(p);
+        if (ext != null && p.Id == ext.ConnectedId) return "Bağlı · " + Since(ext.Since);
         if (connectedId == null || p.Id != connectedId || monitor == null) return null;
         var since = monitor.Current.SinceUtc;
         if (since == DateTime.MinValue || since > DateTime.UtcNow) return "Bağlı";
@@ -966,7 +992,7 @@ internal sealed class SearchForm : Form
         return d.TotalMinutes < 1 ? "şimdi" : d.TotalHours < 1 ? (int)d.TotalMinutes + " dk" : (int)d.TotalHours + " sa " + d.Minutes + " dk";
     }
 
-    List<VpnProfile> OpenVpnProfiles { get { return profiles.Where(p => !FortiStore.IsForti(p)).ToList(); } }
+    List<VpnProfile> OpenVpnProfiles { get { return profiles.Where(VpnProviders.IsOpenVpn).ToList(); } }
 
     // ---------- FortiClient ----------
 
@@ -990,6 +1016,7 @@ internal sealed class SearchForm : Form
     // OnFortiState finishes the animation when the Fortinet adapter goes down.
     void DisconnectForti(VpnProfile p)
     {
+        if (Demo.On) { DemoConnect(null); return; } // demo rows: never touch the real FortiClient
         if (p == null || fortiDisconnectingId != null) return;
         fortiDisconnectingId = p.Id; fortiDisconnectStart = DateTime.UtcNow;
         list.BeginDisconnect(p.Id);
@@ -1190,6 +1217,280 @@ internal sealed class SearchForm : Form
         var p2 = profiles.FirstOrDefault(p => p.Id == id);
         if (p2 != null) SetStatus("\"" + p2.Name + "\" (FortiClient) bağlandı");
         InvalidateFooter(); UpdateIsland();
+    }
+
+    // ---------- Sophos Connect / WatchGuard SSL VPN ----------
+    // Both follow the FortiClient flow with one shared code path: the connect / disconnect command
+    // runs on the thread pool (sccli, or WatchGuard's dialog driven off-screen, up to ~25 s), the
+    // connected profile is found by polling on a worker thread (PollExt), and OnExtState moves the
+    // list animation, island, history and "last connected" time. Demo mode never gets here.
+
+    sealed class ExtVpn
+    {
+        public VpnKind Kind;
+        public string ConnectedId, ConnectingId, DisconnectingId;
+        public DateTime Since, ConnectStart, DisconnectStart, LastPoll = DateTime.MinValue;
+        public bool Polling, Busy, PollSoon;
+        public readonly Dictionary<string, long> Seen = new Dictionary<string, long>(StringComparer.Ordinal); // id -> start (Unix ms) since app start
+        public string Label { get { return VpnProviders.Label(Kind); } }
+        public bool InFlight { get { return ConnectingId != null || DisconnectingId != null || Busy; } }
+    }
+
+    readonly ExtVpn sophos = new ExtVpn { Kind = VpnKind.Sophos }, watchGuard = new ExtVpn { Kind = VpnKind.WatchGuard };
+    bool sophosInstalled, watchGuardInstalled; // refreshed by ReloadProfiles (file checks)
+
+    IEnumerable<ExtVpn> Exts { get { return new[] { sophos, watchGuard }; } }
+
+    ExtVpn ExtFor(VpnProfile p)
+    {
+        var k = VpnProviders.KindOf(p);
+        return k == VpnKind.Sophos ? sophos : k == VpnKind.WatchGuard ? watchGuard : null;
+    }
+
+    bool ExtEnabled(ExtVpn x)
+    {
+        if (Demo.On) return false;
+        return x.Kind == VpnKind.Sophos ? settings.ShowSophos && sophosInstalled : settings.ShowWatchGuard && watchGuardInstalled;
+    }
+
+    VpnProfile ExtProfile(ExtVpn x)
+    {
+        if (x.ConnectedId == null) return null;
+        return profiles.FirstOrDefault(p => p.Id == x.ConnectedId);
+    }
+
+    VpnProfile ExtConnectedProfile() { return ExtProfile(sophos) ?? ExtProfile(watchGuard); }
+
+    void AddExtDisconnectItems(ContextMenuStrip menu)
+    {
+        foreach (var x in Exts)
+        {
+            var live = ExtProfile(x); var ext = x;
+            if (live != null) menu.Items.Add(Danger(x.Label + " bağlantısını kes", Glyph.Disconnect, delegate { DisconnectExt(ext, live); }));
+        }
+    }
+
+    // Writes a finished Sophos / WatchGuard session to the connection history (same file as OpenVPN).
+    void RecordExtSession(string id, DateTime startUtc, DateTime endUtc)
+    {
+        var p = profiles.FirstOrDefault(x => x.Id == id);
+        try { ConnectionHistory.Append(new HistoryEntry { ProfileId = id, ProfileName = p != null ? p.Name : id, StartUtc = startUtc, EndUtc = endUtc }); }
+        catch { }
+    }
+
+    void ConnectExt(ExtVpn x, VpnProfile p)
+    {
+        if (Demo.On) { DemoConnect(p.Name, true); return; }
+        if (p.Id == x.ConnectedId) { list.ConnectSucceeded(p.Id); SetStatus("\"" + p.Name + "\" zaten bağlı"); return; }
+        if (x.Busy || x.ConnectingId == p.Id) return;
+        // Saved credential (Credential Manager, provider's own prefix), or ask once. Cancel = connect
+        // without: Sophos tries the connection as configured, WatchGuard uses its own remembered
+        // password or shows its dialog to the user.
+        var prefix = VpnProviders.CredentialPrefix(x.Kind);
+        FortiCredential cred = null;
+        try { cred = FortiCredentialStore.Load(VpnProviders.CredentialKey(p), prefix); } catch { cred = null; }
+        if (cred == null) cred = AskExtCredential(x, p, string.IsNullOrEmpty(p.Username) ? null : new FortiCredential { Username = p.Username, Password = "" });
+        x.Busy = true; x.ConnectingId = p.Id; x.ConnectStart = DateTime.UtcNow;
+        list.BeginConnect(p.Id);
+        SetStatus(x.Label + " \"" + p.Name + "\" bağlanıyor…");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            string msg = null;
+            var outcome = WatchGuardStore.ConnectOutcome.Failed;
+            try
+            {
+                if (x.Kind == VpnKind.Sophos)
+                {
+                    // with a password sccli needs no prompt: keep Sophos' tray GUI from popping up
+                    if (cred != null && !string.IsNullOrEmpty(cred.Password)) QuietWindow.KeepProcessInBackground("scgui", 15);
+                    msg = SophosStore.Connect(p, cred);
+                    outcome = msg == null ? WatchGuardStore.ConnectOutcome.Pressed : WatchGuardStore.ConnectOutcome.Failed;
+                }
+                else outcome = WatchGuardStore.Connect(p, cred, out msg); // parks its own windows off-screen
+            }
+            catch (Exception ex) { msg = ex.Message; outcome = WatchGuardStore.ConnectOutcome.Failed; }
+            finally { if (cred != null) cred.Password = ""; }
+            UiInvoke(delegate { OnExtConnectResult(x, p, outcome, msg); });
+        });
+    }
+
+    void OnExtConnectResult(ExtVpn x, VpnProfile p, WatchGuardStore.ConnectOutcome outcome, string msg)
+    {
+        x.Busy = false; x.PollSoon = true;
+        if (outcome == WatchGuardStore.ConnectOutcome.Failed)
+        {
+            if (x.ConnectingId == p.Id) x.ConnectingId = null;
+            list.ConnectFailed(p.Id);
+            SetStatus(string.IsNullOrEmpty(msg) ? x.Label + " bağlantısı başlatılamadı" : msg);
+            return;
+        }
+        if (outcome == WatchGuardStore.ConnectOutcome.AlreadyConnected) { OnExtState(x, VpnProviders.CredentialKey(p)); return; }
+        // Pressed: wait for the poll to see it up. ShownToUser: the client's window is on screen for
+        // the user (password / SAML); the row keeps "connecting" until it is up or the attempt expires.
+        if (outcome == WatchGuardStore.ConnectOutcome.ShownToUser) SetStatus(string.IsNullOrEmpty(msg) ? x.Label + " penceresinde \"" + p.Name + "\" için bağlanın" : msg);
+        else SetStatus(x.Label + " \"" + p.Name + "\" bağlanıyor…");
+    }
+
+    void DisconnectExt(ExtVpn x, VpnProfile p)
+    {
+        if (Demo.On) { DemoConnect(null); return; }
+        if (p == null || x.DisconnectingId != null) return;
+        x.DisconnectingId = p.Id; x.DisconnectStart = DateTime.UtcNow;
+        list.BeginDisconnect(p.Id);
+        SetStatus(x.Label + " \"" + p.Name + "\" kesiliyor…");
+        var name = SophosStore.ConnectionName(p);
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            string err;
+            try
+            {
+                if (x.Kind == VpnKind.Sophos) { QuietWindow.KeepProcessInBackground("scgui", 10); err = SophosStore.Disconnect(name); }
+                else err = WatchGuardStore.Disconnect();
+            }
+            catch (Exception ex) { err = ex.Message; }
+            UiInvoke(delegate
+            {
+                x.PollSoon = true;
+                if (err == null)
+                {
+                    // sccli disable only succeeds once the connection is down; WatchGuard is confirmed by the next poll
+                    if (x.Kind == VpnKind.Sophos && x.DisconnectingId == p.Id) OnExtState(x, null);
+                    return;
+                }
+                x.DisconnectingId = null; list.EndDisconnect();
+                SetStatus(err);
+            });
+        });
+    }
+
+    // Asks for a connection's username and password; saves them when "Bu bilgisayarda sakla" stays ticked.
+    FortiCredential AskExtCredential(ExtVpn x, VpnProfile p, FortiCredential current)
+    {
+        var key = VpnProviders.CredentialKey(p);
+        using (var f = new FortiCredentialForm(key, current, false, x.Label, "Bağlanırken " + x.Label + " bu bilgileri kullanır."))
+        {
+            if (f.ShowDialog(this) != DialogResult.OK || f.Result == null) return null;
+            if (f.Remember)
+            {
+                var err = FortiCredentialStore.Save(key, f.Result, VpnProviders.CredentialPrefix(x.Kind));
+                if (err != null) SetStatus(err);
+            }
+            return f.Result;
+        }
+    }
+
+    void EditExtCredential(VpnProfile p)
+    {
+        var x = ExtFor(p); if (x == null) return;
+        var key = VpnProviders.CredentialKey(p); var prefix = VpnProviders.CredentialPrefix(x.Kind);
+        FortiCredential current = null;
+        try { current = FortiCredentialStore.Load(key, prefix); } catch { }
+        if (current != null) current.Password = ""; // never show the saved password again
+        else if (!string.IsNullOrEmpty(p.Username)) current = new FortiCredential { Username = p.Username, Password = "" };
+        using (var f = new FortiCredentialForm(key, current, true, x.Label))
+        {
+            if (f.ShowDialog(this) != DialogResult.OK || f.Result == null) return;
+            var err = FortiCredentialStore.Save(key, f.Result, prefix);
+            f.Result.Password = "";
+            SetStatus(err ?? "\"" + p.Name + "\" için parola kaydedildi");
+        }
+    }
+
+    void DeleteExtCredential(VpnProfile p)
+    {
+        var x = ExtFor(p); if (x == null) return;
+        if (FortiCredentialStore.Delete(VpnProviders.CredentialKey(p), VpnProviders.CredentialPrefix(x.Kind))) SetStatus("\"" + p.Name + "\" için kayıtlı parola silindi");
+        else SetStatus("Kayıtlı parola silinemedi");
+    }
+
+    // Called from the 500 ms watcher. Sophos: sccli spawns a process per connection, so at most every
+    // 10 s; WatchGuard: every 2 s while a command is in flight, otherwise every 10 s. Only while the
+    // panel is visible or something of that provider is connected / in flight (like FortiClient).
+    void MaybePollExt(ExtVpn x)
+    {
+        if (x.Polling || !ExtEnabled(x)) return;
+        if (!Visible && x.ConnectedId == null && !x.InFlight) return;
+        if (!profiles.Any(p => ExtFor(p) == x)) return;
+        if (!VpnProviders.DuePoll(x.Kind, x.InFlight, x.PollSoon, (DateTime.UtcNow - x.LastPoll).TotalSeconds)) return;
+        x.Polling = true; x.PollSoon = false; x.LastPoll = DateTime.UtcNow;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            string key = null;
+            try { key = x.Kind == VpnKind.Sophos ? SophosStore.ConnectedName() : WatchGuardStore.ConnectedServer(); } catch { }
+            UiInvoke(delegate { x.Polling = false; x.LastPoll = DateTime.UtcNow; OnExtState(x, key); });
+        });
+    }
+
+    // key: connection name (Sophos) / server entry (WatchGuard) that is up, "" = up but unnamed, null = none.
+    void OnExtState(ExtVpn x, string key)
+    {
+        var owned = profiles.Where(p => ExtFor(p) == x).ToList();
+        var id = VpnProviders.ResolveConnectedId(key, owned, VpnProviders.CredentialKey, x.ConnectedId, x.ConnectingId);
+        var now = DateTime.UtcNow;
+        if (x.ConnectingId != null && id != x.ConnectingId && !x.Busy && (now - x.ConnectStart).TotalSeconds > VpnProviders.ConnectGiveUpSeconds)
+        {
+            list.CancelConnect(x.ConnectingId); x.ConnectingId = null;
+            SetStatus(x.Label + " bağlantısı doğrulanamadı — " + x.Label + " penceresini kontrol edin");
+        }
+        if (x.DisconnectingId != null && (id == null || (now - x.DisconnectStart).TotalSeconds > VpnProviders.DisconnectGiveUpSeconds))
+        {
+            if (id == null)
+            {
+                var gone = profiles.FirstOrDefault(p => p.Id == x.DisconnectingId);
+                if (gone != null) SetStatus("\"" + gone.Name + "\" (" + x.Label + ") bağlantısı kesildi");
+            }
+            x.DisconnectingId = null; list.EndDisconnect();
+        }
+        if (id == x.ConnectedId) { UpdateIsland(); return; }
+        if (x.ConnectedId != null) RecordExtSession(x.ConnectedId, x.Since, now);
+        x.ConnectedId = id;
+        if (id != null)
+        {
+            x.Since = now;
+            var ms = (long)(now - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            x.Seen[id] = ms;
+            var live = profiles.FirstOrDefault(p => p.Id == id);
+            if (live != null) live.LastConnected = ms;
+        }
+        var sel = list.SelectedProfile;
+        ApplyFilter(sel != null ? sel.Id : null);
+        if (id != null && id == x.ConnectingId) { x.ConnectingId = null; list.ConnectSucceeded(id); }
+        var p2 = profiles.FirstOrDefault(p => p.Id == id);
+        if (p2 != null) SetStatus("\"" + p2.Name + "\" (" + x.Label + ") bağlandı");
+        InvalidateFooter(); UpdateIsland();
+    }
+
+    // Provider switched off in Settings: its rows go away, so does its state (like FortiClient).
+    void ForgetExt(ExtVpn x)
+    {
+        if (x.ConnectingId != null) list.CancelConnect(x.ConnectingId);
+        if (x.DisconnectingId != null) list.EndDisconnect();
+        x.ConnectedId = null; x.ConnectingId = null; x.DisconnectingId = null;
+    }
+
+    // Sophos connections come from sccli (a process per call): listed on a worker thread and
+    // cached; ReloadProfiles merges the cache, and a changed list reloads the profiles once.
+    List<KeyValuePair<string, string>> sophosCache = new List<KeyValuePair<string, string>>(); // name, host
+    bool sophosLoading; DateTime sophosLoadedUtc = DateTime.MinValue;
+
+    void RefreshSophosAsync()
+    {
+        if (sophosLoading || Demo.On) return;
+        sophosLoading = true;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            var next = new List<KeyValuePair<string, string>>();
+            try { foreach (var p in SophosStore.Load()) next.Add(new KeyValuePair<string, string>(SophosStore.ConnectionName(p), p.Host)); } catch { }
+            UiInvoke(delegate
+            {
+                sophosLoading = false; sophosLoadedUtc = DateTime.UtcNow;
+                var same = next.Count == sophosCache.Count;
+                for (var i = 0; same && i < next.Count; i++) same = next[i].Key == sophosCache[i].Key && next[i].Value == sophosCache[i].Value;
+                if (same) return;
+                sophosCache = next;
+                ReloadProfiles();
+            });
+        });
     }
 
     void OnConnectionChanged()
@@ -1455,6 +1756,12 @@ internal sealed class SearchForm : Form
             if (r.DockSide != old.DockSide) { autoSide = 0; lastRect = new NativeMethods.RECT(); docked = false; Sync(true); }
             if (r.ReachabilityCheck && !old.ReachabilityCheck) Reachability.CheckAll(profiles, false);
             if (r.ShowForti != old.ShowForti) { if (!r.ShowForti) fortiConnectedId = null; ReloadProfiles(true); }
+            if (r.ShowSophos != old.ShowSophos || r.ShowWatchGuard != old.ShowWatchGuard)
+            {
+                if (!r.ShowSophos) ForgetExt(sophos);
+                if (!r.ShowWatchGuard) ForgetExt(watchGuard);
+                ReloadProfiles(true);
+            }
             list.Invalidate();
             SetStatus("Ayarlar kaydedildi");
         }
@@ -1654,6 +1961,25 @@ internal sealed class SearchForm : Form
                 FortiStore.ApplyLastConnected(forti, starts);
                 loaded.AddRange(forti);
             }
+            // Sophos Connect (cached sccli list, refreshed on a worker) and WatchGuard (registry only).
+            sophosInstalled = !Demo.On && SophosStore.IsInstalled;
+            watchGuardInstalled = !Demo.On && WatchGuardStore.IsInstalled;
+            var extra = new List<VpnProfile>();
+            if (ExtEnabled(sophos))
+            {
+                foreach (var kv in sophosCache) extra.Add(SophosStore.MakeProfile(kv.Key, kv.Value));
+                if (force || (DateTime.UtcNow - sophosLoadedUtc).TotalMinutes > 5) RefreshSophosAsync();
+            }
+            if (ExtEnabled(watchGuard)) extra.AddRange(WatchGuardStore.Load());
+            if (extra.Count > 0)
+            {
+                Dictionary<string, long> starts;
+                try { starts = ConnectionHistory.LastStarts(ConnectionHistory.Load()); } catch { starts = new Dictionary<string, long>(); }
+                foreach (var x in Exts)
+                    foreach (var kv in x.Seen) { long old; if (!starts.TryGetValue(kv.Key, out old) || kv.Value > old) starts[kv.Key] = kv.Value; }
+                VpnProviders.ApplyLastConnected(extra, starts);
+                loaded.AddRange(extra);
+            }
         }
         catch (Exception ex)
         {
@@ -1666,6 +1992,7 @@ internal sealed class SearchForm : Form
         var signature = string.Join("\u0002", loaded.Select(p => p.Id + "\u0001" + p.Name + "\u0001" + p.Host + "\u0001" + p.Username + "\u0001" + p.Source + "\u0001" + p.LastConnected).ToArray());
         if (!force && signature == profileSignature) return;
         profileSignature = signature; profiles = loaded;
+        RefreshSegments();
         var selected = list.SelectedProfile;
         ApplyFilter(selected != null ? selected.Id : null);
         if (settings.ReachabilityCheck) Reachability.CheckAll(profiles, false);
@@ -1694,21 +2021,23 @@ internal sealed class SearchForm : Form
         var terms = ProfileStore.SearchKey(Input.Text).Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray();
         var byName = StringComparer.Create(CultureInfo.GetCultureInfo("tr-TR"), true);
         var rows = new List<ListRow>();
-        var pool = providerFilter == 1 ? profiles.Where(p => !FortiStore.IsForti(p)).ToList() : providerFilter == 2 ? profiles.Where(FortiStore.IsForti).ToList() : profiles;
+        var segment = VpnProviders.SegmentAt(segmentKinds, providerFilter);
+        var pool = segment.HasValue ? profiles.Where(p => VpnProviders.InSegment(p, segment)).ToList() : profiles;
         if (terms.Length == 0)
         {
-            var live = pool.Where(p => p.Id == connectedId || p.Id == fortiConnectedId).ToList();
+            var live = pool.Where(p => p.Id == connectedId || p.Id == fortiConnectedId || p.Id == sophos.ConnectedId || p.Id == watchGuard.ConnectedId).ToList();
             var liveIds = new HashSet<string>(live.Select(p => p.Id));
             var pinned = pool.Where(p => pins.Contains(p.Id) && !liveIds.Contains(p.Id)).OrderBy(p => p.Name, byName).ToList();
             var recent = pool.Where(p => !pins.Contains(p.Id) && !liveIds.Contains(p.Id) && p.LastConnected > 0).OrderByDescending(p => p.LastConnected).Take(5).ToList();
             var used = new HashSet<string>(live.Concat(pinned).Concat(recent).Select(p => p.Id));
-            var rest = pool.Where(p => !used.Contains(p.Id) && !FortiStore.IsForti(p)).OrderBy(p => p.Name, byName).ToList();
-            var fortiRest = pool.Where(p => !used.Contains(p.Id) && FortiStore.IsForti(p)).OrderBy(p => p.Name, byName).ToList();
+            var rest = pool.Where(p => !used.Contains(p.Id) && VpnProviders.IsOpenVpn(p)).OrderBy(p => p.Name, byName).ToList();
+            var others = new[] { VpnKind.Forti, VpnKind.Sophos, VpnKind.WatchGuard }
+                .Select(k => pool.Where(p => !used.Contains(p.Id) && VpnProviders.KindOf(p) == k).OrderBy(p => p.Name, byName).ToList()).ToList();
             AddGroup(rows, "BAĞLI", live, Glyph.Plug);
             AddGroup(rows, "SABİTLENENLER", pinned, Glyph.Star);
             AddGroup(rows, "SON KULLANILAN", recent, Glyph.History);
-            AddGroup(rows, fortiRest.Count > 0 ? "OPENVPN PROFİLLERİ" : used.Count > 0 ? "TÜM PROFİLLER" : null, rest);
-            AddGroup(rows, "FORTICLIENT VPN", fortiRest, Glyph.ShieldLock);
+            AddGroup(rows, others.Any(o => o.Count > 0) ? VpnProviders.GroupTitle(VpnKind.OpenVpn) : used.Count > 0 ? "TÜM PROFİLLER" : null, rest);
+            foreach (var bucket in others) if (bucket.Count > 0) AddGroup(rows, VpnProviders.GroupTitle(VpnProviders.KindOf(bucket[0])), bucket, Glyph.ShieldLock);
             shownCount = pool.Count;
         }
         else
@@ -1754,7 +2083,7 @@ internal sealed class SearchForm : Form
         if (e.KeyCode == Keys.Escape) { if (Input.TextLength > 0) ResetSearch(); else HideForLater(); }
         else if (e.Control && e.KeyCode == Keys.F) { Input.Focus(); Input.SelectAll(); }
         else if (e.Control && e.KeyCode == Keys.P) TogglePin(list.SelectedProfile);
-        else if (e.Control && e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D3) { segmented.Selected = e.KeyCode - Keys.D1; }
+        else if (e.Control && e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D5) { segmented.Selected = e.KeyCode - Keys.D1; }
         else if (e.Control && e.KeyCode == Keys.Oemcomma) BeginInvoke(new Action(ShowSettings));
         else if (e.KeyCode == Keys.Down) list.MoveSelection(1);
         else if (e.KeyCode == Keys.Up) list.MoveSelection(-1);
@@ -1774,6 +2103,8 @@ internal sealed class SearchForm : Form
         if (p == null) return;
         if (Demo.On) { DemoConnect(p.Name, true); return; }
         if (FortiStore.IsForti(p)) { ConnectForti(p); return; }
+        var ext = ExtFor(p);
+        if (ext != null) { ConnectExt(ext, p); return; }
         if (p.Id == connectedId) { list.ConnectSucceeded(p.Id); SetStatus("\"" + p.Name + "\" zaten bağlı"); return; }
         if (p.Id == connectingProfileId) return;
         if (!File.Exists(openVpnPath)) { list.ConnectFailed(p.Id); GlassDialog.Show(this, "OpenVPN Connect bulunamadı.", Text); return; }
@@ -1866,6 +2197,8 @@ internal sealed class SearchForm : Form
         if (settings.ReachabilityCheck && tick % 1200 == 0) Reachability.CheckAll(profiles, true);
         if (!Visible && tick % 600 == 300) NativeMethods.TrimMemory(); // every 5 min while hidden
         if (!Demo.On && settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (Visible || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
+        if (!Demo.On) { MaybePollExt(sophos); MaybePollExt(watchGuard); }
+        if (!Demo.On && tick % 600 == 450 && Visible && ExtEnabled(sophos)) RefreshSophosAsync(); // new / removed Sophos connections, every 5 min
 
         // The process scan (~8 ms, allocates) only runs when the tracked window is gone, and at most every 2 s.
         // Otherwise the cached handle is checked (microseconds); WinEvent hooks cover moves in between.
