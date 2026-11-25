@@ -203,3 +203,83 @@ Issues labelled `hata` with titles `[hata] NullReferenceException: SearchForm.Co
 The body has the environment, the exception chain with frames and the last 60 log lines (provider
 kind + outcome per step). Workflow (dedupe, privacy check, reproduce with `--instance=dev
 --settings=…`, fix with a test, close with the release version) is in `docs\TRIAGE.md`.
+
+## Review fixes (second round)
+
+Commits `5868a46`, `b967026`, `8496ea8`, `b7ce438`, `16b4176` (+ this section). `tests\run-tests.ps1`:
+**335 passed, 0 failed** (292 before + 43 new checks), run twice.
+
+Important items
+1. **Turkish case variants.** Known values are no longer matched with `IgnoreCase`: each value is
+   compiled letter by letter, `i I İ ı` -> `[iIİı]`, `ş/s`, `ğ/g`, `ü/u`, `ö/o`, `ç/c` as one class
+   each (ASCII spellings match too), other letters `[xX]`, blank runs -> `\s+`. Placeholders are
+   looked up by a fold key (same folding), so every variant gets the same `<profil-N>`. Tests:
+   `KARŞIYAKA BELEDİYESİ`, `İzmir Liman`, `ışık enerji`, `Çağ  Tekstil` in upper / lower / title /
+   ASCII / double-space / tab forms. Reviewer script t2: every variant -> its placeholder.
+2. **Usernames.** `AddUser("ACME\jdoe")` also seeds `jdoe` and the domain `ACME`;
+   `AddUser("x@y")` seeds `x`. Patterns: `user@host` with a dotless host or an IP
+   (`<kullanici>@<sunucu-N>` / `<kullanici>@<ip-N>`), `DOMAIN\user` -> `<alan>\<kullanici>` (left side
+   2-15 chars, not after `\ / :`, not a folder word such as Users / Windows / logs). Paths
+   (`C:\Users\…`, `logs\app.log`, `%APPDATA%\…`) stay as before (tested).
+3. **Hosts in any case.** The last label is matched case-insensitively; a file-extension "TLD" is
+   kept only for single-dot tokens (`Connection.cs`). Exceptions to avoid garbling .NET names: tokens
+   starting with `System.` / `Microsoft.`, and a leading exception type on a line
+   (`    System.IO.IOException: …`) stays readable while the rest of the line is sanitized. Tests:
+   `VPN.CORP.EXAMPLE.COM`, `gw.example.ZIP`, `portal.firma.md`, `x.firma.zip`, `Vpn.Firma.Com.Tr`.
+4. **Regex time.** Every line / message is cut to 1000 chars before any pattern runs; Email and
+   OvpnFile have left anchors; every regex (including the known-values one) has a 250 ms match
+   timeout and a line that still times out becomes `<satir-kisaltildi>`. Reviewer t4 / t5 (up to
+   50 000-char tokens): max 171 ms per input (was seconds to minutes); t6 (600 profiles x 60 lines):
+   174 ms. Test: five 50 000-char shapes each under 1 s with no seed in the output.
+5. **Local logs are unsanitized**: one sentence in README (and the usage text). Update failures go
+   through `LogSanitizer.StripQuoted` before logging (`check failed`, `download / verification
+   failed`, `install start failed`). Other paths that reach the local log with exception text
+   already go through `LogWriter.ExceptionLines` (quotes stripped); connect logs carry no message text.
+6. **Wording.** README, `CrashReporter.ReportContents` / `ReportSummary` and the usage text now say
+   the sanitized report reaches GitHub inside the new-issue page address when the page opens and is
+   published only when the user presses Submit. README and TRIAGE agree that release builds have
+   no PDB, so frames carry no file / line.
+
+Minor items
+- Duplicate check: `ctx.Post` in try/catch, `Application.UseWaitCursor` while it runs, repeat
+  clicks ignored while pending.
+- `OnThreadException` computes the fingerprint first and skips the report work for a repeat.
+- `LogWriter`: `Drain` and `Flush` take the buffer while holding the file lock (ordered chunks);
+  the file is opened with `FileSystemRights.AppendData`.
+- `AddProfile` also seeds the `.ovpn` file name (without extension) and its parent folder name.
+- More secrets: `password: phrase with blanks` (and pwd / passwd / secret / parola / şifre: to end of
+  line), `user=` / `username=` / `login=`, `key=`, `X-…-Token`, `token <value>`, cookies /
+  `SVPNCOOKIE=`, `-u user:pass`, `-n <name>`, `-h <host>`.
+- IPv4 accepts leading zeros (`192.168.001.010`); four-part versions after `v` / `ver` / `version` /
+  `sürüm` / `release` / `build` / `clr` stay; UNC share names become `<metin>`; other absolute
+  paths keep only the file name (`<yol>\file`).
+- No seeds shorter than 4 chars or equal to common log words (info, user, admin, vpn, connect …);
+  tested with `KnownCount == 0`.
+- "Sonra" keeps the crash marker (`offers=N` line) and the next start asks again, 3 times in all;
+  `CrashPromptLogic.AfterLater` is pure and tested.
+- "Bir daha sorma" chosen while the settings window is open survives saving that window.
+- `FortiTrace` logs the outcome with a non-identifying detail (exception type / form state, "tunnel
+  selected" instead of the name) and the last detail when the form never got ready in 20 s.
+- `tests\Tests.cs`: the `Run(...)` line that shared a line with `Console.WriteLine()` is split.
+- `SNote` measures its wrapped text and sizes itself (checked in `--demo` at scale 1 and 1.5).
+
+Extra task (Sophos / WatchGuard tab)
+- `VpnProviders.ShowsExtSegment(enabled, installed, rows)` = enabled and (installed or rows > 0);
+  the main window uses it for Sophos and WatchGuard (OpenVPN / FortiClient unchanged), and refreshes
+  the bar when the installed flags change. When the selected Sophos / WatchGuard segment has no rows
+  the list shows `VpnProviders.EmptySegmentText` ("Sophos Connect'te tanımlı bağlantı yok. .pro veya
+  .ovpn dosyasını Sophos Connect'e ekleyin." / "WatchGuard SSL VPN istemcisinde kayıtlı sunucu
+  yok."). Demo keeps its fictional rows (installed is false in demo, rows > 0). Pure tests cover the
+  rule, the texts and that an empty Sophos tab sits at index 3 (Ctrl+4) with FortiClient on.
+  Not seen in the running app: demo never reports a client as installed, so the empty tab was not
+  captured; only compiled and unit-tested.
+
+Still open / concerns
+- Pattern-based sanitizing: a dotless host name that is not a known value (`fw-gamma-01`), a MAC
+  address, or a customer word inside free text can still pass; the user sees the report before
+  Submit.
+- Case-insensitive hosts over-redact dotted identifiers that are not under `System.` / `Microsoft.`
+  (e.g. `SearchForm.Connect` in a non-frame line); frame lines are protected.
+- A script slip during this round created an empty file `C:\Users\user\Documents\Codex\2026-11-11\watchguard-ss\README.md`
+  (0 bytes, outside the repository; .NET resolved a relative path against the parent folder).
+  Deleting it was blocked by the permission classifier; please delete it by hand.
