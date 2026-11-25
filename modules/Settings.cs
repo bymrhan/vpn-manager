@@ -26,6 +26,8 @@ internal sealed class AppSettings
     public string Theme;                // "dark", "light", "system"
     public bool ReachabilityCheck;
     public bool ShowForti;              // list FortiClient VPN tunnels too
+    public bool ShowSophos;             // list Sophos Connect connections too (when installed)
+    public bool ShowWatchGuard;         // list WatchGuard SSL VPN servers too (when installed)
 
     public static AppSettings Defaults()
     {
@@ -40,7 +42,9 @@ internal sealed class AppSettings
             DockSide = "auto",
             Theme = "dark",
             ReachabilityCheck = true,
-            ShowForti = true
+            ShowForti = true,
+            ShowSophos = true,
+            ShowWatchGuard = true
         };
     }
 
@@ -105,6 +109,8 @@ internal static class SettingsStore
             s.Theme = Str(d, "Theme", s.Theme);
             s.ReachabilityCheck = Bool(d, "ReachabilityCheck", s.ReachabilityCheck);
             s.ShowForti = Bool(d, "ShowForti", s.ShowForti);
+            s.ShowSophos = Bool(d, "ShowSophos", s.ShowSophos);
+            s.ShowWatchGuard = Bool(d, "ShowWatchGuard", s.ShowWatchGuard);
         }
         catch
         {
@@ -131,6 +137,9 @@ internal static class SettingsStore
         d["DockSide"] = n.DockSide;
         d["Theme"] = n.Theme;
         d["ReachabilityCheck"] = n.ReachabilityCheck;
+        d["ShowForti"] = n.ShowForti;
+        d["ShowSophos"] = n.ShowSophos;
+        d["ShowWatchGuard"] = n.ShowWatchGuard;
         var json = new JavaScriptSerializer().Serialize(d);
 
         var path = FilePath;
