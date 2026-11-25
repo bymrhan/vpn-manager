@@ -442,6 +442,12 @@ internal static class WatchGuardGui
         bool userHadIt; string err;
         var dlg = EnsureLoginDialog(true, prev, out userHadIt, out err);
         if (dlg == IntPtr.Zero) { message = err; return WatchGuardStore.ConnectOutcome.Failed; }
+        if (userHadIt)
+        {
+            // The user has the dialog open on screen: it is theirs. Nothing is changed or pressed.
+            message = "WatchGuard giriş penceresi zaten açık: bağlantıyı o pencereden tamamlayın.";
+            return WatchGuardStore.ConnectOutcome.ShownToUser;
+        }
 
         if (!SelectServer(dlg, server)) return ShowToUser(dlg, "WatchGuard penceresinde sunucu seçilemedi; sunucuyu seçip Connect'e basın.", out message);
         if (!string.IsNullOrEmpty(user) && !SetAndVerify(dlg, IdUsername, user))
@@ -457,10 +463,91 @@ internal static class WatchGuardGui
         if (connect == IntPtr.Zero || !IsWindowEnabled(connect)) return ShowToUser(dlg, "WatchGuard'da Connect düğmesi kullanılamıyor.", out message);
 
         var before = OnScreenDialogs();
-        if (!userHadIt) BabysitAfterPress(dlg, prev, before, 90);
         // WM_COMMAND/BN_CLICKED straight to the dialog: no mouse, no focus, works off-screen.
-        if (!PostMessage(dlg, WM_COMMAND, MakeWParam(IdConnect, BN_CLICKED), connect)) { message = "WatchGuard'da Connect'e basılamadı."; return WatchGuardStore.ConnectOutcome.Failed; }
+        if (!PostMessage(dlg, WM_COMMAND, MakeWParam(IdConnect, BN_CLICKED), connect))
+            return ShowToUser(dlg, "WatchGuard'da Connect'e basılamadı; pencereden Connect'e basın.", out message);
+        BabysitAfterPress(dlg, prev, before, 90);
         return WatchGuardStore.ConnectOutcome.Pressed;
+    }
+
+    public enum DialogPlan { Drive, LeaveToUser }
+
+    // A login dialog that already existed and is on screen belongs to the user: it is not driven
+    // (not filled, not pressed, not moved). A hidden one, or one this app opens, is driven.
+    internal static DialogPlan PlanForDialog(bool existedBefore, bool onScreenBefore)
+    {
+        return existedBefore && onScreenBefore ? DialogPlan.LeaveToUser : DialogPlan.Drive;
+    }
+
+    // Collapses runs of whitespace (message boxes may differ in line breaks) and trims.
+    internal static string NormalizeText(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var sb = new StringBuilder(s.Length);
+        var space = false;
+        foreach (var c in s)
+        {
+            if (char.IsWhiteSpace(c)) { space = true; continue; }
+            if (space && sb.Length > 0) sb.Append(' ');
+            space = false;
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    // True only when the box text is exactly (whitespace-insensitive) one of the client's own
+    // "active connections will be closed if you exit, exit?" questions.
+    internal static bool IsExitQuestionText(string shown, IEnumerable<string> questions)
+    {
+        var s = NormalizeText(shown);
+        if (s.Length == 0 || questions == null) return false;
+        foreach (var q in questions)
+        {
+            var n = NormalizeText(q);
+            if (n.Length > 0 && string.Equals(s, n, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    // String 130 of wgsslvpncENU/FRA/JPN.dll is the exit-while-connected question (checked in all
+    // three DLLs). Read once as data files; the ENU text is the fallback when none can be read.
+    const uint ExitQuestionStringId = 130;
+    const string ExitQuestionFallback = "There are active connections that will be close if you exit.  Do you want to exit?";
+    static List<string> exitQuestions;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryEx(string file, IntPtr reserved, uint flags);
+    [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int LoadString(IntPtr h, uint id, StringBuilder sb, int max);
+
+    static List<string> ExitQuestions()
+    {
+        lock (gate)
+        {
+            if (exitQuestions != null) return exitQuestions;
+            var list = new List<string>();
+            try
+            {
+                var dir = Path.GetDirectoryName(WatchGuardStore.ClientPath);
+                if (!string.IsNullOrEmpty(dir))
+                    foreach (var lang in new[] { "ENU", "FRA", "JPN" })
+                    {
+                        var dll = Path.Combine(dir, "wgsslvpnc" + lang + ".dll");
+                        if (!File.Exists(dll)) continue;
+                        var h = LoadLibraryEx(dll, IntPtr.Zero, 0x2); // LOAD_LIBRARY_AS_DATAFILE
+                        if (h == IntPtr.Zero) continue;
+                        try
+                        {
+                            var sb = new StringBuilder(1024);
+                            if (LoadString(h, ExitQuestionStringId, sb, sb.Capacity) > 0) list.Add(sb.ToString());
+                        }
+                        finally { FreeLibrary(h); }
+                    }
+            }
+            catch { }
+            if (list.Count == 0) list.Add(ExitQuestionFallback);
+            exitQuestions = list;
+            return list;
+        }
     }
 
     // Opens the login dialog on screen with the server chosen and the user name filled.
@@ -470,6 +557,7 @@ internal static class WatchGuardGui
         bool userHadIt; string err;
         var dlg = EnsureLoginDialog(false, prev, out userHadIt, out err);
         if (dlg == IntPtr.Zero) return err;
+        if (userHadIt) { SetForegroundWindow(dlg); return null; } // the user's own open dialog: not changed
         SelectServer(dlg, server);
         if (!string.IsNullOrEmpty(user)) SetAndVerify(dlg, IdUsername, user);
         Reveal(dlg, true);
@@ -499,7 +587,7 @@ internal static class WatchGuardGui
         var dlg = FindLoginDialog(pids);
         if (dlg != IntPtr.Zero)
         {
-            userHadIt = OnScreen(dlg);
+            userHadIt = PlanForDialog(true, OnScreen(dlg)) == DialogPlan.LeaveToUser;
             return dlg; // an open (or hidden) dialog: its controls work as they are
         }
         var hidden = FindHiddenWindow(pids);
@@ -567,6 +655,7 @@ internal static class WatchGuardGui
     {
         ThreadPool.QueueUserWorkItem(delegate
         {
+            var connected = false;
             try
             {
                 var end = DateTime.UtcNow.AddSeconds(seconds);
@@ -589,15 +678,39 @@ internal static class WatchGuardGui
                     if (stop) break;
                     if (DateTime.UtcNow >= nextCheck)
                     {
-                        if (WatchGuardStore.ConnectedServer() != null) break;
+                        if (WatchGuardStore.ConnectedServer() != null) { connected = true; break; }
                         nextCheck = DateTime.UtcNow.AddSeconds(2);
                     }
                     Thread.Sleep(50);
                 }
-                RestoreHiddenParked();
             }
             catch { }
+            finally
+            {
+                // Never strand a parked window: give windows that are closing a moment to go,
+                // then bring back whatever is still visible (to the front unless the connection
+                // came up, when it is only the status window finishing).
+                try { RevealStranded(!connected, 1500); } catch { }
+            }
         });
+    }
+
+    // Moves every still-visible window this class parked back on screen; hidden ones go home
+    // silently. graceMs: time a closing window gets to disappear first. Returns the revealed ones.
+    static List<IntPtr> RevealStranded(bool activate, int graceMs)
+    {
+        var until = DateTime.UtcNow.AddMilliseconds(graceMs);
+        while (true)
+        {
+            RestoreHiddenParked();
+            lock (gate) if (parked.Count == 0) break;
+            if (DateTime.UtcNow >= until) break;
+            Thread.Sleep(50);
+        }
+        var left = new List<IntPtr>();
+        lock (gate) left.AddRange(parked.Keys);
+        foreach (var h in left) Reveal(h, activate);
+        return left;
     }
 
     // ---- disconnect ----
@@ -611,13 +724,23 @@ internal static class WatchGuardGui
         var prev = GetForegroundWindow();
         var before = OnScreenDialogs();
 
-        // 1) Tray "Disconnect" (the "Connect..." item while connected).
-        PostMessage(hidden, WM_COMMAND, MakeWParam(CmdConnect, 0), IntPtr.Zero);
-        if (WaitDisconnected(pids, before, prev, false, 12)) return null;
-        // 2) Tray "Exit": the client closes its connection; its "active connections" question is answered Yes.
-        PostMessage(hidden, WM_COMMAND, MakeWParam(CmdExit, 0), IntPtr.Zero);
-        if (WaitDisconnected(pids, before, prev, true, 12)) return null;
-        return "WatchGuard bağlantısı kesilemedi; WatchGuard simgesinden Disconnect'i seçin.";
+        try
+        {
+            // 1) Tray "Disconnect" (the "Connect..." item while connected).
+            PostMessage(hidden, WM_COMMAND, MakeWParam(CmdConnect, 0), IntPtr.Zero);
+            if (WaitDisconnected(pids, before, prev, false, 12)) return null;
+            // Timed out: whatever was parked and is still there goes back to the user and is left
+            // alone by the next step.
+            foreach (var h in RevealStranded(true, 1000)) before.Add(h);
+            // 2) Tray "Exit": the client closes its connection; its exit question is answered Yes.
+            PostMessage(hidden, WM_COMMAND, MakeWParam(CmdExit, 0), IntPtr.Zero);
+            if (WaitDisconnected(pids, before, prev, true, 12)) return null;
+            return "WatchGuard bağlantısı kesilemedi; WatchGuard simgesinden Disconnect'i seçin.";
+        }
+        finally
+        {
+            try { RevealStranded(true, 1000); } catch { } // no exit path leaves a window off-screen
+        }
     }
 
     static bool WaitDisconnected(HashSet<uint> pids, HashSet<IntPtr> before, IntPtr prev, bool confirmExit, int seconds)
@@ -714,8 +837,7 @@ internal static class WatchGuardGui
     static bool IsExitQuestion(IntPtr h)
     {
         if (GetDlgItem(h, IdYes) == IntPtr.Zero || GetDlgItem(h, IdNo) == IntPtr.Zero) return false;
-        var t = GetText(GetDlgItem(h, MessageBoxText)).ToLowerInvariant();
-        return t.IndexOf("exit", StringComparison.Ordinal) >= 0 || t.IndexOf("quitter", StringComparison.Ordinal) >= 0;
+        return IsExitQuestionText(GetText(GetDlgItem(h, MessageBoxText)), ExitQuestions());
     }
 
     static HashSet<IntPtr> OnScreenDialogs()

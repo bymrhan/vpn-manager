@@ -40,6 +40,7 @@ static class Tests
         Run("WatchGuard günlük durumu", WatchGuardLog);
         Run("WatchGuard kimlik bilgisi öneki", WatchGuardCredentialPrefix);
         Run("WatchGuard Load hiçbir şey başlatmaz", WatchGuardLoad);
+        Run("WatchGuard pencere kararları", WatchGuardWindowRules);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -223,7 +224,7 @@ static class Tests
     {
         const string start = "2026-01-01T10:00:00.000 Launching WatchGuard Mobile VPN with SSL client. Version 1.0 (Build 1)\r\r\n";
         const string req = "2026-01-01T10:00:01.000 Requesting client configuration from vpn2.example:10443\r\r\n";
-        const string state = "2026-01-01T10:00:05.000 OVPN:>STATE:1,CONNECTED,SUCCESS,10.0.0.2,192.0.2.1,10443,,\r\r\n";
+        const string state = "2026-01-01T10:00:05.000 OVPN:>STATE:1,CONNECTED,SUCCESS,<vip>,<gw>,10443,,\r\r\n";
         const string ok = "2026-01-01T10:00:06.000 SSLVPN Connected\r\r\n";
         const string closed = "2026-01-01T11:00:00.000 Connection Closed.\r\r\n";
         const string exiting = "2026-01-01T11:00:00.000 OVPN:>LOG:2,,MANAGEMENT: >STATE:2,EXITING,SIGTERM,,,,,\r\r\n";
@@ -261,6 +262,22 @@ static class Tests
             Check(FortiCredentialStore.Delete(name, px) && !FortiCredentialStore.Has(name, px), "sil");
         }
         finally { FortiCredentialStore.Delete(name, px); }
+    }
+
+    // The user's own open dialog is never driven; only the client's exact exit question gets "Yes".
+    static void WatchGuardWindowRules()
+    {
+        Check(WatchGuardGui.PlanForDialog(true, true) == WatchGuardGui.DialogPlan.LeaveToUser, "kullanıcının açık penceresine dokunulmaz");
+        Check(WatchGuardGui.PlanForDialog(true, false) == WatchGuardGui.DialogPlan.Drive, "gizli/simge durumundaki pencere sürülür");
+        Check(WatchGuardGui.PlanForDialog(false, false) == WatchGuardGui.DialogPlan.Drive, "uygulamanın açtığı pencere sürülür");
+
+        var questions = new[] { "Örnek soru: çıkarsanız açık bağlantılar kapanır.\r\n\r\nÇıkılsın mı?", "Example question: leaving closes the tunnel.\n\nLeave?" };
+        Check(WatchGuardGui.IsExitQuestionText("Örnek soru: çıkarsanız açık bağlantılar kapanır.\n\nÇıkılsın mı?", questions), "aynı soru (satır sonu farkı) eşleşir");
+        Check(WatchGuardGui.IsExitQuestionText("  example question: leaving closes the tunnel. Leave?  ", questions), "boşluk ve büyük/küçük harf farkı eşleşir");
+        Check(!WatchGuardGui.IsExitQuestionText("Do you want to exit and install the update?", questions), "'exit' geçen başka soru eşleşmez");
+        Check(!WatchGuardGui.IsExitQuestionText("Example question: leaving closes the tunnel.", questions), "sorunun bir parçası eşleşmez");
+        Check(!WatchGuardGui.IsExitQuestionText("", questions) && !WatchGuardGui.IsExitQuestionText("x", null) && !WatchGuardGui.IsExitQuestionText("", new[] { "" }), "boş metin / boş liste eşleşmez");
+        Check(WatchGuardGui.NormalizeText(" a \r\n\r\n b\t") == "a b", "boşluk sadeleştirme");
     }
 
     // Load() reads the registry only: as many profiles as Server entries, and no client process.
