@@ -43,6 +43,16 @@ internal static class FortiCredentialStore
     // prefix: other providers pass their own (e.g. SophosStore.CredentialPrefix); Forti keeps the default.
     static string Target(string tunnel, string prefix) { return (prefix ?? TargetPrefix) + tunnel; }
 
+    // Comment shown in Credential Manager: the client the credential belongs to, from the prefix.
+    // FortiClient's (default prefix) stays as it always was.
+    internal static string CommentFor(string prefix)
+    {
+        var client = "FortiClient";
+        if (prefix == SophosStore.CredentialPrefix) client = "Sophos Connect";
+        else if (prefix == WatchGuardStore.CredentialPrefix) client = "WatchGuard";
+        return "OpenVPN Hızlı Arama · " + client;
+    }
+
     public static bool Has(string tunnel, string prefix = null)
     {
         IntPtr p;
@@ -74,7 +84,7 @@ internal static class FortiCredentialStore
             Marshal.Copy(bytes, 0, blob, bytes.Length);
             var c = new CREDENTIAL
             {
-                Type = CredTypeGeneric, TargetName = Target(tunnel, prefix), Comment = "OpenVPN Hızlı Arama · FortiClient",
+                Type = CredTypeGeneric, TargetName = Target(tunnel, prefix), Comment = CommentFor(prefix),
                 CredentialBlobSize = bytes.Length, CredentialBlob = blob, Persist = CredPersistLocalMachine,
                 UserName = cred.Username ?? ""
             };

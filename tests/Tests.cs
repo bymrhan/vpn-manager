@@ -190,6 +190,8 @@ static class Tests
         {
             Check(FortiCredentialStore.Save(name, new FortiCredential { Username = "u", Password = "p" }) == null, "önek vermeden kaydet");
             Check(FortiCredentialStore.Has(name, "OpenVpnQuickSearch:forti:"), "hedef OpenVpnQuickSearch:forti:<ad>");
+            Check(FortiCredentialStore.CommentFor(null) == "OpenVPN Hızlı Arama · FortiClient", "Forti açıklaması değişmedi");
+            Check(FortiCredentialStore.CommentFor(SophosStore.CredentialPrefix) == "OpenVPN Hızlı Arama · Sophos Connect" && FortiCredentialStore.CommentFor(WatchGuardStore.CredentialPrefix) == "OpenVPN Hızlı Arama · WatchGuard", "Sophos / WatchGuard açıklaması kendi adıyla");
         }
         finally { FortiCredentialStore.Delete(name); }
     }
