@@ -33,6 +33,8 @@ static class Tests
         Run("FortiGui.ShowsTunnel", ShowsTunnel);
         Run("FortiCredentialStore", CredentialStore);
         Run("Forti son bağlanma zamanı", FortiLastConnected);
+        Run("Sophos Connect ayrıştırma", SophosParsing);
+        Run("Sophos kimlik bilgisi öneki", SophosCredentialPrefix);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -125,5 +127,43 @@ static class Tests
             Check(FortiCredentialStore.Load(tunnel) == null, "olmayan kayıt null döner");
         }
         finally { FortiCredentialStore.Delete(tunnel); }
+    }
+
+    static void SophosParsing()
+    {
+        Check(SophosStore.ParseList("Connections:\r\n  None\r\n").Count == 0, "boş liste (None)");
+        Check(SophosStore.ParseList("").Count == 0 && SophosStore.ParseList(null).Count == 0, "boş metin");
+        var names = SophosStore.ParseList("Connections:\r\n  ofis-ornek\r\n  - Ev Örnek VPN\r\n\r\n  ofis-ornek\r\n");
+        Check(names.Count == 2 && names[0] == "ofis-ornek" && names[1] == "Ev Örnek VPN", "birden çok bağlantı (madde işareti, boşluklu ad, tekrar yok)");
+        Check(SophosStore.ParseList("Connections:\n  a.example\nOther:\n  b\n").Count == 1, "başka bölüm listeyi bitirir");
+        Check(SophosStore.ParseList("garbage \u0001 ??\nnot a list").Count == 0, "çöp metin boş döner");
+
+        Check(SophosStore.ParseHost("Name: x\nGateway: vpn.example:443\n") == "vpn.example:443", "gateway anahtarı");
+        Check(SophosStore.ParseHost("  \"server\": \"vpn2.example\",\n") == "vpn2.example", "JSON benzeri satır");
+        Check(SophosStore.ParseHost("nothing useful\n???") == "" && SophosStore.ParseHost(null) == "", "host yoksa boş");
+
+        Check(SophosStore.ParseConnected("State: Connected\n"), "connected durumu");
+        Check(!SophosStore.ParseConnected("State: Disconnected\n"), "disconnected bağlı sayılmaz");
+        Check(!SophosStore.ParseConnected("Status: connecting\n") && !SophosStore.ParseConnected("random\ntext") && !SophosStore.ParseConnected(""), "belirsiz durum bağlı sayılmaz");
+
+        var p = SophosStore.MakeProfile("ofis-ornek", "vpn.example");
+        Check(p.Id == "sophos:ofis-ornek" && SophosStore.IsSophos(p) && !SophosStore.IsSophos(new VpnProfile { Id = "forti-ssl:x" }), "kimlik öneki");
+        Check(SophosStore.ConnectionName(p) == "ofis-ornek" && p.Source == "" && p.Keys.Length > 0 && p.Initials.Length > 0, "profil alanları");
+        Check(SophosStore.Quote("a b") == "\"a b\"" && SophosStore.Quote("x") == "x" && SophosStore.Quote("a\"b") == "\"a\\\"b\"", "argüman tırnaklama");
+        Check(SophosStore.Load() != null, "Load hata vermez");
+    }
+
+    // Sophos and Forti credentials with the same name must not collide in Credential Manager.
+    static void SophosCredentialPrefix()
+    {
+        const string name = "__oqs_test_sophos__";
+        FortiCredentialStore.Delete(name); FortiCredentialStore.Delete(name, SophosStore.CredentialPrefix);
+        try
+        {
+            Check(FortiCredentialStore.Save(name, new FortiCredential { Username = "u", Password = "p" }, SophosStore.CredentialPrefix) == null, "Sophos öneğiyle kaydet");
+            Check(FortiCredentialStore.Has(name, SophosStore.CredentialPrefix) && !FortiCredentialStore.Has(name), "Forti hedefi etkilenmez");
+            Check(FortiCredentialStore.Delete(name, SophosStore.CredentialPrefix) && !FortiCredentialStore.Has(name, SophosStore.CredentialPrefix), "sil");
+        }
+        finally { FortiCredentialStore.Delete(name, SophosStore.CredentialPrefix); }
     }
 }

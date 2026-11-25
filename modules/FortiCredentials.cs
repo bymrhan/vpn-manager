@@ -40,20 +40,21 @@ internal static class FortiCredentialStore
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CredDelete(string target, int type, int flags);
     [DllImport("advapi32.dll")] static extern void CredFree(IntPtr p);
 
-    static string Target(string tunnel) { return TargetPrefix + tunnel; }
+    // prefix: other providers pass their own (e.g. SophosStore.CredentialPrefix); Forti keeps the default.
+    static string Target(string tunnel, string prefix) { return (prefix ?? TargetPrefix) + tunnel; }
 
-    public static bool Has(string tunnel)
+    public static bool Has(string tunnel, string prefix = null)
     {
         IntPtr p;
-        if (!CredRead(Target(tunnel), CredTypeGeneric, 0, out p)) return false;
+        if (!CredRead(Target(tunnel, prefix), CredTypeGeneric, 0, out p)) return false;
         CredFree(p);
         return true;
     }
 
-    public static FortiCredential Load(string tunnel)
+    public static FortiCredential Load(string tunnel, string prefix = null)
     {
         IntPtr p;
-        if (!CredRead(Target(tunnel), CredTypeGeneric, 0, out p)) return null;
+        if (!CredRead(Target(tunnel, prefix), CredTypeGeneric, 0, out p)) return null;
         try
         {
             var c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));
@@ -64,7 +65,7 @@ internal static class FortiCredentialStore
     }
 
     // Returns an error message or null.
-    public static string Save(string tunnel, FortiCredential cred)
+    public static string Save(string tunnel, FortiCredential cred, string prefix = null)
     {
         var bytes = Encoding.Unicode.GetBytes(cred.Password ?? "");
         var blob = Marshal.AllocCoTaskMem(Math.Max(1, bytes.Length));
@@ -73,7 +74,7 @@ internal static class FortiCredentialStore
             Marshal.Copy(bytes, 0, blob, bytes.Length);
             var c = new CREDENTIAL
             {
-                Type = CredTypeGeneric, TargetName = Target(tunnel), Comment = "OpenVPN Hızlı Arama · FortiClient",
+                Type = CredTypeGeneric, TargetName = Target(tunnel, prefix), Comment = "OpenVPN Hızlı Arama · FortiClient",
                 CredentialBlobSize = bytes.Length, CredentialBlob = blob, Persist = CredPersistLocalMachine,
                 UserName = cred.Username ?? ""
             };
@@ -89,9 +90,9 @@ internal static class FortiCredentialStore
         }
     }
 
-    public static bool Delete(string tunnel)
+    public static bool Delete(string tunnel, string prefix = null)
     {
-        if (CredDelete(Target(tunnel), CredTypeGeneric, 0)) return true;
+        if (CredDelete(Target(tunnel, prefix), CredTypeGeneric, 0)) return true;
         return Marshal.GetLastWin32Error() == ErrorNotFound;
     }
 
