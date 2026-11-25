@@ -402,8 +402,11 @@ internal sealed class UpdateNotice : Form
     readonly Rectangle textRect;
     public event Action UpdateNow, Later, Skip, Notes;
 
-    public UpdateNotice(ReleaseInfo r, string current, bool canInstall)
+    // installedCopy: running from the install dir. Otherwise, or without the package / .sha256 asset,
+    // the primary button opens the release page instead of installing.
+    public UpdateNotice(ReleaseInfo r, string current, bool installedCopy)
     {
+        var canInstall = installedCopy && r.CanInstall;
         AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.Manual; DoubleBuffered = true;
         BackColor = Ui.GlassPrimary; // the buttons paint their parent's color behind them: same as the glass card ForeColor = Ui.Text; Font = SFonts.Nav;
@@ -412,6 +415,7 @@ internal sealed class UpdateNotice : Form
         var notes = UpdateLogic.NotesPreview(r.Notes, 160);
         body = (canInstall
             ? "Yüklü sürüm " + current + ". Şimdi güncelleyebilir ya da sonraya bırakabilirsiniz."
+            : installedCopy ? "Yüklü sürüm " + current + ". Bu sürüm uygulama içinden kurulamıyor; sürüm sayfasından indirin."
             : "Yüklü sürüm " + current + ". Bu kopya kurulum klasöründe değil; yeni sürümü sürüm sayfasından indirin.")
             + (notes.Length > 0 ? "\n" + notes : "");
         var width = S(440); var textW = width - S(96);

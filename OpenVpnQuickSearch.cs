@@ -1742,7 +1742,8 @@ internal sealed class SearchForm : Form
     bool updateChecking, updateDownloading, updateCheckedThisRun;
     DateTime updateFailUtc = DateTime.MinValue;
     ReleaseInfo updateRelease;          // newest offered release found in this run
-    string updatePackage;               // verified, extracted package waiting for an idle moment (auto)
+    string updatePackage;               // verified, extracted package waiting to be installed
+    bool updateUserAsked;               // "Şimdi güncelle": install once nothing is in flight, restart in the foreground
     string updateBadVersion;            // a version whose download / verification failed: not retried this run
     UpdateNotice updateNotice;
 
@@ -1751,7 +1752,7 @@ internal sealed class SearchForm : Form
     void UpdateTick()
     {
         if (exiting || tick < 60) return;                                    // ~30 s after start
-        if (updatePackage != null && tick % 10 == 0) InstallWhenIdle();      // every 5 s while a package waits
+        if (updatePackage != null && tick % 10 == 0) InstallPending();       // every 5 s while a package waits
         if (tick % 120 != 60) return;                                        // once a minute
         if (settings.UpdateMode == "off" || updateChecking || updateDownloading || updatePackage != null) return;
         if (!UpdateLogic.IsDue(settings.UpdateInterval, settings.LastUpdateCheckUtc, updateFailUtc, updateCheckedThisRun, DateTime.UtcNow)) return;
@@ -1809,7 +1810,7 @@ internal sealed class SearchForm : Form
     {
         if (exiting) return;
         if (updateNotice != null && !updateNotice.IsDisposed) updateNotice.Close();
-        var n = new UpdateNotice(r, UpdateLogic.CurrentVersion, IsInstalledCopy && r.CanInstall);
+        var n = new UpdateNotice(r, UpdateLogic.CurrentVersion, IsInstalledCopy);
         n.UpdateNow += delegate { StartUpdateDownload(r, true); };
         n.Skip += delegate { settings.SkippedVersion = r.Version; SaveSettings(); SetStatus("Sürüm " + r.Version + " atlandı"); };
         n.Notes += delegate { UpdateClient.OpenReleasePage(r.HtmlUrl); };
@@ -1823,7 +1824,7 @@ internal sealed class SearchForm : Form
     void StartUpdateDownload(ReleaseInfo r, bool userAsked)
     {
         if (updateDownloading || Demo.On) return;
-        if (updatePackage != null) { if (userAsked) InstallUpdate(false); return; }
+        if (updatePackage != null) { if (userAsked) { updateUserAsked = true; InstallPending(); } return; }
         updateDownloading = true;
         if (userAsked) SetStatus("Sürüm " + r.Version + " indiriliyor…");
         ThreadPool.QueueUserWorkItem(delegate
@@ -1839,9 +1840,8 @@ internal sealed class SearchForm : Form
                     ReportUpdate("Güncelleme başarısız: " + err);
                     return;
                 }
-                updatePackage = pkg;
-                if (userAsked) InstallUpdate(false);
-                else InstallWhenIdle();
+                updatePackage = pkg; updateUserAsked = userAsked;
+                InstallPending();
             });
         });
     }
@@ -1862,9 +1862,19 @@ internal sealed class SearchForm : Form
         get { return openSettings != null || Application.OpenForms.Cast<Form>().Any(f => f != this && f != updateNotice && f.Visible); }
     }
 
-    void InstallWhenIdle()
+    // User asked ("Şimdi güncelle"): install once no connect / disconnect is in flight and no dialog
+    // (e.g. the settings window) is open, then restart in the foreground.
+    // Auto mode: install only when idle (UpdateLogic.IsIdle), then restart with --background.
+    void InstallPending()
     {
-        if (updatePackage == null || exiting || settings.UpdateMode != "auto") return;
+        if (updatePackage == null || exiting) return;
+        if (updateUserAsked)
+        {
+            if (UpdateBusy || UpdateDialogOpen) { ReportUpdate("Güncelleme, pencereler kapanınca kurulacak"); return; }
+            InstallUpdate(false);
+            return;
+        }
+        if (settings.UpdateMode != "auto") return;
         if (!UpdateLogic.IsIdle(Visible && WindowState != FormWindowState.Minimized, UpdateClient.IdleMilliseconds(), UpdateBusy, UpdateDialogOpen)) return;
         InstallUpdate(true);
     }
