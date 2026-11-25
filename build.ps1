@@ -4,6 +4,14 @@
 param([switch]$NoProfiles)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
+
+# <zip>.sha256 next to a package, in the release asset's format ("<sha256>  <file name>" + LF, as
+# sha256sum writes it). install.ps1 and the in-app updater refuse a package without a matching hash.
+function Write-Sha256([string]$file, [string]$name) {
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText("$file.sha256", "$hash  $name`n", (New-Object Text.UTF8Encoding $false))
+    return $hash
+}
 $Out = [IO.Path]::GetFullPath((Join-Path $root '..\..\outputs'))
 $stage = Join-Path $env:TEMP ('ovpnqs-build-' + [guid]::NewGuid().ToString('N'))
 $appDir = Join-Path $stage 'uygulama'; $packDir = Join-Path $stage 'profiller'
@@ -69,6 +77,7 @@ foreach ($n in 'Kur.cmd', 'Kaldir.cmd', 'BENIOKU.txt') { Copy-Item (Join-Path $r
 # 4) zip
 $zip = Join-Path $Out $(if ($NoProfiles) { 'OpenVPN-Hizli-Arama-Kurulum-Profilsiz.zip' } else { 'OpenVPN-Hizli-Arama-Kurulum.zip' })
 if (Test-Path $zip) { Remove-Item $zip -Force }
+if (Test-Path "$zip.sha256") { Remove-Item "$zip.sha256" -Force }
 # Both assemblies: ZipArchive lives in System.IO.Compression. Without -NoProfiles it happened to
 # be loaded already by the profile-pack step, so -NoProfiles failed with "Unable to find type".
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
@@ -79,9 +88,20 @@ foreach ($file in Get-ChildItem $stage -Recurse -File) {
     [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $rel, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
 }
 $archive.Dispose(); $fs.Dispose()
+$sha = Write-Sha256 $zip (Split-Path -Leaf $zip)
+if ($NoProfiles) {
+    # Release copy under the asset name the updater and install.ps1 download (see docs\RELEASING.md).
+    $rel = Join-Path $Out 'release'
+    New-Item -ItemType Directory -Force -Path $rel | Out-Null
+    $relZip = Join-Path $rel 'OpenVPN-Hizli-Arama-Kurulum.zip'
+    Copy-Item $zip $relZip -Force
+    Write-Sha256 $relZip 'OpenVPN-Hizli-Arama-Kurulum.zip' | Out-Null
+    Write-Host "  Sürüm dosyaları: $rel"
+}
 try { Copy-Item $exe (Join-Path $Out 'OpenVPN-Hizli-Arama.exe') -Force }
 catch { Write-Warning "outputs\OpenVPN-Hizli-Arama.exe güncellenmedi (uygulama çalışıyor olabilir). Paket yine de üretildi." }
 Write-Host "  Paket: $zip"
+Write-Host "  SHA-256: $sha"
 
 }
 finally {
