@@ -214,6 +214,15 @@ internal static class FortiStore
         return false;
     }
 
+    // Closes the FortiClient GUI when this app parked its window off-screen (VPN service and tray
+    // keep running). A window the user had open on screen was never parked, so it is left alone.
+    public static void CloseParkedGui()
+    {
+        if (!QuietWindow.IsParked) return;
+        StopGui(GuiProcessIds());
+        QuietWindow.Forget();
+    }
+
     // Finds FortiClient's top-level window (also when hidden to the tray) and shows it.
     static bool ShowExistingWindow(HashSet<uint> pids, bool quiet = false)
     {

@@ -139,6 +139,12 @@ internal static class QuietWindow
 
     public static bool IsParked { get { lock (gate) return parked != IntPtr.Zero && IsWindow(parked); } }
 
+    // Drops the parked handle without moving the window (it is about to be closed).
+    public static void Forget()
+    {
+        lock (gate) { parked = IntPtr.Zero; }
+    }
+
     // Moves a parked window back on screen. activate: bring it to the front (the user has to act).
     public static void Reveal(bool activate)
     {

@@ -1013,7 +1013,7 @@ internal sealed class SearchForm : Form
             catch (Exception ex) { err = ex.Message; }
             UiInvoke(delegate
             {
-                if (outcome == FortiGui.Outcome.Pressed) { ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(4000); QuietWindow.Reveal(false); }); return; }
+                if (outcome == FortiGui.Outcome.Pressed) { ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(4000); FortiStore.CloseParkedGui(); }); return; }
                 QuietWindow.Reveal(true);
                 fortiDisconnectingId = null; list.EndDisconnect();
                 SetStatus(err ?? "FortiClient'ta Disconnect bulunamadı — bağlantıyı FortiClient'tan kesin");
@@ -1184,7 +1184,7 @@ internal sealed class SearchForm : Form
         }
         var sel = list.SelectedProfile;
         ApplyFilter(sel != null ? sel.Id : null);
-        if (id != null) QuietWindow.Reveal(false);
+        if (id != null) ThreadPool.QueueUserWorkItem(delegate { FortiStore.CloseParkedGui(); });
         if (id != null && id == fortiConnectingId) { fortiConnectingId = null; list.ConnectSucceeded(id); }
         fortiAuth = fortiConnectingId != null && fortiAuth;
         var p2 = profiles.FirstOrDefault(p => p.Id == id);
