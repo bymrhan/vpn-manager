@@ -1,0 +1,36 @@
+name: Hata raporu
+description: Uygulamanın hazırladığı temizlenmiş hata raporunu gönderin (Ayarlar › Hakkında › Son hatayı bildir).
+title: "[hata] "
+labels: ["hata"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bu form genellikle uygulama tarafından doldurulur. Rapor bilgisayarınızda **temizlendi**: parolalar ve anahtarlar,
+        kullanıcı adları, profil ve müşteri adları, sunucu adresleri, IP ve e-posta adresleri, makine adı ve kişisel klasör
+        yolları çıkarıldı. Bu depo **herkese açıktır**: göndermeden önce raporu okuyun; yine de müşteri adı, sunucu adresi
+        veya parola görürseniz silin.
+
+        Başlıktaki parantez içindeki 8 karakter (parmak izi) aynı hatayı bir araya toplar; lütfen değiştirmeyin.
+  - type: textarea
+    id: rapor
+    attributes:
+      label: Temizlenmiş rapor
+      description: Uygulamanın doldurduğu rapor. Rapor kısaltıldıysa tam hâli panodadır; bu alanı silip Ctrl+V ile yapıştırın.
+    validations:
+      required: true
+  - type: textarea
+    id: ne-yapiyordunuz
+    attributes:
+      label: Hata olduğunda ne yapıyordunuz?
+      description: Örneğin hangi tür profile (OpenVPN, FortiClient, Sophos, WatchGuard) bağlanıyordunuz, hangi düğmeye bastınız. Profil veya müşteri adı yazmayın.
+      placeholder: "Örn. FortiClient profiline bağlanırken panel kapandı."
+    validations:
+      required: false
+  - type: textarea
+    id: ek-bilgi
+    attributes:
+      label: Ek bilgi (isteğe bağlı)
+      description: Hata tekrar ediyor mu, ne sıklıkla? İletişim bilgisi, müşteri adı, sunucu adresi veya parola yazmayın; yanıtlar bu kayıt üzerinden verilir.
+    validations:
+      required: false
