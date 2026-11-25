@@ -874,10 +874,25 @@ internal static class IssueLink
     // Read-only search API: issues of this repository whose title contains the fingerprint.
     public static string SearchUrl(string fingerprint)
     {
-        return "https://api.github.com/search/issues?q=" + Enc("repo:" + UpdateLogic.Repo + " is:issue in:title " + fingerprint) + "&per_page=20";
+        return "https://api.github.com/search/issues?q=" + Enc("repo:" + UpdateLogic.Repo + " is:issue label:" + Label + " in:title " + fingerprint) + "&per_page=20";
     }
 
-    // First issue whose title carries "(<fingerprint>)", open ones first; null when none or the JSON is odd.
+    static bool HasLabel(Dictionary<string, object> issue, string name)
+    {
+        object v;
+        var labels = issue.TryGetValue("labels", out v) ? v as object[] : null;
+        if (labels == null) return false;
+        foreach (var l in labels)
+        {
+            var ld = l as Dictionary<string, object>;
+            object n;
+            if (ld != null && ld.TryGetValue("name", out n) && string.Equals(n as string, name, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    // First issue labelled "hata" whose title carries "(<fingerprint>)", open ones first; null when
+    // none or the JSON is odd. Issues created by the no-label retry are not matched (docs\TRIAGE.md).
     public static IssueRef FindDuplicate(string json, string fingerprint)
     {
         if (!IsValidFingerprint(fingerprint) || string.IsNullOrEmpty(json)) return null;
@@ -903,6 +918,8 @@ internal static class IssueLink
                 if (!url.StartsWith(IssuesPrefix, StringComparison.Ordinal)) continue;
                 int number = 0;
                 if (d.TryGetValue("number", out v) && v != null) try { number = Convert.ToInt32(v, CultureInfo.InvariantCulture); } catch { }
+                // only real reports: label "hata", and the link is this issue's own page
+                if (number <= 0 || url != IssuesPrefix + number.ToString(CultureInfo.InvariantCulture) || !HasLabel(d, Label)) continue;
                 var r = new IssueRef { Number = number, Url = url, State = state == "open" ? "open" : "closed", Title = title, Locked = d.TryGetValue("locked", out v) && v is bool && (bool)v };
                 if (r.Open) return r;
                 if (closed == null) closed = r;
@@ -1554,7 +1571,15 @@ internal static class CrashReporter
 
     static void SaveLimits(IssueLimitState s)
     {
-        try { var p = LimitsPath; Directory.CreateDirectory(Path.GetDirectoryName(p)); File.WriteAllText(p, IssueLimits.ToJson(s)); } catch { }
+        // atomic: write .tmp, then replace (a crash mid-write must not reset the limits)
+        var p = LimitsPath; var tmp = p + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(p));
+            File.WriteAllText(tmp, IssueLimits.ToJson(s));
+            if (File.Exists(p)) File.Replace(tmp, p, null); else File.Move(tmp, p);
+        }
+        catch { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
     }
 
     // Title and body exactly as they go out: sanitized again with the names loaded now (idempotent),
@@ -1580,13 +1605,13 @@ internal static class CrashReporter
         var ctx = SynchronizationContext.Current;
         string title, body;
         Outgoing(r, out title, out body);
-        var env = Env;
         checking = true;
-        try { Application.UseWaitCursor = true; } catch { }
+        if (!automatic && ctx != null) try { Application.UseWaitCursor = true; } catch { }
         Say("Hata raporu GitHub'a gönderiliyor…");
         ThreadPool.QueueUserWorkItem(delegate
         {
             SendResult res;
+            var env = Env;   // registry / file checks the first time: not on the UI thread
             lock (limitsGate)
             {
                 var limits = LoadLimits();
@@ -1626,7 +1651,7 @@ internal static class CrashReporter
                 case SendOutcome.FingerprintLimit: why = "Bu hata son 24 saatte zaten gönderildi."; break;
                 default: why = "GitHub'a ulaşılamadı."; break;
             }
-            if (automatic) { Say("Hata raporu gönderilemedi: " + why); IssueNotice.Show("Hata raporu gönderilemedi. " + why + " Ayarlar › Hakkında › Son hatayı bildir ile tarayıcıdan açabilirsiniz.", null); return; }
+            if (automatic) { Say("Hata raporu gönderilemedi: " + why); IssueNotice.Show("Hata raporu gönderilemedi. " + why + " \"Son hatayı bildir\" ile yeniden deneyebilirsiniz.", null); return; }
             Say("Hata raporu gönderilemedi; tarayıcıda açılıyor");
             GlassDialog.Show(owner, why + "\nRapor bunun yerine tarayıcıda açılacak; Gönder'e siz basarsınız.", Caption, MessageBoxButtons.OK, MessageBoxIcon.Information);
             OpenReport(owner, r);

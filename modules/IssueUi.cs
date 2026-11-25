@@ -22,8 +22,10 @@ internal sealed class ReportPreview : Form
         Size = new Size(S(720), S(560)); MinimumSize = new Size(S(480), S(360));
         var head = new Label
         {
-            Text = "GitHub'a gidecek metnin tamamı. Kayıt herkese açık olur; müşteri adı, sunucu veya parola görürseniz göndermeyin.",
-            Dock = DockStyle.Top, Height = S(44), Padding = new Padding(S(12), S(10), S(12), 0), ForeColor = Ui.Text, BackColor = Ui.Bg
+            Text = "GitHub'a gidecek metnin tamamı. Kayıt herkese açık olur; müşteri adı, sunucu veya parola görürseniz göndermeyin. " +
+                   "Aynı hata açık bir kayıtta zaten varsa yalnızca kısa bir \"Tekrar: sürüm, Windows\" yorumu eklenir; " +
+                   "eski kayıt kapalı ya da kilitliyse yeni kaydın başına \"Önceki kayıt: #n\" satırı eklenir.",
+            Dock = DockStyle.Top, Height = S(64), Padding = new Padding(S(12), S(10), S(12), 0), ForeColor = Ui.Text, BackColor = Ui.Bg
         };
         var box = new TextBox
         {

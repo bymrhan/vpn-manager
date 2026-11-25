@@ -14,10 +14,15 @@ using System.Web.Script.Serialization;
 //   IssueLimits       - per-install limits (3 a day, 1 per fingerprint a day, 24 h stop after 401). Pure.
 //   GitHubIssueClient - create issue / comment on a duplicate. Pure decisions; the HTTP transport is
 //                       injected (tests use fakes, the app uses HttpTransport).
-// The token is a fine-grained personal access token limited to bymrhan/vpn-manager with
-// "Issues: Read and write" only (docs\RELEASING.md). Anyone can extract it from the exe; the worst it
-// allows is creating / commenting issues on this repository. It never goes to the log, a report,
-// a status text, a test or the repository. Without the resource the app keeps the browser flow.
+// Anyone can extract the token from the exe, so what it can do matters (docs\RELEASING.md):
+//  - recommended: a classic token with only "public_repo" from a separate bot account that owns no
+//    repository and is not a collaborator: on this public repository it can open issues and write
+//    comments as a stranger (worst case: spam under the bot's name; block the account, revoke).
+//  - alternative: the owner's fine-grained token with "Issues: Read and write" on this repository:
+//    it can also edit, close, lock and relabel ANY issue and edit / delete comments, all shown as
+//    the maintainer.
+// The token never goes to the log, a report, a status text, a test or the repository. Without the
+// resource the app keeps the browser flow.
 // =====================================================================
 
 internal static class IssueToken
@@ -25,7 +30,8 @@ internal static class IssueToken
     public const string ResourceName = "issue.token";
 
     // Fixed XOR key. This only keeps the token out of a plain string scan of the exe (and out of
-    // naive secret scanners); it is NOT protection: the key is right here. build.ps1 uses the same key.
+    // naive secret scanners); it is NOT protection: the key is right here. build.ps1 calls Encode
+    // (it loads the freshly built exe), so there is one implementation.
     static readonly byte[] Key = Encoding.ASCII.GetBytes("VpnManager/issue-token/v1");
     static readonly Regex Shape = new Regex(@"^(?:github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255})$", RegexOptions.CultureInvariant);
 
@@ -185,12 +191,14 @@ internal static class GitHubIssueClient
     public static readonly string ApiBase = "https://api.github.com/repos/" + UpdateLogic.Repo + "/issues";
     public const string ApiVersion = "2022-11-28";
     public const int MaxBodyChars = 60 * 1024;
+    public const int MaxTitleChars = 200;
     public const int TimeoutMs = 15000;
 
     public static string IssueJson(string title, string body, bool withLabel)
     {
         var d = new Dictionary<string, object>();
-        d["title"] = title ?? "";
+        title = title ?? "";
+        d["title"] = title.Length > MaxTitleChars ? title.Substring(0, MaxTitleChars) : title;
         d["body"] = body ?? "";
         if (withLabel) d["labels"] = new[] { IssueLink.Label };
         return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Serialize(d);
@@ -246,6 +254,19 @@ internal static class GitHubIssueClient
         return url == ApiBase || Regex.IsMatch(url, "^" + Regex.Escape(ApiBase) + @"/\d{1,9}/comments$");
     }
 
+    public static bool CommentFallsThrough(ApiResponse r)
+    {
+        if (r == null) return false;
+        if (r.Status == 404 || r.Status == 410) return true;
+        return r.Status == 403 && r.Body != null && r.Body.IndexOf("locked", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    // The token goes only to the create-issue URL and this repository's comment URLs (never the search).
+    public static bool MayAuthorize(string url)
+    {
+        return url != null && (url == ApiBase || Regex.IsMatch(url, "^" + Regex.Escape(ApiBase) + @"/\d{1,9}/comments$"));
+    }
+
     static SendOutcome FromStatus(int status)
     {
         return status == 401 ? SendOutcome.Unauthorized : status == 403 || status == 429 ? SendOutcome.Forbidden : SendOutcome.Failed;
@@ -284,8 +305,9 @@ internal static class GitHubIssueClient
                     return new SendResult { Outcome = SendOutcome.Commented, Number = dup.Number, Url = c != null ? c.Url : dup.Url, Status = 201 };
                 }
                 if (resp.Status == 401) { IssueLimits.Stop(limits, nowUtc); return new SendResult { Outcome = SendOutcome.Unauthorized, Status = 401 }; }
-                if (resp.Status != 403 && resp.Status != 404 && resp.Status != 410) return new SendResult { Outcome = FromStatus(resp.Status), Status = resp.Status };
-                // locked meanwhile / commenting refused: a new issue that points at the old one
+                // Only "issue gone" (404 / 410) or "locked" (403 that says so) lead to a new issue that
+                // points at the old one; any other 403 / 429 is a refusal or rate limit (browser flow).
+                if (!CommentFallsThrough(resp)) return new SendResult { Outcome = FromStatus(resp.Status), Status = resp.Status };
             }
             if (dup != null && dup.Number > 0)
                 body = "Önceki kayıt: #" + dup.Number.ToString(CultureInfo.InvariantCulture) + " (" + (dup.Open ? "açık, kilitli" : "kapalı") + ")\n\n" + body;
@@ -308,6 +330,7 @@ internal static class GitHubIssueClient
     static ApiResponse Call(Func<ApiRequest, ApiResponse> transport, ApiRequest req)
     {
         if (!IsAllowedUrl(req.Url)) return new ApiResponse { Status = 0 };
+        if (!MayAuthorize(req.Url)) { req.Authorized = false; req.Token = null; }
         try { return transport(req) ?? new ApiResponse(); }
         catch { return new ApiResponse(); }
     }
@@ -326,7 +349,7 @@ internal static class GitHubIssueClient
             http.UseDefaultCredentials = false; http.CookieContainer = null;
             http.Accept = "application/vnd.github+json";
             http.Headers["X-GitHub-Api-Version"] = ApiVersion;
-            if (req.Authorized && !string.IsNullOrEmpty(req.Token)) http.Headers[HttpRequestHeader.Authorization] = "Bearer " + req.Token;
+            if (req.Authorized && !string.IsNullOrEmpty(req.Token) && MayAuthorize(req.Url)) http.Headers[HttpRequestHeader.Authorization] = "Bearer " + req.Token;
             if (req.Json != null)
             {
                 var bytes = new UTF8Encoding(false).GetBytes(req.Json);

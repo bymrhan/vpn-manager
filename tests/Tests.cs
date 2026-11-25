@@ -82,6 +82,8 @@ static class Tests
         Run("GitHub gönderimi: akışlar (sahte GitHub)", IssueClientFlows);
         Run("GitHub gönderimi: adres ve gövde korumaları", IssueClientGuards);
         Run("GitHub gönderimi: anahtar temizleme", TokenSanitizing);
+        Run("GitHub gönderimi: otomatik kip kararı", AutoModeDecision);
+        Run("GitHub gönderimi: güvenlik incelemesi korumaları", IssueReviewGuards);
         Console.WriteLine();
         Console.WriteLine(passed + " geçti, " + failed + " başarısız");
         return failed == 0 ? 0 : 1;
@@ -858,18 +860,18 @@ static class Tests
         var json = "{\"total_count\":4,\"items\":[" +
             "{\"number\":3,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/pull/3\",\"state\":\"open\",\"pull_request\":{}}," +
             "{\"number\":4,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/someone/fork/issues/4\",\"state\":\"open\"}," +
-            "{\"number\":5,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/5\",\"state\":\"closed\"}," +
-            "{\"number\":9,\"title\":\"[hata] X: Y (AB12CD34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/9\",\"state\":\"open\"}]}";
+            "{\"number\":5,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/5\",\"labels\":[{\"name\":\"hata\"}],\"state\":\"closed\"}," +
+            "{\"number\":9,\"title\":\"[hata] X: Y (AB12CD34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/9\",\"labels\":[{\"name\":\"hata\"}],\"state\":\"open\"}]}";
         var d = IssueLink.FindDuplicate(json, fp);
         Check(d != null && d.Number == 9 && d.Open, "açık kayıt kapalıya tercih edilir; PR ve başka depo atlanır");
-        var closedOnly = "{\"items\":[{\"number\":5,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/5\",\"state\":\"closed\"}]}";
+        var closedOnly = "{\"items\":[{\"number\":5,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/5\",\"labels\":[{\"name\":\"hata\"}],\"state\":\"closed\"}]}";
         d = IssueLink.FindDuplicate(closedOnly, fp);
         Check(d != null && d.Number == 5 && !d.Open, "kapalı kayıt da yineleme sayılır");
         Check(IssueLink.FindDuplicate("{\"items\":[{\"number\":1,\"title\":\"başka (ab12cd35)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/1\",\"state\":\"open\"}]}", fp) == null, "başka parmak izi eşleşmez");
         Check(IssueLink.FindDuplicate("<html>rate limit</html>", fp) == null && IssueLink.FindDuplicate("{\"message\":\"API rate limit exceeded\"}", fp) == null && IssueLink.FindDuplicate(json, "zz") == null, "bozuk yanıt / geçersiz parmak izi: yok");
         string asked = null;
         d = IssueLink.CheckDuplicate(fp, u => { asked = u; return closedOnly; });
-        Check(d != null && asked != null && asked.StartsWith("https://api.github.com/search/issues?q=") && asked.Contains("repo%3Abymrhan%2Fvpn-manager") && asked.Contains(fp), "arama adresi depo ve parmak izi ile");
+        Check(d != null && asked != null && asked.StartsWith("https://api.github.com/search/issues?q=") && asked.Contains("repo%3Abymrhan%2Fvpn-manager") && asked.Contains("label%3Ahata") && asked.Contains(fp), "arama adresi depo ve parmak izi ile");
         Check(IssueLink.CheckDuplicate(fp, u => { throw new System.Net.WebException("ağ yok"); }) == null, "ağ hatası sessizce atlanır");
         var called = false;
         Check(IssueLink.CheckDuplicate("../x", u => { called = true; return json; }) == null && !called, "geçersiz parmak izi için istek yapılmaz");
@@ -1155,7 +1157,7 @@ static class Tests
         public ApiResponse Call(ApiRequest r) { Calls.Add(r); return Handler(r); }
         public static ApiResponse Ok(int number) { return new ApiResponse { Status = 201, Body = "{\"number\":" + number + ",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/" + number + "\"}" }; }
         public static ApiResponse Search(string items) { return new ApiResponse { Status = 200, Body = "{\"total_count\":1,\"items\":[" + items + "]}" }; }
-        public static string Item(int number, string state, bool locked) { return "{\"number\":" + number + ",\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/" + number + "\",\"state\":\"" + state + "\",\"locked\":" + (locked ? "true" : "false") + "}"; }
+        public static string Item(int number, string state, bool locked) { return "{\"number\":" + number + ",\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/" + number + "\",\"labels\":[{\"name\":\"hata\"}],\"state\":\"" + state + "\",\"locked\":" + (locked ? "true" : "false") + "}"; }
     }
 
     static SendResult SendWith(FakeGitHub g, IssueLimitState limits, string fp, DateTime now)
@@ -1258,7 +1260,57 @@ static class Tests
         {
             var st = AppSettings.Defaults(); st.CrashPrompt = "auto"; SettingsStore.Save(st);
             Check(SettingsStore.Load().CrashPrompt == "auto", "CrashPrompt: auto kaydedilir");
+            st.CrashAutoConsent = true; SettingsStore.Save(st);
+            Check(SettingsStore.Load().CrashAutoConsent, "CrashAutoConsent kaydedilir");
+            st.CrashPrompt = "ask"; SettingsStore.Save(st);
+            Check(!SettingsStore.Load().CrashAutoConsent && !AppSettings.Defaults().CrashAutoConsent, "onay yalnızca auto kipinde kalır; varsayılan yok");
         }
         finally { SettingsStore.PathOverride = null; try { File.Delete(path); } catch { } }
+    }
+
+    // ---------- Security review fixes ----------
+
+    static void AutoModeDecision()
+    {
+        Check(CrashPromptLogic.AutoSend("auto", true, true, false, true), "auto + onay + anahtar + günlük açık: sormadan gönderir");
+        Check(!CrashPromptLogic.AutoSend("auto", false, true, false, true), "onaysız auto: sorar");
+        Check(!CrashPromptLogic.AutoSend("auto", true, false, false, true), "anahtarsız auto: sorar");
+        Check(!CrashPromptLogic.AutoSend("auto", true, true, true, true), "demo: asla");
+        Check(!CrashPromptLogic.AutoSend("auto", true, true, false, false), "Hata kaydı tut kapalı: gönderilmez");
+        Check(!CrashPromptLogic.AutoSend("ask", true, true, false, true) && !CrashPromptLogic.AutoSend("never", true, true, false, true), "ask / never: otomatik yok");
+        bool c;
+        Check(CrashPromptLogic.StoredMode("auto", true, true, out c) == "auto" && c, "anahtar + onay: auto saklanır, onayla");
+        Check(CrashPromptLogic.StoredMode("auto", true, false, out c) == "ask" && !c, "uyarı onaylanmadı: ask");
+        Check(CrashPromptLogic.StoredMode("auto", false, true, out c) == "ask" && !c, "anahtarsız derleme: ask");
+        Check(CrashPromptLogic.StoredMode("never", true, true, out c) == "never" && !c && CrashPromptLogic.StoredMode("ask", true, true, out c) == "ask" && !c, "never / ask: onay düşer");
+    }
+
+    static void IssueReviewGuards()
+    {
+        var now = new DateTime(2026, 11, 25, 9, 0, 0, DateTimeKind.Utc);
+        // 403 on the comment: rate limit / refusal -> no new issue; "locked" -> new issue
+        var g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search(FakeGitHub.Item(12, "open", false)) : r.Url.EndsWith("/comments") ? new ApiResponse { Status = 403, Body = "{\"message\":\"API rate limit exceeded\"}" } : FakeGitHub.Ok(60) };
+        var res = SendWith(g, new IssueLimitState(), "ab12cd34", now);
+        Check(res.Outcome == SendOutcome.Forbidden && !g.Calls.Any(c => c.Url.EndsWith("/issues")), "yorumda 403 (sınır): yeni kayıt açılmaz");
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search(FakeGitHub.Item(12, "open", false)) : r.Url.EndsWith("/comments") ? new ApiResponse { Status = 403, Body = "{\"message\":\"Unable to create comment because issue is locked.\"}" } : FakeGitHub.Ok(61) };
+        res = SendWith(g, new IssueLimitState(), "ab12cd34", now);
+        Check(res.Outcome == SendOutcome.Created && res.Number == 61 && g.Calls.Last().Json.Contains("Önceki kayıt: #12"), "yorumda 403 (kilitli): eskisine bağlanan yeni kayıt");
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search(FakeGitHub.Item(12, "open", false)) : r.Url.EndsWith("/comments") ? new ApiResponse { Status = 429, Body = "" } : FakeGitHub.Ok(62) };
+        Check(SendWith(g, new IssueLimitState(), "ab12cd34", now).Outcome == SendOutcome.Forbidden && g.Calls.Count == 2, "yorumda 429: tarayıcıya düşer");
+        Check(GitHubIssueClient.CommentFallsThrough(new ApiResponse { Status = 404 }) && GitHubIssueClient.CommentFallsThrough(new ApiResponse { Status = 410 }) && !GitHubIssueClient.CommentFallsThrough(new ApiResponse { Status = 500 }), "404 / 410 yeni kayda düşer, 500 düşmez");
+        // the token never goes to the search, even if a caller marked it
+        g = new FakeGitHub { Handler = r => r.Method == "GET" ? FakeGitHub.Search("") : FakeGitHub.Ok(63) };
+        SendWith(g, new IssueLimitState(), "ab12cd34", now);
+        Check(g.Calls.Where(c => c.Method == "GET").All(c => !c.Authorized && c.Token == null) && g.Calls.Where(c => c.Method == "POST").All(c => c.Authorized && c.Token == FakeToken), "anahtar yalnızca kayıt / yorum isteğinde");
+        Check(GitHubIssueClient.MayAuthorize("https://api.github.com/repos/bymrhan/vpn-manager/issues") && GitHubIssueClient.MayAuthorize("https://api.github.com/repos/bymrhan/vpn-manager/issues/7/comments") &&
+              !GitHubIssueClient.MayAuthorize(IssueLink.SearchUrl("ab12cd34")) && !GitHubIssueClient.MayAuthorize("https://api.github.com/repos/bymrhan/vpn-manager/issues/7") && !GitHubIssueClient.MayAuthorize(null), "Authorization yalnızca iki adrese");
+        // duplicate search: label hata and the issue's own link required
+        var noLabel = "{\"items\":[{\"number\":5,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/5\",\"state\":\"open\"}]}";
+        var wrongLink = "{\"items\":[{\"number\":5,\"title\":\"[hata] X: Y (ab12cd34)\",\"html_url\":\"https://github.com/bymrhan/vpn-manager/issues/6\",\"labels\":[{\"name\":\"hata\"}],\"state\":\"open\"}]}";
+        Check(IssueLink.FindDuplicate(noLabel, "ab12cd34") == null && IssueLink.FindDuplicate(wrongLink, "ab12cd34") == null, "hata etiketi ve kendi bağlantısı olmayan sonuç yineleme sayılmaz");
+        Check(IssueLink.SearchUrl("ab12cd34").Contains("label%3Ahata"), "arama hata etiketiyle");
+        // title cap
+        var json = GitHubIssueClient.IssueJson(new string('T', 500), "b", true);
+        Check(json.Contains(new string('T', 200)) && !json.Contains(new string('T', 201)), "başlık 200 karakterde kesilir");
     }
 }
