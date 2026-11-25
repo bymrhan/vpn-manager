@@ -91,7 +91,7 @@ Bağlanma ve kesme sırasında istemci pencereleri **öne getirilmez**; çalış
 - **OpenVPN Connect:** komutla açılan pencere, önceden açık değilse odak almadan küçültülür. Bağlantı ~9 sn içinde kurulmazsa (kayıtlı parola yok, statik / MFA sorusu) uygulamanın küçülttüğü pencere geri açılıp öne getirilir; sizin küçülttüğünüz pencereye dokunulmaz.
 - **FortiClient:** arayüzü okunabilsin diye pencere ekranın dışına park edilir, iş bitince kapatılır.
 - **WatchGuard:** giriş ve durum pencereleri arka planda (ekran dışında) sürülür.
-- **Sophos Connect:** `sccli` komut satırıyla çalışır, kendi penceresi açılmaz; parola verilirse `scgui` arka planda tutulur.
+- **Sophos Connect:** `sccli` komut satırıyla çalışır, kendi penceresi açılmaz.
 - **Sizin açtığınız pencereye dokunulmaz:** o anda ekranda açık olan istemci penceresi taşınmaz, kapatılmaz, doldurulmaz.
 - İstemci penceresi **yalnızca sizin işlem yapmanız gerekiyorsa** görünür (parola, token/SAML, hata gibi).
 

@@ -1304,9 +1304,7 @@ internal sealed class SearchForm : Form
             {
                 if (x.Kind == VpnKind.Sophos)
                 {
-                    // with a password sccli needs no prompt: keep Sophos' tray GUI from popping up
-                    if (cred != null && !string.IsNullOrEmpty(cred.Password)) QuietWindow.KeepProcessInBackground("scgui", 15);
-                    msg = SophosStore.Connect(p, cred);
+                    msg = SophosStore.Connect(p, cred); // sccli: no window of its own
                     outcome = msg == null ? WatchGuardStore.ConnectOutcome.Pressed : WatchGuardStore.ConnectOutcome.Failed;
                 }
                 else outcome = WatchGuardStore.Connect(p, cred, out msg); // parks its own windows off-screen
@@ -1347,7 +1345,7 @@ internal sealed class SearchForm : Form
             string err;
             try
             {
-                if (x.Kind == VpnKind.Sophos) { QuietWindow.KeepProcessInBackground("scgui", 10); err = SophosStore.Disconnect(name); }
+                if (x.Kind == VpnKind.Sophos) err = SophosStore.Disconnect(name);
                 else err = WatchGuardStore.Disconnect();
             }
             catch (Exception ex) { err = ex.Message; }
