@@ -3,6 +3,10 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.2
+
+- **Sık kullanılanlar:** listede *Son kullanılanlar*'ın altında yeni *Sık kullanılanlar* grubu: son 60 günde en az 3 kez bağlanılan profiller (en çok kullanılan önce, en fazla 5; 3 saniyeden kısa oturumlar ve yinelenen geçmiş kayıtları sayılmaz). Bağlı, sabitlenen veya son kullanılan olarak zaten görünen profil tekrar listelenmez, boş kalırsa grup gizlenir; sağlayıcı filtresine uyar. Ayarlar > Genel > *Sık kullanılanları göster* ile kapatılabilir.
+
 ## 2.1.1
 
 - **Uygulama nerede görünsün:** Ayarlar > Genel'de üç seçenek: *Tepsi* (varsayılan), *Tepsi + düğme* (pencere açıkken görev çubuğunda da düğme), *Görev çubuğu* (tepsi simgesi yok; düğme uygulama açık olduğu sürece durur, gizlemek pencereyi düğmeye küçültür, pencereyi kapatmak uygulamadan çıkar). Kaydedince yeniden başlatmadan uygulanır.
