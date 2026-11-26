@@ -30,7 +30,7 @@ internal sealed class AppSettings
     public bool ShowForti;              // list FortiClient VPN tunnels too
     public bool ShowSophos;             // list Sophos Connect connections too (when installed)
     public bool ShowWatchGuard;         // list WatchGuard SSL VPN servers too (when installed)
-    public bool ShowBrave;              // list Brave browser profiles (Microsoft 365 shortcuts); off = nothing is scanned
+    public bool ShowBrave;              // list Brave browser profiles (Microsoft 365 shortcuts); on by default but only when Brave is installed; off = nothing is scanned
     public bool ShowFrequent;           // "SIK KULLANILANLAR" group under the recent ones (missing key = on)
     public string UpdateMode;           // "ask" (tell the user), "auto" (install silently when idle), "off" (manual check only)
     public string UpdateInterval;       // "startup", "daily", "weekly"
@@ -59,7 +59,7 @@ internal sealed class AppSettings
             ShowForti = true,
             ShowSophos = true,
             ShowWatchGuard = true,
-            ShowBrave = false,
+            ShowBrave = true,
             ShowFrequent = true,
             UpdateMode = "ask",
             UpdateInterval = "daily",

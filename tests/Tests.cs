@@ -27,7 +27,7 @@ static class Tests
         Check(BraveStore.Parse("{}").Count == 0 && BraveStore.Parse("{\"profile\":{}}").Count == 0, "boş / bozuk yapı boş liste");
         Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(true, true, true, true))).EndsWith("WatchGuard,Brave 365"), "Brave bölümü sonda");
         Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(true, true, true))).IndexOf("Brave") < 0, "Brave kapalıyken bölüm yok");
-        Check(!AppSettings.Defaults().ShowBrave, "Brave varsayılan kapalı");
+        Check(AppSettings.Defaults().ShowBrave, "Brave varsayılan açık (yalnız Brave kuruluysa görünür)");
     }
 
     static void Check(bool ok, string what)

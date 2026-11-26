@@ -11,7 +11,7 @@ using System.Web.Script.Serialization;
 // Brave browser profiles (Microsoft 365 shortcuts). Brave keeps one profile per signed-in account
 // but its profile picker has no search. This lists the profiles from Brave's "Local State" file
 // and opens a chosen one with --profile-directory. Read-only: Brave's files are never written.
-// Off by default (Settings.ShowBrave): nothing is scanned until the user turns it on.
+// On by default but only active when Brave is installed; Settings.ShowBrave = off scans nothing.
 // =====================================================================
 internal static class BraveStore
 {

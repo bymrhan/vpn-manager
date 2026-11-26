@@ -3,6 +3,10 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.5
+
+- **Brave 365 sekmesi varsayılan olarak açık:** Brave kuruluysa *Brave 365* sekmesi (Ctrl+6) kendiliğinden görünür; Ayarlar > Genel > *Brave profilleri (Microsoft 365)* ile kapatılabilir, kapalıyken Brave taranmaz. Brave kurulu değilse sekme ve ayar görünmez.
+
 ## 2.1.4
 
 - **Brave 365 görünümü:** Brave profil satırlarında sağlayıcı logosu Microsoft 365, sağdaki düğme VPN fişi yerine Brave uygulama simgesidir; alt satır "Microsoft 365 · profil klasörü" yazar. Düğme / Enter o profili Brave'de Microsoft 365 sayfasında açar.
