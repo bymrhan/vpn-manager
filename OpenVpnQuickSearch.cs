@@ -589,6 +589,7 @@ internal sealed class SearchForm : Form
         if (Demo.On) DemoConnect(Demo.ConnectedName); else monitor.Poll();
         if (Demo.On && Demo.Query != null) Input.Text = Demo.Query;
         if (Demo.On && Demo.SettingsPage >= 0) Shown += delegate { BeginInvoke(new Action(ShowSettings)); };
+        if (Demo.On && Demo.UpdateSim) UpdateSim.Start(Demo.UpdateSimFail);   // dev only: fake update flow, never touches the real one
 
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += delegate { if (settings.Theme == "system" && IsHandleCreated && !IsDisposed) BeginInvoke(new Action(ApplyTheme)); };
         hookProc = OnWinEvent;
@@ -3007,6 +3008,8 @@ internal static class Program
             else if (a.StartsWith("--demo-search=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.Query = a.Substring(14); }
             else if (a.StartsWith("--demo-settings=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; int.TryParse(a.Substring(16), out Demo.SettingsPage); }
             else if (a.Equals("--demo-empty", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.Empty = true; }
+            else if (a.Equals("--demo-update", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.UpdateSim = true; }
+            else if (a.Equals("--demo-update=fail", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.UpdateSim = true; Demo.UpdateSimFail = true; }
             else if (a.StartsWith("--scale=", StringComparison.OrdinalIgnoreCase)) float.TryParse(a.Substring(8), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out devScale);
         }
         try
