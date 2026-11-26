@@ -85,6 +85,7 @@ static class Tests
         Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
         Run("Güncelleme: zip slip", UpdateZipSlip);
         Run("Güncelleme aşama metni", UpdateStageText);
+        Run("Güncelleme bekleme nedeni", UpdateWaitReason);
         Run("Güncelleme: akışlı kopyalama", UpdateCopyWithProgress);
         Run("OpenVPN penceresi geri getirme", OpenVpnWindowRestore);
         Run("Tanılama: temizleyici sahte sırları siler", SanitizerRemovesSeeds);
@@ -1078,6 +1079,14 @@ static class Tests
         Check(UpdateLogic.StageText(UpdateStage.Verifying, 0, 0, "2.1.7") == "Doğrulanıyor…", "doğrulama metni");
         Check(UpdateLogic.StageText(UpdateStage.Preparing, 0, 0, "2.1.7") == "Paket hazırlanıyor…", "hazırlama metni");
         Check(UpdateLogic.StageText(UpdateStage.Restarting, 0, 0, "2.1.7") == "Yeniden başlatılıyor…", "yeniden başlatma metni");
+    }
+
+    static void UpdateWaitReason()
+    {
+        Check(UpdateLogic.WaitReason(false, false) == null, "ikisi de yok: null");
+        Check(UpdateLogic.WaitReason(true, false) == "Bağlantı işlemi bitince kurulacak", "meşgul");
+        Check(UpdateLogic.WaitReason(false, true) == "Açık pencereler kapanınca kurulacak", "pencere açık");
+        Check(UpdateLogic.WaitReason(true, true) == "Bağlantı işlemi bitince kurulacak", "meşgul önceliklidir");
     }
 
     static void UpdateCopyWithProgress()

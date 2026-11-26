@@ -79,6 +79,14 @@ internal static class UpdateLogic
         }
     }
 
+    // Why a requested install has to wait (busy wins over an open window); null when it can go ahead.
+    public static string WaitReason(bool busy, bool dialogOpen)
+    {
+        if (busy) return "Bağlantı işlemi bitince kurulacak";
+        if (dialogOpen) return "Açık pencereler kapanınca kurulacak";
+        return null;
+    }
+
     public const string Repo = "bymrhan/vpn-manager";
     public const string ApiUrl = "https://api.github.com/repos/" + Repo + "/releases/latest";
     public const string ReleasesPage = "https://github.com/" + Repo + "/releases";
