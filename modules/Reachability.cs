@@ -130,7 +130,7 @@ internal static class Reachability
             {
                 foreach (var p in profiles)
                 {
-                    if (p == null || string.IsNullOrEmpty(p.Id)) continue;
+                    if (p == null || string.IsNullOrEmpty(p.Id) || BraveStore.IsBrave(p)) continue; // Brave rows have no server
                     if (!string.IsNullOrEmpty(p.Host)) hostHints[p.Id] = p.Host;
                     Entry e;
                     if (!entries.TryGetValue(p.Id, out e)) { e = new Entry(); entries[p.Id] = e; }

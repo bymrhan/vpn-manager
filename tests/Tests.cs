@@ -13,6 +13,23 @@ static class Tests
 {
     static int failed, passed;
 
+    static void BraveParsing()
+    {
+        var json = "{\"profile\":{\"info_cache\":{\"Default\":{\"name\":\"Ana\",\"user_name\":\"\"},\"Profile 2\":{\"name\":\"ALFA Ltd\",\"user_name\":\"a@x.com\"},\"Guest Profile\":{\"name\":\"Misafir\",\"is_ephemeral\":true},\"Profile 3\":{\"name\":\"\"}}}}";
+        var l = BraveStore.Parse(json);
+        Check(l.Count == 3, "misafir (geçici) profil atlanır");
+        var a = l.First(p => p.Name == "ALFA Ltd");
+        Check(a.Id == "brave:Profile 2" && BraveStore.DirOf(a) == "Profile 2" && a.Username == "a@x.com", "kimlik ve klasör");
+        Check(VpnProviders.KindOf(a) == VpnKind.Brave && !VpnProviders.IsOpenVpn(a), "tür Brave");
+        Check(l.Any(p => p.Name == "Profile 3"), "adsız profil klasör adını alır");
+        Check(ProfileStore.Matches(a, new[] { ProfileStore.SearchKey("alfa") }), "ada göre aranır");
+        Check(ProfileStore.Matches(a, new[] { ProfileStore.SearchKey("365") }), "365 ile aranır");
+        Check(BraveStore.Parse("{}").Count == 0 && BraveStore.Parse("{\"profile\":{}}").Count == 0, "boş / bozuk yapı boş liste");
+        Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(true, true, true, true))).EndsWith("WatchGuard,Brave 365"), "Brave bölümü sonda");
+        Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(true, true, true))).IndexOf("Brave") < 0, "Brave kapalıyken bölüm yok");
+        Check(!AppSettings.Defaults().ShowBrave, "Brave varsayılan kapalı");
+    }
+
     static void Check(bool ok, string what)
     {
         Console.WriteLine((ok ? "  PASS " : "  FAIL ") + what);
@@ -38,6 +55,7 @@ static class Tests
         Run("Sophos kimlik bilgisi öneki", SophosCredentialPrefix);
         Run("Forti kimlik hedefi sabit", FortiTargetPinned);
         Run("WatchGuard ayrıştırma", WatchGuardParsing);
+        Run("Brave profilleri", BraveParsing);
         Run("WatchGuard günlük durumu", WatchGuardLog);
         Run("WatchGuard kimlik bilgisi öneki", WatchGuardCredentialPrefix);
         Run("WatchGuard Load hiçbir şey başlatmaz", WatchGuardLoad);

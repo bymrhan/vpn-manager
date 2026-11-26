@@ -5,6 +5,7 @@ bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta dur
 
 ## 2.1.3
 
+- **Brave profilleri (Microsoft 365):** Ayarlar > Genel > *Brave profilleri (Microsoft 365)* açılınca Brave'in profilleri taranır ve yeni *Brave 365* sekmesinde (Ctrl+6) listelenir; arama, sabitleme ve son açılan sırası diğer profillerle aynıdır. Satıra tıklamak / Enter o Brave profilini Microsoft 365 sayfasında açar. Tümü sekmesinde yalnızca arama sonucu olarak görünür. Varsayılan kapalıdır: kapalıyken Brave taranmaz, sekme ve ayar yalnızca Brave kuruluysa görünür. Brave'in dosyalarına yazılmaz.
 - **Sağlayıcı logoları:** OpenVPN, FortiClient, Sophos Connect ve WatchGuard satırlarında artık sağlayıcıların kendi logoları (20 px, keskin) görünür; avatar köşesindeki rozet sunucu erişilebilirliğini gösterir.
 - **Kayıtlı hesap:** FortiClient, Sophos ve WatchGuard satırlarının sağ tık menüsünde *Farklı kullanıcıyla bağlan…* eklendi. *Kayıtlı parolayı değiştir…* penceresinde parolayı boş bırakırsanız kayıtlı parola korunur; yalnızca kullanıcı adını değiştirebilirsiniz.
 - **Daha geniş pencere:** varsayılan genişlik büyütüldü; sunucu ve kullanıcı adı satırda kesilmez.

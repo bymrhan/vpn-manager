@@ -745,6 +745,12 @@ internal sealed class SettingsForm : Form
             wg.CheckedChanged += delegate { work.ShowWatchGuard = wg.Checked; Dirty(); };
             card.Add(new SRow("WatchGuard profilleri", "WatchGuard SSL VPN sunucularını da listele.", wg, Glyph.ShieldLock));
         }
+        if (Demo.On || BraveStore.IsInstalled)
+        {
+            var brave = new SToggle(); brave.SetInstant(work.ShowBrave);
+            brave.CheckedChanged += delegate { work.ShowBrave = brave.Checked; Dirty(); };
+            card.Add(new SRow("Brave profilleri (Microsoft 365)", "Brave profillerini listele; seçince o profilin Microsoft 365 sayfası açılır. Kapalıyken taranmaz.", brave, Glyph.Panel));
+        }
         BuildProfileSource(page);
         pages.Add(page);
     }
@@ -1080,7 +1086,7 @@ internal sealed class SettingsForm : Form
             return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.Presence != original.Presence || work.BackupFolder != original.BackupFolder ||
                    work.BackupFrequency != original.BackupFrequency || work.BackupKeep != original.BackupKeep || work.DockSide != original.DockSide ||
                    work.Theme != original.Theme || work.ReachabilityCheck != original.ReachabilityCheck || work.ShowForti != original.ShowForti ||
-                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard || work.ShowFrequent != original.ShowFrequent ||
+                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard || work.ShowBrave != original.ShowBrave || work.ShowFrequent != original.ShowFrequent ||
                    work.UpdateMode != original.UpdateMode || work.UpdateInterval != original.UpdateInterval ||
                    work.LogEnabled != original.LogEnabled || work.CrashPrompt != original.CrashPrompt || work.CrashAutoConsent != original.CrashAutoConsent;
         }

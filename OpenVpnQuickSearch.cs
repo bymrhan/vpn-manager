@@ -714,7 +714,8 @@ internal sealed class SearchForm : Form
         var current = VpnProviders.SegmentAt(segmentKinds, providerFilter);
         segmentKinds = VpnProviders.Segments(settings.ShowForti,
             VpnProviders.ShowsExtSegment(settings.ShowSophos, sophosInstalled, profiles.Count(SophosStore.IsSophos)),
-            VpnProviders.ShowsExtSegment(settings.ShowWatchGuard, watchGuardInstalled, profiles.Count(WatchGuardStore.IsWatchGuard)));
+            VpnProviders.ShowsExtSegment(settings.ShowWatchGuard, watchGuardInstalled, profiles.Count(WatchGuardStore.IsWatchGuard)),
+            settings.ShowBrave && (braveInstalled || profiles.Any(BraveStore.IsBrave)));
         providerFilter = VpnProviders.IndexOf(segmentKinds, current);
         segmented.Items = VpnProviders.SegmentNames(segmentKinds);
         segmented.Selected = providerFilter;
@@ -973,7 +974,7 @@ internal sealed class SearchForm : Form
         if (p.Id == connectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { Disconnect(); }));
         else if (p.Id == fortiConnectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { DisconnectForti(p); }));
         else if (ExtFor(p) != null && p.Id == ExtFor(p).ConnectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { DisconnectExt(ExtFor(p), p); }));
-        else rowMenu.Items.Add(Item("Bağlan", Glyph.Connect, delegate { Connect(p); }, "Enter"));
+        else rowMenu.Items.Add(Item(BraveStore.IsBrave(p) ? "Brave'de aç" : "Bağlan", Glyph.Connect, delegate { Connect(p); }, "Enter"));
         rowMenu.Items.Add(Item(pins.Contains(p.Id) ? "Sabitlemeyi kaldır" : "Sabitle", Glyph.Star, delegate { TogglePin(p); }, "Ctrl+P"));
         rowMenu.Items.Add(Caption("KOPYALA"));
         var copyHost = Item("Sunucu adresi", Glyph.Copy, delegate { Copy(p.Host, "Sunucu adresi kopyalandı"); }); copyHost.Enabled = p.Host.Length > 0; rowMenu.Items.Add(copyHost);
@@ -1299,6 +1300,7 @@ internal sealed class SearchForm : Form
         public bool InFlight { get { return ConnectingId != null || DisconnectingId != null || Busy; } }
     }
 
+    bool braveInstalled;
     readonly ExtVpn sophos = new ExtVpn { Kind = VpnKind.Sophos }, watchGuard = new ExtVpn { Kind = VpnKind.WatchGuard };
     bool sophosInstalled, watchGuardInstalled, installChanged; // refreshed by ReloadProfiles (file checks)
 
@@ -2120,6 +2122,7 @@ internal sealed class SearchForm : Form
             if (r.DockSide != old.DockSide) { autoSide = 0; lastRect = new NativeMethods.RECT(); docked = false; Sync(true); }
             if (r.ReachabilityCheck && !old.ReachabilityCheck) Reachability.CheckAll(profiles, false);
             if (r.ShowForti != old.ShowForti) { if (!r.ShowForti) fortiConnectedId = null; ReloadProfiles(true); }
+            if (r.ShowBrave != old.ShowBrave) ReloadProfiles(true);
             if (r.ShowSophos != old.ShowSophos || r.ShowWatchGuard != old.ShowWatchGuard)
             {
                 if (!r.ShowSophos) ForgetExt(sophos);
@@ -2408,6 +2411,9 @@ internal sealed class SearchForm : Form
                 if (force || (DateTime.UtcNow - sophosLoadedUtc).TotalMinutes > 5) RefreshSophosAsync();
             }
             if (ExtEnabled(watchGuard)) extra.AddRange(WatchGuardStore.Load());
+            // Brave profiles: scanned only while the setting is on (Local State is read-only here).
+            braveInstalled = !Demo.On && BraveStore.IsInstalled;
+            if (settings.ShowBrave && braveInstalled) loaded.AddRange(BraveStore.Load());
             if (extra.Count > 0)
             {
                 Dictionary<string, long> starts;
@@ -2516,7 +2522,9 @@ internal sealed class SearchForm : Form
         var byName = StringComparer.Create(CultureInfo.GetCultureInfo("tr-TR"), true);
         var rows = new List<ListRow>();
         var segment = VpnProviders.SegmentAt(segmentKinds, providerFilter);
-        var pool = segment.HasValue ? profiles.Where(p => VpnProviders.InSegment(p, segment)).ToList() : profiles;
+        // Brave profiles live in their own tab; in "Tümü" they only show up as search hits.
+        var pool = segment.HasValue ? profiles.Where(p => VpnProviders.InSegment(p, segment)).ToList()
+            : terms.Length == 0 ? profiles.Where(p => !BraveStore.IsBrave(p)).ToList() : profiles;
         if (terms.Length == 0)
         {
             var live = pool.Where(p => p.Id == connectedId || p.Id == fortiConnectedId || p.Id == sophos.ConnectedId || p.Id == watchGuard.ConnectedId).ToList();
@@ -2528,7 +2536,7 @@ internal sealed class SearchForm : Form
             var often = settings.ShowFrequent ? FrequentProfiles.Pick(pool, frequent, used) : new List<VpnProfile>();
             used.UnionWith(often.Select(p => p.Id));
             var rest = pool.Where(p => !used.Contains(p.Id) && VpnProviders.IsOpenVpn(p)).OrderBy(p => p.Name, byName).ToList();
-            var others = new[] { VpnKind.Forti, VpnKind.Sophos, VpnKind.WatchGuard }
+            var others = new[] { VpnKind.Forti, VpnKind.Sophos, VpnKind.WatchGuard, VpnKind.Brave }
                 .Select(k => pool.Where(p => !used.Contains(p.Id) && VpnProviders.KindOf(p) == k).OrderBy(p => p.Name, byName).ToList()).ToList();
             AddGroup(rows, "BAĞLI", live, Glyph.Plug);
             AddGroup(rows, "SABİTLENENLER", pinned, Glyph.Star);
@@ -2593,7 +2601,7 @@ internal sealed class SearchForm : Form
         if (e.KeyCode == Keys.Escape) { if (Input.TextLength > 0) ResetSearch(); else HideForLater(); }
         else if (e.Control && e.KeyCode == Keys.F) { Input.Focus(); Input.SelectAll(); }
         else if (e.Control && e.KeyCode == Keys.P) TogglePin(list.SelectedProfile);
-        else if (e.Control && e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D5) { segmented.Selected = e.KeyCode - Keys.D1; }
+        else if (e.Control && e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D6) { segmented.Selected = e.KeyCode - Keys.D1; }
         else if (e.Control && e.KeyCode == Keys.Oemcomma) BeginInvoke(new Action(ShowSettings));
         else if (e.KeyCode == Keys.Down) list.MoveSelection(1);
         else if (e.KeyCode == Keys.Up) list.MoveSelection(-1);
@@ -2606,11 +2614,22 @@ internal sealed class SearchForm : Form
 
     // ---------- Connect ----------
 
+    // Brave profile: open its Microsoft 365 page in that profile's window. No connection state.
+    void OpenBrave(VpnProfile p)
+    {
+        var err = BraveStore.Open(p);
+        if (err != null) { list.ConnectFailed(p.Id); SetStatus(err); return; }
+        p.LastConnected = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+        list.ConnectSucceeded(p.Id);
+        SetStatus("Brave \"" + p.Name + "\" açılıyor…");
+    }
+
     // Starts the connection and plays the "connecting" animation until ConnectionMonitor reports
     // the profile as connected (success animation) or ConnectTimeout passes (failure shake).
     void Connect(VpnProfile p)
     {
         if (p == null) return;
+        if (BraveStore.IsBrave(p)) { OpenBrave(p); return; }
         if (Demo.On) { DemoConnect(p.Name, true); return; }
         if (FortiStore.IsForti(p)) { ConnectForti(p); return; }
         var ext = ExtFor(p);

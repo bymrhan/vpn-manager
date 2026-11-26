@@ -7,7 +7,7 @@ using System.Collections.Generic;
 // profile a poll result means, when to poll). Pure helpers: no client is touched here.
 // =====================================================================
 
-internal enum VpnKind { OpenVpn, Forti, Sophos, WatchGuard }
+internal enum VpnKind { OpenVpn, Forti, Sophos, WatchGuard, Brave }
 
 internal static class VpnProviders
 {
@@ -24,6 +24,7 @@ internal static class VpnProviders
         if (FortiStore.IsForti(p)) return VpnKind.Forti;
         if (SophosStore.IsSophos(p)) return VpnKind.Sophos;
         if (WatchGuardStore.IsWatchGuard(p)) return VpnKind.WatchGuard;
+        if (BraveStore.IsBrave(p)) return VpnKind.Brave;
         return VpnKind.OpenVpn;
     }
 
@@ -39,6 +40,7 @@ internal static class VpnProviders
             case VpnKind.Forti: return "FortiClient";
             case VpnKind.Sophos: return "Sophos";
             case VpnKind.WatchGuard: return "WatchGuard";
+            case VpnKind.Brave: return "Brave 365";
             default: return "OpenVPN";
         }
     }
@@ -51,6 +53,7 @@ internal static class VpnProviders
             case VpnKind.Forti: return "FortiClient";
             case VpnKind.Sophos: return "Sophos Connect";
             case VpnKind.WatchGuard: return "WatchGuard";
+            case VpnKind.Brave: return "Brave";
             default: return "OpenVPN";
         }
     }
@@ -63,6 +66,7 @@ internal static class VpnProviders
             case VpnKind.Forti: return "FORTICLIENT VPN";
             case VpnKind.Sophos: return "SOPHOS CONNECT";
             case VpnKind.WatchGuard: return "WATCHGUARD SSL VPN";
+            case VpnKind.Brave: return "BRAVE PROFİLLERİ · MICROSOFT 365";
             default: return "OPENVPN PROFİLLERİ";
         }
     }
@@ -75,6 +79,7 @@ internal static class VpnProviders
             case VpnKind.Forti: return "provider-forti";
             case VpnKind.Sophos: return "provider-sophos";
             case VpnKind.WatchGuard: return "provider-watchguard";
+            case VpnKind.Brave: return "provider-brave";
             default: return "provider-openvpn";
         }
     }
@@ -101,12 +106,13 @@ internal static class VpnProviders
     }
 
     // Filter bar segments: "Tümü" (null), OpenVPN, then each enabled provider in a fixed order.
-    public static List<VpnKind?> Segments(bool forti, bool sophos, bool watchGuard)
+    public static List<VpnKind?> Segments(bool forti, bool sophos, bool watchGuard, bool brave = false)
     {
         var s = new List<VpnKind?> { null, VpnKind.OpenVpn };
         if (forti) s.Add(VpnKind.Forti);
         if (sophos) s.Add(VpnKind.Sophos);
         if (watchGuard) s.Add(VpnKind.WatchGuard);
+        if (brave) s.Add(VpnKind.Brave);
         return s;
     }
 
@@ -122,6 +128,7 @@ internal static class VpnProviders
     {
         if (segment == VpnKind.Sophos) return new[] { "Sophos Connect bağlantısı yok", "Sophos Connect'te tanımlı bağlantı yok. .pro veya .ovpn dosyasını Sophos Connect'e ekleyin." };
         if (segment == VpnKind.WatchGuard) return new[] { "WatchGuard sunucusu yok", "WatchGuard SSL VPN istemcisinde kayıtlı sunucu yok." };
+        if (segment == VpnKind.Brave) return new[] { "Brave profili yok", "Brave'de kayıtlı profil bulunamadı." };
         return null;
     }
     public static string[] SegmentNames(IList<VpnKind?> segments)
