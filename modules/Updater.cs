@@ -624,7 +624,7 @@ internal sealed class UpdateNotice : Form
     long done, total;
     readonly string version, offerCaption, offerBody;
     readonly bool canInstall;
-    readonly SButton primary, later, skip, notesBtn, cancelBtn, retryBtn, openBtn;
+    readonly SButton primary, later, skip, notesBtn, cancelBtn, retryBtn, openBtn, closeBtn, waitLaterBtn;
     Timer anim;
     public event Action UpdateNow, Later, Skip, Notes, Cancel, Retry;
 
@@ -654,6 +654,8 @@ internal sealed class UpdateNotice : Form
         cancelBtn = new SButton("İptal", SButtonKind.Secondary);
         retryBtn = new SButton("Yeniden dene", SButtonKind.Primary);
         openBtn = new SButton("Sürüm sayfasını aç", SButtonKind.Secondary);
+        closeBtn = new SButton("Kapat", SButtonKind.Secondary);          // Failed: dismiss the card
+        waitLaterBtn = new SButton("Sonra", SButtonKind.Secondary);      // Waiting: hide the card; the pending install still proceeds
         primary.Click += delegate
         {
             if (canInstall)
@@ -673,7 +675,9 @@ internal sealed class UpdateNotice : Form
             if (Retry != null) Retry();
         };
         openBtn.Click += delegate { if (Notes != null) Notes(); };
-        Controls.AddRange(new Control[] { primary, later, skip, notesBtn, cancelBtn, retryBtn, openBtn });
+        closeBtn.Click += delegate { Close(); };
+        waitLaterBtn.Click += delegate { Close(); };
+        Controls.AddRange(new Control[] { primary, later, skip, notesBtn, cancelBtn, retryBtn, openBtn, closeBtn, waitLaterBtn });
 
         caption = offerCaption; body = offerBody;
         ApplyLayout();
@@ -747,7 +751,7 @@ internal sealed class UpdateNotice : Form
             y += showText ? S(14) : S(8);
             barRect = new Rectangle(S(76), y, textW, S(8));
             y = barRect.Bottom;
-            h = stage == UpdateStage.Downloading ? y + S(16) + cancelBtn.Height + S(22) : y + S(34);
+            h = (stage == UpdateStage.Downloading || stage == UpdateStage.Waiting) ? y + S(16) + cancelBtn.Height + S(22) : y + S(34);
         }
         else h = offer ? textRect.Bottom + S(104) : textRect.Bottom + S(24) + retryBtn.Height + S(22);
         Size = new Size(width, h);
@@ -756,7 +760,8 @@ internal sealed class UpdateNotice : Form
         var by = Height - S(22) - primary.Height;
         primary.Visible = later.Visible = skip.Visible = notesBtn.Visible = offer;
         cancelBtn.Visible = stage == UpdateStage.Downloading;
-        retryBtn.Visible = openBtn.Visible = failed;
+        waitLaterBtn.Visible = stage == UpdateStage.Waiting;
+        retryBtn.Visible = openBtn.Visible = closeBtn.Visible = failed;
         primary.Location = new Point(Width - S(22) - primary.Width, by);
         later.Location = new Point(primary.Left - S(8) - later.Width, by);
         skip.Location = new Point(S(22), by);
@@ -764,6 +769,8 @@ internal sealed class UpdateNotice : Form
         cancelBtn.Location = new Point(Width - S(22) - cancelBtn.Width, Height - S(22) - cancelBtn.Height);
         retryBtn.Location = new Point(Width - S(22) - retryBtn.Width, Height - S(22) - retryBtn.Height);
         openBtn.Location = new Point(retryBtn.Left - S(8) - openBtn.Width, retryBtn.Top);
+        closeBtn.Location = new Point(openBtn.Left - S(8) - closeBtn.Width, retryBtn.Top);
+        waitLaterBtn.Location = new Point(Width - S(22) - waitLaterBtn.Width, Height - S(22) - waitLaterBtn.Height);
         UpdateTimer();
         Invalidate();
     }
@@ -791,6 +798,13 @@ internal sealed class UpdateNotice : Form
     protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); UpdateTimer(); }
     protected override void OnFormClosed(FormClosedEventArgs e) { StopTimer(); base.OnFormClosed(e); }
     protected override void Dispose(bool disposing) { if (disposing) StopTimer(); base.Dispose(disposing); }
+
+    // Esc closes the card where closing is safe (Failed, Waiting); a running download keeps its Cancel button.
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Escape && (stage == UpdateStage.Failed || stage == UpdateStage.Waiting)) { Close(); return true; }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
 
     protected override bool ShowWithoutActivation { get { return true; } }
     protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ExStyle |= WS_EX_TOOLWINDOW; return cp; } }

@@ -1910,7 +1910,7 @@ internal sealed class SearchForm : Form
         var v = UpdateClient.TakeUpdatedMarker(UpdateLogic.InstallDir);
         if (v == null) return;
         AppLog.Info("update", "updated to " + v);
-        SetStatus("Sürüm " + v + "'e güncellendi");
+        SetStatus("Güncelleme tamam: sürüm " + v);
     }
 
     bool IsInstalledCopy { get { return UpdateLogic.IsInstalledCopy(Application.ExecutablePath, UpdateLogic.InstallDir); } }
@@ -2067,7 +2067,7 @@ internal sealed class SearchForm : Form
                 updateDownloading = false;
                 var show = updateShowProgress; updateShowProgress = false;
                 if (pkg != null && updateCancel) { pkg = null; err = UpdateClient.CancelledText; }   // cancelled while the last step finished
-                if (pkg == null && err == UpdateClient.CancelledText)
+                if (pkg == null && (updateCancel || err == UpdateClient.CancelledText))
                 {
                     AppLog.Info("update", "download cancelled");
                     updateUserAsked = false;
