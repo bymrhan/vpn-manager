@@ -85,6 +85,7 @@ static class Tests
         Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
         Run("Güncelleme: zip slip", UpdateZipSlip);
         Run("Güncelleme aşama metni", UpdateStageText);
+        Run("Güncelleme: akışlı kopyalama", UpdateCopyWithProgress);
         Run("OpenVPN penceresi geri getirme", OpenVpnWindowRestore);
         Run("Tanılama: temizleyici sahte sırları siler", SanitizerRemovesSeeds);
         Run("Tanılama: temizleyici idempotent ve kararlı", SanitizerIdempotentAndStable);
@@ -927,7 +928,7 @@ static class Tests
             Check(pkg == null && err != null && !Directory.Exists(Path.Combine(dir, "paket")), "özet yok: güncelleme durur");
 
             string dl;
-            Check(UpdateClient.Download(new ReleaseInfo { Tag = "v9.9.9", Version = "9.9.9", ZipUrl = "https://mirror.example/a.zip", ShaUrl = "https://mirror.example/a.zip.sha256" }, out dl) == null && dl != null, "yabancı adresten indirme yapılmaz");
+            Check(UpdateClient.Download(new ReleaseInfo { Tag = "v9.9.9", Version = "9.9.9", ZipUrl = "https://mirror.example/a.zip", ShaUrl = "https://mirror.example/a.zip.sha256" }, null, () => false, out dl) == null && dl != null, "yabancı adresten indirme yapılmaz");
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
@@ -1079,6 +1080,27 @@ static class Tests
         Check(UpdateLogic.StageText(UpdateStage.Restarting, 0, 0, "2.1.7") == "Yeniden başlatılıyor…", "yeniden başlatma metni");
     }
 
+    static void UpdateCopyWithProgress()
+    {
+        var data = new byte[200000];
+        for (int i = 0; i < data.Length; i++) data[i] = (byte)i;
+        var seen = new List<long>();
+        var dst = new MemoryStream();
+        bool ok = UpdateClient.CopyWithProgress(new MemoryStream(data), dst, 1000000, delegate(long n) { seen.Add(n); }, () => false);
+        Check(ok && dst.Length == 200000, "tamamı kopyalanır");
+        Check(seen.Count > 1 && seen[seen.Count - 1] == 200000, "son ilerleme toplam bayt");
+        bool mono = true; for (int i = 1; i < seen.Count; i++) if (seen[i] < seen[i - 1]) mono = false;
+        Check(mono, "ilerleme azalmaz");
+
+        var dst2 = new MemoryStream(); int calls = 0;
+        ok = UpdateClient.CopyWithProgress(new MemoryStream(data), dst2, 1000000, null, () => ++calls > 1);
+        Check(!ok && dst2.Length < 200000, "iptal: false döner, eksik yazılır");
+
+        bool threw = false;
+        try { UpdateClient.CopyWithProgress(new MemoryStream(data), new MemoryStream(), 100000, null, null); }
+        catch (InvalidOperationException) { threw = true; }
+        Check(threw, "sınır aşılınca InvalidOperationException");
+    }
     static void UpdateZipSlip()
     {
         var root = Path.Combine(Path.GetTempPath(), "ovpnqs-zipslip-" + Guid.NewGuid().ToString("N"));

@@ -1983,7 +1983,7 @@ internal sealed class SearchForm : Form
         if (userAsked) SetStatus("Sürüm " + r.Version + " indiriliyor…");
         ThreadPool.QueueUserWorkItem(delegate
         {
-            string err; var pkg = UpdateClient.Download(r, out err);
+            string err; var pkg = UpdateClient.Download(r, null, () => false, out err);
             UiInvoke(delegate
             {
                 updateDownloading = false;

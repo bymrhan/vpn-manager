@@ -334,20 +334,33 @@ internal static class UpdateClient
         catch (Exception ex) { error = Describe(ex); return null; }
     }
 
+    // Pause between zip download attempts (3 attempts in total). Kept as a field so the schedule is easy to read.
+    static readonly int[] RetryWaitsMs = { 1000, 3000 };
+    public const string CancelledText = "iptal edildi";
+
     // Downloads the package and its .sha256, verifies and extracts it. Never call on the UI thread.
-    // Returns the extracted package folder (contains kur.ps1), or null + error. Nothing runs here.
-    public static string Download(ReleaseInfo r, out string error)
+    // report(stage, done, total) and cancelled() may be null; report runs on the calling (worker) thread.
+    // Returns the extracted package folder (contains kur.ps1), or null + error (CancelledText when cancelled).
+    // Nothing runs here.
+    public static string Download(ReleaseInfo r, Action<UpdateStage, long, long> report, Func<bool> cancelled, out string error)
     {
         error = null;
         if (r == null || !r.CanInstall) { error = "sürümde paket veya SHA-256 dosyası yok"; return null; }
         if (!UpdateLogic.IsAllowedAssetUrl(r.ZipUrl, r.Tag, UpdateLogic.ZipAsset) || !UpdateLogic.IsAllowedAssetUrl(r.ShaUrl, r.Tag, UpdateLogic.ShaAsset)) { error = "beklenmeyen indirme adresi"; return null; }
+        if (report == null) report = delegate { };
+        if (cancelled == null) cancelled = () => false;
         var work = Path.Combine(WorkRoot, r.Version + "-" + Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(work);
+            report(UpdateStage.Downloading, 0, 0);
             var shaText = Encoding.ASCII.GetString(Get(r.ShaUrl, MaxShaBytes, null));
+            if (cancelled()) { TryDelete(work); error = CancelledText; return null; }
             var zip = Path.Combine(work, UpdateLogic.ZipAsset);
-            File.WriteAllBytes(zip, Get(r.ZipUrl, MaxZipBytes, null));
+            if (!DownloadZip(r.ZipUrl, zip, report, cancelled)) { TryDelete(work); error = CancelledText; return null; }
+            report(UpdateStage.Verifying, 0, 0);
+            if (cancelled()) { TryDelete(work); error = CancelledText; return null; }
+            report(UpdateStage.Preparing, 0, 0);
             var pkg = VerifyAndExtract(zip, shaText, work, out error);
             if (pkg == null) TryDelete(work);
             return pkg;
@@ -355,6 +368,63 @@ internal static class UpdateClient
         catch (Exception ex) { TryDelete(work); error = Describe(ex); return null; }
     }
 
+    // Streams the zip to disk. WebException / IOException are retried (each attempt restarts the file),
+    // except an HTTP 4xx answer. Returns false when cancelled; throws when all attempts failed.
+    static bool DownloadZip(string url, string zipPath, Action<UpdateStage, long, long> report, Func<bool> cancelled)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            if (cancelled()) return false;
+            try
+            {
+                using (var resp = Open(url, null))
+                {
+                    if (resp.ContentLength > MaxZipBytes) throw new InvalidOperationException("dosya beklenenden büyük");
+                    long total = resp.ContentLength > 0 ? resp.ContentLength : 0;
+                    report(UpdateStage.Downloading, 0, total);
+                    using (var s = resp.GetResponseStream()) using (var fs = File.Create(zipPath))
+                        return CopyWithProgress(s, fs, MaxZipBytes, delegate(long done) { report(UpdateStage.Downloading, done, total); }, cancelled);
+                }
+            }
+            catch (Exception ex)
+            {
+                var web = ex as WebException;
+                if (web == null && !(ex is IOException)) throw;
+                var http = web != null ? web.Response as HttpWebResponse : null;
+                if (http != null && (int)http.StatusCode >= 400 && (int)http.StatusCode < 500) throw;
+                if (attempt >= RetryWaitsMs.Length) throw;
+                if (!WaitCancellable(RetryWaitsMs[attempt], cancelled)) return false;
+            }
+        }
+    }
+
+    // Sleeps in short slices so a cancel is noticed quickly. False when cancelled.
+    static bool WaitCancellable(int ms, Func<bool> cancelled)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < ms)
+        {
+            if (cancelled()) return false;
+            System.Threading.Thread.Sleep(50);
+        }
+        return !cancelled();
+    }
+
+    // Copies source to target in 64 KB chunks. progress gets the cumulative byte count after each chunk
+    // (may be null). Returns false when cancelled (checked between chunks); throws past maxBytes.
+    public static bool CopyWithProgress(Stream source, Stream target, long maxBytes, Action<long> progress, Func<bool> cancelled)
+    {
+        var buf = new byte[64 * 1024]; long done = 0; int n;
+        while ((n = source.Read(buf, 0, buf.Length)) > 0)
+        {
+            done += n;
+            if (done > maxBytes) throw new InvalidOperationException("paket çok büyük");
+            target.Write(buf, 0, n);
+            if (progress != null) progress(done);
+            if (cancelled != null && cancelled()) return false;
+        }
+        return true;
+    }
     // SHA-256 of the zip must equal the hash in shaText (mandatory). Only then is the zip extracted
     // to <workDir>\paket. A mismatch or a missing hash deletes the zip and extracts nothing.
     public static string VerifyAndExtract(string zipPath, string shaText, string workDir, out string error)
@@ -429,7 +499,8 @@ internal static class UpdateClient
         return Encoding.UTF8.GetString(Get(url, MaxJsonBytes, "application/vnd.github+json"));
     }
 
-    static byte[] Get(string url, long maxBytes, string accept)
+    // Opens the GET response (caller disposes). HTTPS only, including the final redirect hop.
+    static HttpWebResponse Open(string url, string accept)
     {
         if (!url.StartsWith("https://", StringComparison.Ordinal)) throw new InvalidOperationException("yalnızca HTTPS");
         ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
@@ -438,10 +509,16 @@ internal static class UpdateClient
         req.UserAgent = UpdateLogic.UserAgent; req.AllowAutoRedirect = true; req.MaximumAutomaticRedirections = 5;
         req.UseDefaultCredentials = false; req.CookieContainer = null;
         if (accept != null) req.Accept = accept;
-        using (var resp = (HttpWebResponse)req.GetResponse())
+        var resp = (HttpWebResponse)req.GetResponse();
+        // GitHub serves assets from its download host; the final hop must still be HTTPS.
+        if (resp.ResponseUri == null || resp.ResponseUri.Scheme != Uri.UriSchemeHttps) { resp.Close(); throw new InvalidOperationException("yalnızca HTTPS"); }
+        return resp;
+    }
+
+    static byte[] Get(string url, long maxBytes, string accept)
+    {
+        using (var resp = Open(url, accept))
         {
-            // GitHub serves assets from its download host; the final hop must still be HTTPS.
-            if (resp.ResponseUri == null || resp.ResponseUri.Scheme != Uri.UriSchemeHttps) throw new InvalidOperationException("yalnızca HTTPS");
             if (resp.ContentLength > maxBytes) throw new InvalidOperationException("dosya beklenenden büyük");
             using (var s = resp.GetResponseStream()) using (var ms = new MemoryStream())
             {
@@ -455,7 +532,6 @@ internal static class UpdateClient
             }
         }
     }
-
     static string Describe(Exception ex)
     {
         var w = ex as WebException;
