@@ -2009,7 +2009,16 @@ internal sealed class SearchForm : Form
             }
             return;
         }
-        if (updatePackage != null) { if (userAsked) { updateUserAsked = true; InstallPending(); } return; }
+        if (updatePackage != null)
+        {
+            if (userAsked)
+            {
+                updateUserAsked = true;
+                if (updateInstalling) NoticeDo(n => n.SetStage(UpdateStage.Restarting, 0, 0, r.Version));   // an install is already starting: show the truth
+                else InstallPending();
+            }
+            return;
+        }
         updateDownloading = true; updateCancel = false; updateShowProgress = userAsked;
         if (userAsked) SetStatus("Sürüm " + r.Version + " indiriliyor…");
         var version = r.Version;
@@ -2136,7 +2145,8 @@ internal sealed class SearchForm : Form
                     updateInstalling = false;
                     updatePackage = null; updateBadVersion = version;
                     var text = string.IsNullOrEmpty(err) ? "bilinmeyen hata" : err;
-                    if (!background) NoticeDo(n => n.SetFailed("Kurulum başlatılamadı: " + text));
+                    if (!background || updateUserAsked) NoticeDo(n => n.SetFailed("Kurulum başlatılamadı: " + text));
+                    updateUserAsked = false;
                     SetStatus("Güncelleme başlatılamadı: " + text);
                     return;
                 }
