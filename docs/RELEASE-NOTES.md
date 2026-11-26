@@ -3,6 +3,12 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.3
+
+- **Sağlayıcı logoları:** OpenVPN, FortiClient, Sophos Connect ve WatchGuard satırlarında artık sağlayıcıların kendi logoları (20 px, keskin) görünür; avatar köşesindeki rozet sunucu erişilebilirliğini gösterir.
+- **Kayıtlı hesap:** FortiClient, Sophos ve WatchGuard satırlarının sağ tık menüsünde *Farklı kullanıcıyla bağlan…* eklendi. *Kayıtlı parolayı değiştir…* penceresinde parolayı boş bırakırsanız kayıtlı parola korunur; yalnızca kullanıcı adını değiştirebilirsiniz.
+- **Daha geniş pencere:** varsayılan genişlik büyütüldü; sunucu ve kullanıcı adı satırda kesilmez.
+
 ## 2.1.2
 
 - **Kurulum yardımcısı:** OpenVPN Connect ve FortiClient'ın yanında Sophos Connect ile WatchGuard SSL VPN de taranır ve listelenir (bağlantı / sunucu sayısıyla); FortiClient, Sophos ve WatchGuard profillerini gösterme anahtarları eklendi (kurulu olmayan istemci için soluk). Tema seçimi sihirbazda anında uygulanır ve ana pencereye taşınır.

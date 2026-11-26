@@ -48,7 +48,7 @@ if ($LASTEXITCODE -ne 0) { throw 'testler başarısız; paket üretilmedi' }
 # 1) compile
 $exe = Join-Path $appDir 'OpenVPN-Hizli-Arama.exe'
 $mods = Get-ChildItem (Join-Path $root 'modules\*.cs') | ForEach-Object FullName
-$svgRes = Get-ChildItem (Join-Path $root 'assets\*.svg') | ForEach-Object { "/resource:$($_.FullName),$($_.Name)" }
+$svgRes = Get-ChildItem (Join-Path $root 'assets\*') -Include *.svg,*.png | ForEach-Object { "/resource:$($_.FullName),$($_.Name)" }
 function Invoke-Compile([string[]]$extra) {
     & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ "/out:$exe" "/win32icon:$root\app.ico" "/resource:$root\app.ico,app.ico" $svgRes $extra `
       /r:System.Web.Extensions.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:Accessibility.dll `

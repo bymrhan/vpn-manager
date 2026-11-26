@@ -543,7 +543,7 @@ internal sealed class SearchForm : Form
         Text = "OpenVPN Hızlı Arama"; StartPosition = FormStartPosition.Manual; BackColor = Color.Black; ForeColor = Ui.Text; Font = Ui.SubFont;
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; MaximizeBox = false; KeyPreview = true; DoubleBuffered = true;
         SetStyle(ControlStyles.ResizeRedraw, true);
-        MinimumSize = new Size(S(380), S(360)); Size = new Size(S(520), Math.Min(S(720), area.Height));
+        MinimumSize = new Size(S(380), S(360)); Size = new Size(S(580), Math.Min(S(720), area.Height));
         floatHeight = Height;
         Icon = IconArt.Load(new Size(32, 32)) ?? Icon;
 
@@ -985,6 +985,7 @@ internal sealed class SearchForm : Form
             var hasCred = false;
             try { hasCred = FortiCredentialStore.Has(FortiStore.TunnelName(p)); } catch { }
             rowMenu.Items.Add(Item(hasCred ? "Kayıtlı parolayı değiştir…" : "Parolayı kaydet…", Glyph.Settings, delegate { EditFortiCredential(p); }));
+            rowMenu.Items.Add(Item("Farklı kullanıcıyla bağlan…", Glyph.Connect, delegate { ConnectForti(p, true); }));
             if (hasCred) rowMenu.Items.Add(Danger("Kayıtlı parolayı sil", Glyph.Delete, delegate { DeleteFortiCredential(p); }));
         }
         if (ExtFor(p) != null && !Demo.On)
@@ -992,6 +993,7 @@ internal sealed class SearchForm : Form
             var hasCred = false;
             try { hasCred = FortiCredentialStore.Has(VpnProviders.CredentialKey(p), VpnProviders.CredentialPrefix(ExtFor(p).Kind)); } catch { }
             rowMenu.Items.Add(Item(hasCred ? "Kayıtlı parolayı değiştir…" : "Parolayı kaydet…", Glyph.Settings, delegate { EditExtCredential(p); }));
+            rowMenu.Items.Add(Item("Farklı kullanıcıyla bağlan…", Glyph.Connect, delegate { ConnectExt(ExtFor(p), p, true); }));
             if (hasCred) rowMenu.Items.Add(Danger("Kayıtlı parolayı sil", Glyph.Delete, delegate { DeleteExtCredential(p); }));
         }
         if (VpnProviders.IsOpenVpn(p)) rowMenu.Items.Add(Item(".ovpn olarak dışa aktar…", Glyph.Export, delegate { ExportProfile(p); }));
@@ -1090,7 +1092,7 @@ internal sealed class SearchForm : Form
         });
     }
 
-    void ConnectForti(VpnProfile p)
+    void ConnectForti(VpnProfile p, bool askNew = false)
     {
         if (p.Id == fortiConnectedId) { list.ConnectSucceeded(p.Id); SetStatus("\"" + p.Name + "\" zaten bağlı"); return; }
         if (fortiOpening) return;
@@ -1099,9 +1101,9 @@ internal sealed class SearchForm : Form
         FortiCredential cred = null;
         var tunnel = FortiStore.TunnelName(p);
         var ssl = p.Id.StartsWith(FortiStore.IdPrefixSsl, StringComparison.Ordinal);
-        if (ssl && !FortiCredentialStore.FortiKeepsPassword(tunnel))
+        if (ssl && (askNew || !FortiCredentialStore.FortiKeepsPassword(tunnel)))
         {
-            try { cred = FortiCredentialStore.Load(tunnel); } catch { cred = null; }
+            if (!askNew) { try { cred = FortiCredentialStore.Load(tunnel); } catch { cred = null; } }
             if (cred == null) cred = AskFortiCredential(p, null);
         }
         if (cred != null) CrashReporter.RememberUser(cred.Username);
@@ -1190,16 +1192,19 @@ internal sealed class SearchForm : Form
     {
         FortiCredential current = null;
         try { current = FortiCredentialStore.Load(FortiStore.TunnelName(p)); } catch { }
+        string kept = current != null && current.Password.Length > 0 ? current.Password : null;
         if (current != null) current.Password = ""; // never show the saved password again
-        var c = AskFortiCredentialSaveOnly(p, current);
+        var c = AskFortiCredentialSaveOnly(p, current, kept);
         if (c != null) SetStatus("\"" + p.Name + "\" için parola kaydedildi");
     }
 
-    FortiCredential AskFortiCredentialSaveOnly(VpnProfile p, FortiCredential current)
+    FortiCredential AskFortiCredentialSaveOnly(VpnProfile p, FortiCredential current, string kept)
     {
         using (var f = new FortiCredentialForm(FortiStore.TunnelName(p), current, true))
         {
+            f.AllowBlankPassword = kept != null;
             if (f.ShowDialog(this) != DialogResult.OK || f.Result == null) return null;
+            if (f.Result.Password.Length == 0) f.Result.Password = kept ?? "";
             var err = FortiCredentialStore.Save(FortiStore.TunnelName(p), f.Result);
             if (err != null) { SetStatus(err); return null; }
             f.Result.Password = "";
@@ -1336,7 +1341,7 @@ internal sealed class SearchForm : Form
         catch { }
     }
 
-    void ConnectExt(ExtVpn x, VpnProfile p)
+    void ConnectExt(ExtVpn x, VpnProfile p, bool askNew = false)
     {
         if (Demo.On) { DemoConnect(p.Name, true); return; }
         if (p.Id == x.ConnectedId) { list.ConnectSucceeded(p.Id); SetStatus("\"" + p.Name + "\" zaten bağlı"); return; }
@@ -1346,8 +1351,8 @@ internal sealed class SearchForm : Form
         // password or shows its dialog to the user.
         var prefix = VpnProviders.CredentialPrefix(x.Kind);
         FortiCredential cred = null;
-        try { cred = FortiCredentialStore.Load(VpnProviders.CredentialKey(p), prefix); } catch { cred = null; }
-        if (cred == null) cred = AskExtCredential(x, p, string.IsNullOrEmpty(p.Username) ? null : new FortiCredential { Username = p.Username, Password = "" });
+        if (!askNew) { try { cred = FortiCredentialStore.Load(VpnProviders.CredentialKey(p), prefix); } catch { cred = null; } }
+        if (cred == null) cred = AskExtCredential(x, p, askNew || string.IsNullOrEmpty(p.Username) ? null : new FortiCredential { Username = p.Username, Password = "" });
         if (cred != null) CrashReporter.RememberUser(cred.Username);
         AppLog.Info(x.Log, "connect requested" + (cred != null ? " (with credential)" : ""));
         x.Busy = true; x.ConnectingId = p.Id; x.ConnectStart = DateTime.UtcNow;
@@ -1448,11 +1453,14 @@ internal sealed class SearchForm : Form
         var key = VpnProviders.CredentialKey(p); var prefix = VpnProviders.CredentialPrefix(x.Kind);
         FortiCredential current = null;
         try { current = FortiCredentialStore.Load(key, prefix); } catch { }
+        string kept = current != null && current.Password.Length > 0 ? current.Password : null;
         if (current != null) current.Password = ""; // never show the saved password again
         else if (!string.IsNullOrEmpty(p.Username)) current = new FortiCredential { Username = p.Username, Password = "" };
         using (var f = new FortiCredentialForm(key, current, true, x.Label))
         {
+            f.AllowBlankPassword = kept != null;
             if (f.ShowDialog(this) != DialogResult.OK || f.Result == null) return;
+            if (f.Result.Password.Length == 0) f.Result.Password = kept ?? "";
             var err = FortiCredentialStore.Save(key, f.Result, prefix);
             f.Result.Password = "";
             SetStatus(err ?? "\"" + p.Name + "\" için parola kaydedildi");

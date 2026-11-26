@@ -467,11 +467,16 @@ internal sealed class ProfileList : Control
         if (live != null)
             using (var pen = new Pen(Color.FromArgb(170, Ui.Success), 1F)) g.DrawPath(pen, Ui.Round(av, S(12)));
 
-        // provider badge (differs per provider: shield for FortiClient, tunnel ring for OpenVPN, S for Sophos, W for WatchGuard)
-        var bd = S(15); var badge = new RectangleF(av.Right - bd + S(3), av.Bottom - bd + S(3), bd, bd);
-        using (var b = new SolidBrush(Fade(Ui.Blend(Ui.GlassPrimary, Color.Black, 0.25F), appear))) g.FillEllipse(b, badge);
-        using (var pen = new Pen(Color.FromArgb((int)(70 * appear), Themes.IsLight ? Color.Black : Color.White), 1F)) g.DrawEllipse(pen, badge.X + 0.5F, badge.Y + 0.5F, badge.Width - 1, badge.Height - 1);
-        Assets.Draw(g, providerIcon, RectangleF.Inflate(badge, -S(3.2F), -S(3.2F)), Fade(Themes.IsLight ? Color.White : Ui.Muted, appear), 1.15F);
+        // server reachability badge on the avatar corner: its own shape (check / cross / clock), independent of the connection state
+        var reach = ReachOf(p);
+        if (reach != ReachState.Unknown)
+        {
+            var bd = S(16); var badge = new RectangleF(av.Right - bd + S(4), av.Bottom - bd + S(4), bd, bd);
+            var rc = reach == ReachState.Up ? Ui.Success : reach == ReachState.Down ? Ui.Danger : Ui.Faint;
+            using (var b = new SolidBrush(Fade(Ui.Blend(Ui.GlassPrimary, Color.Black, 0.35F), appear))) g.FillEllipse(b, badge);
+            using (var pen = new Pen(Color.FromArgb((int)(110 * appear), rc), 1F)) g.DrawEllipse(pen, badge.X + 0.5F, badge.Y + 0.5F, badge.Width - 1, badge.Height - 1);
+            Assets.Draw(g, reach == ReachState.Up ? "reach-up" : reach == ReachState.Down ? "reach-down" : "reach-checking", RectangleF.Inflate(badge, -S(3F), -S(3F)), Fade(rc, appear), 1.3F);
+        }
 
         if (connecting || disconnecting)
             using (var pen = new Pen(Fade(connecting ? Ui.Highlight : Ui.Warning, appear), 1.8F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
@@ -522,18 +527,48 @@ internal sealed class ProfileList : Control
         DrawHighlighted(g, p.Name, Ui.RowNameFont, Fade(Ui.Text, appear), new Rectangle(x, rr.Y + S(10), Math.Max(10, textRight - x), S(20)));
         var sub = VpnProviders.RowSubLine(p);
         var sx = x;
-        var reach = ReachOf(p);
-        if (reach != ReachState.Unknown)
-        {
-            // server reachability: its own icon shape (check / cross / clock), independent from the connection state
-            var rc = reach == ReachState.Up ? Ui.Success : reach == ReachState.Down ? Ui.Danger : Ui.Faint;
-            Assets.Draw(g, reach == ReachState.Up ? "reach-up" : reach == ReachState.Down ? "reach-down" : "reach-checking", new RectangleF(sx, rr.Y + S(32), S(12), S(12)), Fade(rc, appear), 1.25F);
-            sx += S(17);
-        }
         // provider logo before the provider name: [logo] Provider · server · user
-        Assets.Draw(g, providerIcon, new RectangleF(sx, rr.Y + S(32.5F), S(13), S(13)), Fade(Ui.Muted, appear), 1.2F);
-        sx += S(18);
+        ProviderLogo(g, VpnProviders.KindOf(p), new RectangleF(sx, rr.Y + S(29.5F), S(20), S(20)), appear);
+        sx += S(26);
         DrawHighlighted(g, sub, Ui.SubFont, Fade(Ui.Muted, appear), new Rectangle(sx, rr.Y + S(31), Math.Max(10, right - sw - iconW - S(10) - sx), S(18)));
+    }
+
+    // Provider logos: the vendors' marks supplied by the user (assets\provider-*.png, embedded), clipped to a
+    // rounded tile with a thin glass rim so they sit on the dark surface. Falls back to a drawn glyph tile.
+    static readonly Dictionary<VpnKind, Image> logoCache = new Dictionary<VpnKind, Image>();
+    static Image LogoImage(VpnKind kind)
+    {
+        Image img;
+        if (logoCache.TryGetValue(kind, out img)) return img;
+        try { using (var s = typeof(ProfileList).Assembly.GetManifestResourceStream(VpnProviders.Asset(kind) + ".png")) if (s != null) img = Image.FromStream(s); }
+        catch { img = null; }
+        logoCache[kind] = img;
+        return img;
+    }
+
+    internal static void ProviderLogo(Graphics g, VpnKind kind, RectangleF r, float appear)
+    {
+        var img = LogoImage(kind);
+        using (var path = Ui.Round(r, r.Width * 0.23F))
+        {
+            if (img != null)
+            {
+                var st = g.Save();
+                g.SmoothingMode = SmoothingMode.AntiAlias; g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.SetClip(path, CombineMode.Intersect);
+                var attrs = new System.Drawing.Imaging.ImageAttributes();
+                attrs.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = Math.Max(0F, Math.Min(1F, appear)) });
+                g.DrawImage(img, Rectangle.Round(r), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attrs);
+                attrs.Dispose();
+                g.Restore(st);
+            }
+            else
+            {
+                using (var b = new SolidBrush(Fade(Ui.Blend(Ui.GlassPrimary, Color.White, 0.2F), appear))) g.FillPath(b, path);
+                Assets.Draw(g, VpnProviders.Asset(kind), RectangleF.Inflate(r, -r.Width * 0.17F, -r.Width * 0.17F), Fade(Ui.Text, appear), 1.35F);
+            }
+            using (var pen = new Pen(Color.FromArgb((int)(90 * appear), Color.White), 1F)) g.DrawPath(pen, path);
+        }
     }
 
     // Sapphire glass action button: calm blue glass instead of a bright accent.
