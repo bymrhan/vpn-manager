@@ -833,7 +833,7 @@ internal sealed class UpdateNotice : Form
         Glass.Paint(g, panel, S(14), GlassKind.Primary, 1F);
         var chip = new RectangleF(S(26), S(26), S(36), S(36));
         Glass.Paint(g, chip, S(11), GlassKind.Secondary, 1.8F);
-        Glyphs.Draw(g, Glyph.Refresh, RectangleF.Inflate(chip, -S(9), -S(9)), stage == UpdateStage.Failed ? Ui.Muted : Ui.Highlight);
+        Assets.Draw(g, "action-update", RectangleF.Inflate(chip, -S(8), -S(8)), stage == UpdateStage.Failed ? Ui.Muted : Ui.Highlight, 1.1F); // download arrow (vector asset, sharp at any size)
         TextRenderer.DrawText(g, caption, SFonts.Big, new Point(S(76), S(26)), Ui.Text, Ui.Flags);
         if (stageLine != null)
             TextRenderer.DrawText(g, stageLine, SFonts.RowDesc, new Rectangle(S(76), S(56), Width - S(96), S(22)), Ui.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
