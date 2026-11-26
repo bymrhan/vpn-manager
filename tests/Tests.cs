@@ -84,6 +84,7 @@ static class Tests
         Run("Ayarlar: tema kaydı ve eski dosyalar", ThemeSettings);
         Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
         Run("Güncelleme: zip slip", UpdateZipSlip);
+        Run("Güncelleme aşama metni", UpdateStageText);
         Run("OpenVPN penceresi geri getirme", OpenVpnWindowRestore);
         Run("Tanılama: temizleyici sahte sırları siler", SanitizerRemovesSeeds);
         Run("Tanılama: temizleyici idempotent ve kararlı", SanitizerIdempotentAndStable);
@@ -1061,6 +1062,21 @@ static class Tests
             Check(UpdateLogic.FailureMarkerBlocks(UpdateClient.ReadFailureMarker(dir), "2.1.0", now.AddHours(1)), "kur.ps1'in yazdığı işaret okunur");
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void UpdateStageText()
+    {
+        Check(UpdateLogic.FormatBytes(512) == "512 B", "512 B");
+        Check(UpdateLogic.FormatBytes(4404019) == "4,2 MB", "4,2 MB");
+        Check(UpdateLogic.FormatBytes(0) == "0 B", "0 B");
+        Check(UpdateLogic.Percent(50, 200) == 25, "yüzde 25");
+        Check(UpdateLogic.Percent(5, 0) == -1, "toplam yok: -1");
+        Check(UpdateLogic.Percent(300, 200) == 100, "yüzde 100 ile sınırlı");
+        Check(UpdateLogic.StageText(UpdateStage.Downloading, 4404019, 9437184, "2.1.7") == "Sürüm 2.1.7 indiriliyor · 4,2 / 9,0 MB · %47", "indirme metni");
+        Check(UpdateLogic.StageText(UpdateStage.Downloading, 1000, 0, "2.1.7") == "Sürüm 2.1.7 indiriliyor · 1000 B", "toplam yok: yüzde yok");
+        Check(UpdateLogic.StageText(UpdateStage.Verifying, 0, 0, "2.1.7") == "Doğrulanıyor…", "doğrulama metni");
+        Check(UpdateLogic.StageText(UpdateStage.Preparing, 0, 0, "2.1.7") == "Paket hazırlanıyor…", "hazırlama metni");
+        Check(UpdateLogic.StageText(UpdateStage.Restarting, 0, 0, "2.1.7") == "Yeniden başlatılıyor…", "yeniden başlatma metni");
     }
 
     static void UpdateZipSlip()

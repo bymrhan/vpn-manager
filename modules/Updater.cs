@@ -34,8 +34,51 @@ internal sealed class ReleaseInfo
     public bool CanInstall { get { return ZipUrl != null && ShaUrl != null; } }
 }
 
+internal enum UpdateStage { Offer, Downloading, Verifying, Preparing, Waiting, Restarting, Failed }
+
 internal static class UpdateLogic
 {
+    // "512 B" below 1 MB, else "4,2 MB" (tr-TR decimal comma, 1 decimal, MB = 1048576).
+    public static string FormatBytes(long bytes)
+    {
+        if (bytes < 0) bytes = 0;
+        var tr = CultureInfo.GetCultureInfo("tr-TR");
+        if (bytes < 1048576) return bytes.ToString(tr) + " B";
+        return (bytes / 1048576.0).ToString("0.0", tr) + " MB";
+    }
+
+    // 0..100, or -1 when the total is unknown.
+    public static int Percent(long done, long total)
+    {
+        if (total <= 0) return -1;
+        if (done < 0) done = 0;
+        if (done >= total) return 100;
+        return (int)Math.Round(done * 100.0 / total, MidpointRounding.AwayFromZero);
+    }
+
+    // One-line status text for the update progress UI.
+    public static string StageText(UpdateStage stage, long done, long total, string version)
+    {
+        switch (stage)
+        {
+            case UpdateStage.Offer: return "Sürüm " + version + " hazır";
+            case UpdateStage.Downloading:
+                var head = "Sürüm " + version + " indiriliyor · ";
+                if (total <= 0) return head + FormatBytes(done);
+                string size;
+                if (total >= 1048576)
+                    size = FormatBytes(done).Replace(" MB", "") + " / " + FormatBytes(total);
+                else
+                    size = FormatBytes(done) + " / " + FormatBytes(total);
+                return head + size + " · %" + Percent(done, total).ToString(CultureInfo.InvariantCulture);
+            case UpdateStage.Verifying: return "Doğrulanıyor…";
+            case UpdateStage.Preparing: return "Paket hazırlanıyor…";
+            case UpdateStage.Waiting: return "Uygulamanın kapanması bekleniyor…";
+            case UpdateStage.Restarting: return "Yeniden başlatılıyor…";
+            default: return "Güncelleme başarısız";
+        }
+    }
+
     public const string Repo = "bymrhan/vpn-manager";
     public const string ApiUrl = "https://api.github.com/repos/" + Repo + "/releases/latest";
     public const string ReleasesPage = "https://github.com/" + Repo + "/releases";
