@@ -564,56 +564,186 @@ internal static class UpdateClient
 }
 
 // "ask" mode notice: a small glass card in the corner of the screen, above other windows, that does
-// not take focus. Same material as GlassDialog. Buttons: update now / later / skip this version,
-// plus the release notes.
+// not take focus. Same material as GlassDialog. Offer state: update now / later / skip this version,
+// plus the release notes. After "update now" the card stays open and shows progress (download,
+// verify, prepare, restart), a waiting reason, or a failure with Retry / open release page.
 internal sealed class UpdateNotice : Form
 {
     static int S(float v) { return Ui.S(v); }
     const int WS_EX_TOOLWINDOW = 0x80;
-    readonly string caption, body;
-    readonly Rectangle textRect;
-    public event Action UpdateNow, Later, Skip, Notes;
+    string caption, body, stageLine;
+    Rectangle textRect, barRect;
+    UpdateStage stage = UpdateStage.Offer;
+    long done, total;
+    readonly string version, offerCaption, offerBody;
+    readonly bool canInstall;
+    readonly SButton primary, later, skip, notesBtn, cancelBtn, retryBtn, openBtn;
+    Timer anim;
+    public event Action UpdateNow, Later, Skip, Notes, Cancel, Retry;
 
     // installedCopy: running from the install dir. Otherwise, or without the package / .sha256 asset,
     // the primary button opens the release page instead of installing.
     public UpdateNotice(ReleaseInfo r, string current, bool installedCopy)
     {
-        var canInstall = installedCopy && r.CanInstall;
+        canInstall = installedCopy && r.CanInstall;
+        version = r.Version;
         AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.Manual; DoubleBuffered = true;
         BackColor = Ui.GlassPrimary; // the buttons paint their parent's color behind them: same as the glass card
         ForeColor = Ui.Text; Font = SFonts.Nav;
         Text = "Güncelleme";
-        caption = "Sürüm " + r.Version + " hazır";
+        offerCaption = "Sürüm " + r.Version + " hazır";
         var notes = UpdateLogic.NotesPreview(r.Notes, 160);
-        body = (canInstall
+        offerBody = (canInstall
             ? "Yüklü sürüm " + current + ". Şimdi güncelleyebilir ya da sonraya bırakabilirsiniz."
             : installedCopy ? "Yüklü sürüm " + current + ". Bu sürüm uygulama içinden kurulamıyor; sürüm sayfasından indirin."
             : "Yüklü sürüm " + current + ". Bu kopya kurulum klasöründe değil; yeni sürümü sürüm sayfasından indirin.")
             + (notes.Length > 0 ? "\n" + notes : "");
-        var width = S(440); var textW = width - S(96);
-        var textH = Math.Min(S(120), Math.Max(S(20), TextRenderer.MeasureText(body, SFonts.RowDesc, new Size(textW, 1000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height));
-        textRect = new Rectangle(S(76), S(56), textW, textH);
-        Size = new Size(width, textRect.Bottom + S(104));
 
-        var primary = new SButton(canInstall ? "Şimdi güncelle" : "Sürüm sayfasını aç", SButtonKind.Primary);
-        var later = new SButton("Sonra", SButtonKind.Secondary);
-        var skip = new SButton("Bu sürümü atla", SButtonKind.Ghost);
-        var notesBtn = new SButton("Sürüm notları", SButtonKind.Ghost, Glyph.Open);
+        primary = new SButton(canInstall ? "Şimdi güncelle" : "Sürüm sayfasını aç", SButtonKind.Primary);
+        later = new SButton("Sonra", SButtonKind.Secondary);
+        skip = new SButton("Bu sürümü atla", SButtonKind.Ghost);
+        notesBtn = new SButton("Sürüm notları", SButtonKind.Ghost, Glyph.Open);
+        cancelBtn = new SButton("İptal", SButtonKind.Secondary);
+        retryBtn = new SButton("Yeniden dene", SButtonKind.Primary);
+        openBtn = new SButton("Sürüm sayfasını aç", SButtonKind.Secondary);
+        primary.Click += delegate
+        {
+            if (canInstall)
+            {
+                SetStage(UpdateStage.Downloading, 0, 0, version); // working look right away; the caller drives the rest
+                if (UpdateNow != null) UpdateNow();
+            }
+            else { Close(); if (Notes != null) Notes(); }
+        };
+        later.Click += delegate { Close(); if (Later != null) Later(); };
+        skip.Click += delegate { Close(); if (Skip != null) Skip(); };
+        notesBtn.Click += delegate { if (Notes != null) Notes(); };
+        cancelBtn.Click += delegate { if (Cancel != null) Cancel(); };
+        retryBtn.Click += delegate
+        {
+            SetStage(UpdateStage.Downloading, 0, 0, version);
+            if (Retry != null) Retry();
+        };
+        openBtn.Click += delegate { if (Notes != null) Notes(); };
+        Controls.AddRange(new Control[] { primary, later, skip, notesBtn, cancelBtn, retryBtn, openBtn });
+
+        caption = offerCaption; body = offerBody;
+        ApplyLayout();
+        var area = Screen.PrimaryScreen.WorkingArea;
+        Location = new Point(area.Right - Width - S(16), area.Bottom - Height - S(16));
+    }
+
+    public void SetStage(UpdateStage newStage, long doneBytes, long totalBytes, string ver)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(ver)) ver = version;
+            if (newStage == UpdateStage.Waiting) { SetWaiting(UpdateLogic.StageText(newStage, doneBytes, totalBytes, ver)); return; }
+            if (newStage == UpdateStage.Failed) { SetFailed(UpdateLogic.StageText(newStage, doneBytes, totalBytes, ver)); return; }
+            stage = newStage; done = doneBytes; total = totalBytes;
+            if (newStage == UpdateStage.Offer) { caption = offerCaption; body = offerBody; stageLine = null; }
+            else
+            {
+                caption = "Sürüm " + ver + " güncelleniyor"; body = null;
+                stageLine = UpdateLogic.StageText(newStage, doneBytes, totalBytes, ver);
+            }
+            ApplyLayout();
+        }
+        catch { }
+    }
+
+    public void SetWaiting(string reason)
+    {
+        try
+        {
+            stage = UpdateStage.Waiting; done = 0; total = 0;
+            caption = "Güncelleme bekliyor"; body = reason ?? ""; stageLine = null;
+            ApplyLayout();
+        }
+        catch { }
+    }
+
+    public void SetFailed(string reason)
+    {
+        try
+        {
+            stage = UpdateStage.Failed; done = 0; total = 0;
+            caption = "Güncelleme başarısız"; body = reason ?? ""; stageLine = null;
+            ApplyLayout();
+        }
+        catch { }
+    }
+
+    bool HasBar { get { return stage != UpdateStage.Offer && stage != UpdateStage.Failed; } }
+    bool Determinate { get { return stage == UpdateStage.Downloading && UpdateLogic.Percent(done, total) >= 0; } }
+
+    // Resizes the card for the current state (same width, bottom edge stays put) and places the controls.
+    void ApplyLayout()
+    {
+        var width = S(440); var textW = width - S(96);
+        var bottom = Bottom;
+        var showText = body != null;
+        var textH = 0;
+        if (showText)
+            textH = Math.Min(S(120), Math.Max(S(20), TextRenderer.MeasureText(body, SFonts.RowDesc, new Size(textW, 1000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height));
+        var y = S(56);
+        if (stageLine != null) y += S(24);
+        textRect = showText ? new Rectangle(S(76), S(56), textW, textH) : Rectangle.Empty;
+        if (showText) y = textRect.Bottom;
+        var offer = stage == UpdateStage.Offer;
+        var failed = stage == UpdateStage.Failed;
+        barRect = Rectangle.Empty;
+        int h;
+        if (HasBar)
+        {
+            y += showText ? S(14) : S(8);
+            barRect = new Rectangle(S(76), y, textW, S(8));
+            y = barRect.Bottom;
+            h = stage == UpdateStage.Downloading ? y + S(16) + cancelBtn.Height + S(22) : y + S(34);
+        }
+        else h = offer ? textRect.Bottom + S(104) : textRect.Bottom + S(24) + retryBtn.Height + S(22);
+        Size = new Size(width, h);
+        Top = bottom - Height;
+
         var by = Height - S(22) - primary.Height;
+        primary.Visible = later.Visible = skip.Visible = notesBtn.Visible = offer;
+        cancelBtn.Visible = stage == UpdateStage.Downloading;
+        retryBtn.Visible = openBtn.Visible = failed;
         primary.Location = new Point(Width - S(22) - primary.Width, by);
         later.Location = new Point(primary.Left - S(8) - later.Width, by);
         skip.Location = new Point(S(22), by);
         notesBtn.Location = new Point(S(68), textRect.Bottom + S(6));
-        primary.Click += delegate { Close(); if (canInstall) { if (UpdateNow != null) UpdateNow(); } else if (Notes != null) Notes(); };
-        later.Click += delegate { Close(); if (Later != null) Later(); };
-        skip.Click += delegate { Close(); if (Skip != null) Skip(); };
-        notesBtn.Click += delegate { if (Notes != null) Notes(); };
-        Controls.AddRange(new Control[] { primary, later, skip, notesBtn });
-
-        var area = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(area.Right - Width - S(16), area.Bottom - Height - S(16));
+        cancelBtn.Location = new Point(Width - S(22) - cancelBtn.Width, Height - S(22) - cancelBtn.Height);
+        retryBtn.Location = new Point(Width - S(22) - retryBtn.Width, Height - S(22) - retryBtn.Height);
+        openBtn.Location = new Point(retryBtn.Left - S(8) - openBtn.Width, retryBtn.Top);
+        UpdateTimer();
+        Invalidate();
     }
+
+    // The sliding segment needs a timer, but only while a bar without a known percent is on screen.
+    void UpdateTimer()
+    {
+        var need = HasBar && !Determinate && Visible && !IsDisposed;
+        if (need && anim == null)
+        {
+            anim = new Timer(); anim.Interval = 30;
+            anim.Tick += delegate { if (!barRect.IsEmpty) Invalidate(Rectangle.Inflate(barRect, S(2), S(2))); };
+            anim.Start();
+        }
+        else if (!need && anim != null) StopTimer();
+    }
+
+    void StopTimer()
+    {
+        if (anim == null) return;
+        try { anim.Stop(); anim.Dispose(); } catch { }
+        anim = null;
+    }
+
+    protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); UpdateTimer(); }
+    protected override void OnFormClosed(FormClosedEventArgs e) { StopTimer(); base.OnFormClosed(e); }
+    protected override void Dispose(bool disposing) { if (disposing) StopTimer(); base.Dispose(disposing); }
 
     protected override bool ShowWithoutActivation { get { return true; } }
     protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ExStyle |= WS_EX_TOOLWINDOW; return cp; } }
@@ -622,6 +752,29 @@ internal sealed class UpdateNotice : Form
     {
         base.OnHandleCreated(e);
         try { Backdrop.SetCorner(Handle, 2); var d = Themes.IsLight ? 0 : 1; NativeMethods.DwmSetWindowAttribute(Handle, 20, ref d, 4); } catch { }
+    }
+
+    void PaintBar(Graphics g)
+    {
+        var track = new RectangleF(barRect.X, barRect.Y, barRect.Width, barRect.Height);
+        var r = track.Height / 2F;
+        Ui.FillRound(g, Color.FromArgb(48, Ui.Text), track, r);
+        Glass.Paint(g, track, r, GlassKind.Secondary, 1F);
+        RectangleF fill;
+        var pct = UpdateLogic.Percent(done, total);
+        if (Determinate)
+            fill = new RectangleF(track.X, track.Y, Math.Max(track.Height, track.Width * pct / 100F), track.Height);
+        else
+        {
+            var segW = track.Width * 0.3F;
+            var period = 1600;
+            var t = (Environment.TickCount & 0x7FFFFFFF) % period / (float)period;
+            fill = new RectangleF(track.X - segW + t * (track.Width + segW), track.Y, segW, track.Height);
+        }
+        var state = g.Save();
+        using (var clip = Ui.Round(track, r)) g.SetClip(clip, CombineMode.Intersect);
+        Ui.FillRound(g, Ui.Highlight, fill, r);
+        g.Restore(state);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -633,9 +786,13 @@ internal sealed class UpdateNotice : Form
         Glass.Paint(g, panel, S(14), GlassKind.Primary, 1F);
         var chip = new RectangleF(S(26), S(26), S(36), S(36));
         Glass.Paint(g, chip, S(11), GlassKind.Secondary, 1.8F);
-        Glyphs.Draw(g, Glyph.Refresh, RectangleF.Inflate(chip, -S(9), -S(9)), Ui.Highlight);
+        Glyphs.Draw(g, Glyph.Refresh, RectangleF.Inflate(chip, -S(9), -S(9)), stage == UpdateStage.Failed ? Ui.Muted : Ui.Highlight);
         TextRenderer.DrawText(g, caption, SFonts.Big, new Point(S(76), S(26)), Ui.Text, Ui.Flags);
-        TextRenderer.DrawText(g, body, SFonts.RowDesc, textRect, Ui.Muted, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        if (stageLine != null)
+            TextRenderer.DrawText(g, stageLine, SFonts.RowDesc, new Rectangle(S(76), S(56), Width - S(96), S(22)), Ui.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        if (body != null)
+            TextRenderer.DrawText(g, body, SFonts.RowDesc, textRect, Ui.Muted, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        if (!barRect.IsEmpty) PaintBar(g);
         Glass.WindowFrame(g, ClientRectangle, S(8));
     }
 }
