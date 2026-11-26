@@ -33,6 +33,7 @@ internal sealed class AppSettings
     public bool ShowBrave;              // list Brave browser profiles (Microsoft 365 shortcuts); on by default but only when Brave is installed; off = nothing is scanned
     public bool ShowProviderLogos;      // provider logo before the provider name in each row (default off)
     public string BraveOpen;            // "admin" = Microsoft 365 admin center, "last" = the profile's own last tabs
+    public bool FortiAutoYes;           // press "Yes" when FortiClient asks a Yes / No question while this app connects a tunnel
     public bool ShowFrequent;           // "SIK KULLANILANLAR" group under the recent ones (missing key = on)
     public string UpdateMode;           // "ask" (tell the user), "auto" (install silently when idle), "off" (manual check only)
     public string UpdateInterval;       // "startup", "daily", "weekly"
@@ -64,6 +65,7 @@ internal sealed class AppSettings
             ShowBrave = true,
             ShowProviderLogos = false,
             BraveOpen = "admin",
+            FortiAutoYes = true,
             ShowFrequent = true,
             UpdateMode = "ask",
             UpdateInterval = "daily",
@@ -162,6 +164,7 @@ internal static class SettingsStore
             s.ShowBrave = Bool(d, "ShowBrave", s.ShowBrave);
             s.ShowProviderLogos = Bool(d, "ShowProviderLogos", s.ShowProviderLogos);
             s.BraveOpen = Str(d, "BraveOpen", s.BraveOpen) == "last" ? "last" : "admin";
+            s.FortiAutoYes = Bool(d, "FortiAutoYes", s.FortiAutoYes);
             s.ShowFrequent = Bool(d, "ShowFrequent", s.ShowFrequent);
             s.UpdateMode = Str(d, "UpdateMode", s.UpdateMode);
             s.UpdateInterval = Str(d, "UpdateInterval", s.UpdateInterval);
@@ -206,6 +209,7 @@ internal static class SettingsStore
         d["ShowBrave"] = n.ShowBrave;
         d["ShowProviderLogos"] = n.ShowProviderLogos;
         d["BraveOpen"] = n.BraveOpen == "last" ? "last" : "admin";
+        d["FortiAutoYes"] = n.FortiAutoYes;
         d["ShowFrequent"] = n.ShowFrequent;
         d["UpdateMode"] = n.UpdateMode;
         d["UpdateInterval"] = n.UpdateInterval;

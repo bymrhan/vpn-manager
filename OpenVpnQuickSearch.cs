@@ -1058,6 +1058,7 @@ internal sealed class SearchForm : Form
         catch { }
     }
 
+    DateTime fortiPromptNext = DateTime.MinValue;   // after pressing Yes, look again only after a few seconds (the question may be gone, or a second one may follow)
     bool fortiPromptShown;   // the Yes / No question of this connect attempt was already shown to the user
     string fortiConnectedId, fortiConnectingId, fortiDisconnectingId; DateTime fortiSince, fortiConnectStart, fortiDisconnectStart; bool fortiPolling, fortiOpening;
 
@@ -1117,7 +1118,7 @@ internal sealed class SearchForm : Form
         if (cred != null) CrashReporter.RememberUser(cred.Username);
         AppLog.Info("forti", "connect requested (" + (ssl ? "ssl" : "ipsec") + (cred != null ? ", saved credential" : "") + ")");
         fortiOpening = true;
-        fortiConnectingId = p.Id; fortiConnectStart = DateTime.UtcNow; fortiPromptShown = false;
+        fortiConnectingId = p.Id; fortiConnectStart = DateTime.UtcNow; fortiPromptShown = false; fortiPromptNext = DateTime.MinValue;
         list.BeginConnect(p.Id);
         SetStatus("FortiClient'ta \"" + p.Name + "\" seçiliyor…");
         // Open() may restart the FortiClient window (a few seconds), so it runs off the UI thread.
@@ -1234,23 +1235,33 @@ internal sealed class SearchForm : Form
         fortiPolling = true;
         ThreadPool.QueueUserWorkItem(delegate
         {
-            string name = null; var asking = false;
+            string name = null; var asking = false; var pressedYes = false;
             try { name = FortiStore.ConnectedTunnel(); }
             catch (Exception ex) { AppLog.Limited(LogLevel.Warn, "poll:forti", "forti", "poll failed: " + ex.GetType().Name, null); }
             // The connect form was pressed but FortiClient (parked off-screen) may be waiting for a Yes / No answer.
-            if (name == null && fortiConnectingId != null && !fortiPromptShown && (DateTime.UtcNow - fortiConnectStart).TotalSeconds > 3)
+            if (name == null && fortiConnectingId != null && !fortiPromptShown && DateTime.UtcNow >= fortiPromptNext && (DateTime.UtcNow - fortiConnectStart).TotalSeconds > 3)
             {
-                try { string d; asking = FortiGui.AskingYesNo(out d); } catch { asking = false; }
+                try { string d; asking = FortiGui.AskingYesNo(settings.FortiAutoYes, out pressedYes, out d); } catch { asking = false; }
             }
             UiInvoke(delegate
             {
                 fortiPolling = false;
                 if (asking && fortiConnectingId != null && !fortiPromptShown)
                 {
-                    fortiPromptShown = true;
-                    AppLog.Info("forti", "FortiClient asks a yes/no question: window shown to the user");
-                    QuietWindow.Reveal(true);
-                    SetStatus("FortiClient bir soru soruyor (Yes / No) — açılan pencerede yanıtlayın");
+                    if (pressedYes)
+                    {
+                        // fortiPromptShown stays false: a second question of the same attempt is answered the same way
+                        fortiPromptNext = DateTime.UtcNow.AddSeconds(5);
+                        AppLog.Info("forti", "FortiClient asked a yes/no question: Yes pressed");
+                        SetStatus("FortiClient'ın sorusuna Yes denildi");
+                    }
+                    else
+                    {
+                        fortiPromptShown = true;
+                        AppLog.Info("forti", "FortiClient asks a yes/no question: window shown to the user");
+                        QuietWindow.Reveal(true);
+                        SetStatus("FortiClient bir soru soruyor (Yes / No) — açılan pencerede yanıtlayın");
+                    }
                 }
                 OnFortiState(name);
             });

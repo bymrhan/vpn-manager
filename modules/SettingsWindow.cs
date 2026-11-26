@@ -723,6 +723,8 @@ internal sealed class SettingsForm : Form
         reach.CheckedChanged += delegate { work.ReachabilityCheck = reach.Checked; Dirty(); };
         var logos = new SToggle(); logos.SetInstant(work.ShowProviderLogos);
         logos.CheckedChanged += delegate { work.ShowProviderLogos = logos.Checked; Dirty(); };
+        var autoYes = new SToggle(); autoYes.SetInstant(work.FortiAutoYes);
+        autoYes.CheckedChanged += delegate { work.FortiAutoYes = autoYes.Checked; Dirty(); };
         var often = new SToggle(); often.SetInstant(work.ShowFrequent);
         often.CheckedChanged += delegate { work.ShowFrequent = often.Checked; Dirty(); };
         var forti = new SToggle(); forti.SetInstant(work.ShowForti);
@@ -734,7 +736,8 @@ internal sealed class SettingsForm : Form
             .Add(new SRow("Sunucu erişim testi", "Profil avatarında yeşil / kırmızı durum noktası.", reach, Glyph.Server))
             .Add(new SRow("Sağlayıcı simgeleri", "Satırlarda sağlayıcı logosunu göster.", logos, Glyph.ShieldLock))
             .Add(new SRow("Sık kullanılanları göster", "Son 60 günde en az 3 kez bağlanılan profiller.", often, Glyph.Refresh))
-            .Add(new SRow("FortiClient profilleri", "FortiClient VPN tünellerini de listele.", forti, Glyph.ShieldLock));
+            .Add(new SRow("FortiClient profilleri", "FortiClient VPN tünellerini de listele.", forti, Glyph.ShieldLock))
+            .Add(new SRow("FortiClient sorularına otomatik Yes", "Bağlanırken FortiClient Yes / No sorarsa (ör. sertifika uyarısı) Yes'e basılır.", autoYes, Glyph.ShieldLock));
         // Sophos / WatchGuard toggles only for clients found on this PC (demo: always, nothing is read).
         if (Demo.On || SophosStore.IsInstalled)
         {
@@ -1092,7 +1095,7 @@ internal sealed class SettingsForm : Form
             return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.Presence != original.Presence || work.BackupFolder != original.BackupFolder ||
                    work.BackupFrequency != original.BackupFrequency || work.BackupKeep != original.BackupKeep || work.DockSide != original.DockSide ||
                    work.Theme != original.Theme || work.ReachabilityCheck != original.ReachabilityCheck || work.ShowForti != original.ShowForti ||
-                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard || work.ShowBrave != original.ShowBrave || work.ShowProviderLogos != original.ShowProviderLogos || work.BraveOpen != original.BraveOpen || work.ShowFrequent != original.ShowFrequent ||
+                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard || work.ShowBrave != original.ShowBrave || work.FortiAutoYes != original.FortiAutoYes || work.ShowProviderLogos != original.ShowProviderLogos || work.BraveOpen != original.BraveOpen || work.ShowFrequent != original.ShowFrequent ||
                    work.UpdateMode != original.UpdateMode || work.UpdateInterval != original.UpdateInterval ||
                    work.LogEnabled != original.LogEnabled || work.CrashPrompt != original.CrashPrompt || work.CrashAutoConsent != original.CrashAutoConsent;
         }
