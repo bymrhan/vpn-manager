@@ -14,7 +14,7 @@ using System.Windows.Forms;
 // =====================================================================
 internal sealed class ProfileList : Control
 {
-    const float RowH = 58F, RowGap = 4F, GroupGap = 8F, HeaderH = 30F;
+    const float RowH = 64F, RowGap = 4F, GroupGap = 8F, HeaderH = 30F;
     const float SuccessDuration = 1.2F, FailDuration = 0.6F, AppearDuration = 0.36F;
 
     List<ListRow> rows = new List<ListRow>();
@@ -525,16 +525,16 @@ internal sealed class ProfileList : Control
         // texts
         var x = (int)(av.Right + S(14));
         var textRight = right - sw - iconW - S(10);
-        DrawHighlighted(g, p.Name, Ui.RowNameFont, Fade(Ui.Text, appear), new Rectangle(x, rr.Y + S(10), Math.Max(10, textRight - x), S(20)));
+        DrawHighlighted(g, p.Name, Ui.RowNameFont, Fade(Ui.Text, appear), new Rectangle(x, rr.Y + S(9), Math.Max(10, textRight - x), S(20)));
         var sub = VpnProviders.RowSubLine(p);
         var sx = x;
         // provider logo before the provider name: [logo] Provider · server · user
         if (ShowLogos)
         {
-            ProviderLogo(g, VpnProviders.KindOf(p), new RectangleF(sx, rr.Y + S(29.5F), S(20), S(20)), appear);
-            sx += S(26);
+            ProviderLogo(g, VpnProviders.KindOf(p), new RectangleF(sx, rr.Y + S(31F), S(26), S(26)), appear);
+            sx += S(32);
         }
-        DrawHighlighted(g, sub, Ui.SubFont, Fade(Ui.Muted, appear), new Rectangle(sx, rr.Y + S(31), Math.Max(10, right - sw - iconW - S(10) - sx), S(18)));
+        DrawHighlighted(g, sub, Ui.SubFont, Fade(Ui.Muted, appear), new Rectangle(sx, rr.Y + S(35), Math.Max(10, right - sw - iconW - S(10) - sx), S(18)));
     }
 
     // Provider logos: the vendors' marks supplied by the user (assets\provider-*.png, embedded), clipped to a
@@ -565,27 +565,36 @@ internal sealed class ProfileList : Control
         return img;
     }
 
+    // The app's own icon (assets\app-icon.png, embedded), for the header mark.
+    internal static Image AppIconImage()
+    {
+        Image a;
+        if (appLogoCache.TryGetValue("app", out a)) return a;
+        try { using (var s = typeof(ProfileList).Assembly.GetManifestResourceStream("app-icon.png")) if (s != null) a = Image.FromStream(s); } catch { a = null; }
+        appLogoCache["app"] = a;
+        return a;
+    }
+
+    // Draws a ready-made icon image (it carries its own rounded shape and transparent corners) with fade.
+    internal static void DrawIconImage(Graphics g, Image img, RectangleF r, float appear)
+    {
+        var st = g.Save();
+        g.SmoothingMode = SmoothingMode.AntiAlias; g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        var attrs = new System.Drawing.Imaging.ImageAttributes();
+        attrs.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = Math.Max(0F, Math.Min(1F, appear)) });
+        g.DrawImage(img, Rectangle.Round(r), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attrs);
+        attrs.Dispose();
+        g.Restore(st);
+    }
+
     internal static void ProviderLogo(Graphics g, VpnKind kind, RectangleF r, float appear)
     {
         var img = LogoImage(kind);
+        if (img != null) { DrawIconImage(g, img, r, appear); return; }
         using (var path = Ui.Round(r, r.Width * 0.23F))
         {
-            if (img != null)
-            {
-                var st = g.Save();
-                g.SmoothingMode = SmoothingMode.AntiAlias; g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                g.SetClip(path, CombineMode.Intersect);
-                var attrs = new System.Drawing.Imaging.ImageAttributes();
-                attrs.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = Math.Max(0F, Math.Min(1F, appear)) });
-                g.DrawImage(img, Rectangle.Round(r), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attrs);
-                attrs.Dispose();
-                g.Restore(st);
-            }
-            else
-            {
-                using (var b = new SolidBrush(Fade(Ui.Blend(Ui.GlassPrimary, Color.White, 0.2F), appear))) g.FillPath(b, path);
-                Assets.Draw(g, VpnProviders.Asset(kind), RectangleF.Inflate(r, -r.Width * 0.17F, -r.Width * 0.17F), Fade(Ui.Text, appear), 1.35F);
-            }
+            using (var b = new SolidBrush(Fade(Ui.Blend(Ui.GlassPrimary, Color.White, 0.2F), appear))) g.FillPath(b, path);
+            Assets.Draw(g, VpnProviders.Asset(kind), RectangleF.Inflate(r, -r.Width * 0.17F, -r.Width * 0.17F), Fade(Ui.Text, appear), 1.35F);
             using (var pen = new Pen(Color.FromArgb((int)(90 * appear), Color.White), 1F)) g.DrawPath(pen, path);
         }
     }

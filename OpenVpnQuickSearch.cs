@@ -743,9 +743,14 @@ internal sealed class SearchForm : Form
         var mark = new RectangleF(S(14), S(12), S(34), S(34));
         if (e.ClipRectangle.IntersectsWith(new Rectangle(0, 0, TitleRight, HeaderHeight)))
         {
-            using (var path = Ui.Round(mark, S(11))) using (var br = new LinearGradientBrush(RectangleF.Inflate(mark, 1, 1), Ui.Blend(Ui.Accent, Ui.Highlight, 0.45F), Ui.Blend(Ui.Accent, Color.Black, 0.2F), 90F)) g.FillPath(br, path);
-            Glass.Paint(g, mark, S(11), GlassKind.Secondary, 0.9F);
-            Assets.Draw(g, "app-logo", RectangleF.Inflate(mark, -S(7), -S(7)), Color.FromArgb(240, 245, 252), 1.15F);
+            var appIcon = ProfileList.AppIconImage();
+            if (appIcon != null) ProfileList.DrawIconImage(g, appIcon, RectangleF.Inflate(mark, S(2), S(2)), 1F);
+            else
+            {
+                using (var path = Ui.Round(mark, S(11))) using (var br = new LinearGradientBrush(RectangleF.Inflate(mark, 1, 1), Ui.Blend(Ui.Accent, Ui.Highlight, 0.45F), Ui.Blend(Ui.Accent, Color.Black, 0.2F), 90F)) g.FillPath(br, path);
+                Glass.Paint(g, mark, S(11), GlassKind.Secondary, 0.9F);
+                Assets.Draw(g, "app-logo", RectangleF.Inflate(mark, -S(7), -S(7)), Color.FromArgb(240, 245, 252), 1.15F);
+            }
             GText.Draw(g, "VPN Manager", HeaderTitleFont2, new Point(S(58), S(29) - GText.Measure("VPN Manager", HeaderTitleFont2).Height / 2), Ui.Text);
         }
         var fyClip = ClientSize.Height - FooterHeight;
@@ -1053,6 +1058,7 @@ internal sealed class SearchForm : Form
         catch { }
     }
 
+    bool fortiPromptShown;   // the Yes / No question of this connect attempt was already shown to the user
     string fortiConnectedId, fortiConnectingId, fortiDisconnectingId; DateTime fortiSince, fortiConnectStart, fortiDisconnectStart; bool fortiPolling, fortiOpening;
 
     // Shows FortiClient's window (it may be closed to the tray) and presses its Disconnect button.
@@ -1111,7 +1117,7 @@ internal sealed class SearchForm : Form
         if (cred != null) CrashReporter.RememberUser(cred.Username);
         AppLog.Info("forti", "connect requested (" + (ssl ? "ssl" : "ipsec") + (cred != null ? ", saved credential" : "") + ")");
         fortiOpening = true;
-        fortiConnectingId = p.Id; fortiConnectStart = DateTime.UtcNow;
+        fortiConnectingId = p.Id; fortiConnectStart = DateTime.UtcNow; fortiPromptShown = false;
         list.BeginConnect(p.Id);
         SetStatus("FortiClient'ta \"" + p.Name + "\" seçiliyor…");
         // Open() may restart the FortiClient window (a few seconds), so it runs off the UI thread.
@@ -1228,10 +1234,26 @@ internal sealed class SearchForm : Form
         fortiPolling = true;
         ThreadPool.QueueUserWorkItem(delegate
         {
-            string name = null;
+            string name = null; var asking = false;
             try { name = FortiStore.ConnectedTunnel(); }
             catch (Exception ex) { AppLog.Limited(LogLevel.Warn, "poll:forti", "forti", "poll failed: " + ex.GetType().Name, null); }
-            UiInvoke(delegate { fortiPolling = false; OnFortiState(name); });
+            // The connect form was pressed but FortiClient (parked off-screen) may be waiting for a Yes / No answer.
+            if (name == null && fortiConnectingId != null && !fortiPromptShown && (DateTime.UtcNow - fortiConnectStart).TotalSeconds > 3)
+            {
+                try { string d; asking = FortiGui.AskingYesNo(out d); } catch { asking = false; }
+            }
+            UiInvoke(delegate
+            {
+                fortiPolling = false;
+                if (asking && fortiConnectingId != null && !fortiPromptShown)
+                {
+                    fortiPromptShown = true;
+                    AppLog.Info("forti", "FortiClient asks a yes/no question: window shown to the user");
+                    QuietWindow.Reveal(true);
+                    SetStatus("FortiClient bir soru soruyor (Yes / No) — açılan pencerede yanıtlayın");
+                }
+                OnFortiState(name);
+            });
         });
     }
 
@@ -2746,7 +2768,7 @@ internal sealed class SearchForm : Form
         if (!Demo.On && tick % 120 == 20) CheckAutoBackup();
         if (settings.ReachabilityCheck && tick % 1200 == 0) Reachability.CheckAll(profiles, true);
         if (!OnScreen && tick % 600 == 300) NativeMethods.TrimMemory(); // every 5 min while hidden / minimized
-        if (!Demo.On && settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (OnScreen || fortiConnectedId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
+        if (!Demo.On && settings.ShowForti && (fortiConnectingId != null || fortiDisconnectingId != null ? tick % 4 == 2 : tick % 20 == 10) && (OnScreen || fortiConnectedId != null || fortiConnectingId != null) && profiles.Any(FortiStore.IsForti)) PollForti();
         if (!Demo.On) { MaybePollExt(sophos); MaybePollExt(watchGuard); }
         if (!Demo.On && tick % 600 == 450 && OnScreen && ExtEnabled(sophos)) RefreshSophosAsync(); // new / removed Sophos connections, every 5 min
         if (!Demo.On) UpdateTick();

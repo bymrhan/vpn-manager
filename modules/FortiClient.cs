@@ -429,6 +429,49 @@ internal static class FortiGui
         }
     }
 
+    static readonly string[] YesNames = { "Yes", "Evet" };
+    static readonly string[] NoNames = { "No", "Hayır", "Hayir" };
+
+    // True while FortiClient's window shows a Yes / No question (for example a certificate or
+    // security warning when a profile connects for the first time). Read-only: it is never
+    // pressed here, the user has to answer it (accepting a certificate is the user's decision).
+    public static bool AskingYesNo(out string detail)
+    {
+        detail = "";
+        var hwnd = FortiStore.FindMainWindow();
+        if (hwnd == IntPtr.Zero) { detail = "FortiClient penceresi yok"; return false; }
+        Accessibility.IAccessible root;
+        var iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+        if (AccessibleObjectFromWindow(hwnd, 0xFFFFFFFC, ref iid, out root) != 0 || root == null) { detail = "erişilebilirlik nesnesi alınamadı"; return false; }
+        bool yes = false, no = false; var visited = 0;
+        FindYesNo(root, 0, ref yes, ref no, ref visited);
+        return yes && no;
+    }
+
+    static void FindYesNo(Accessibility.IAccessible node, int depth, ref bool yes, ref bool no, ref int visited)
+    {
+        if (depth > 30 || visited > 2000 || (yes && no)) return;
+        int count;
+        try { count = node.accChildCount; } catch { return; }
+        if (count <= 0) return;
+        var kids = new object[count];
+        int got;
+        if (AccessibleChildren(node, 0, count, kids, out got) != 0) return;
+        for (var i = 0; i < got; i++)
+        {
+            var kid = kids[i] as Accessibility.IAccessible;
+            if (kid == null) continue;
+            visited++;
+            if (Role(kid) == RolePushButton)
+            {
+                var n = NameOf(kid);
+                if (Array.IndexOf(YesNames, n) >= 0) yes = true;
+                else if (Array.IndexOf(NoNames, n) >= 0) no = true;
+            }
+            FindYesNo(kid, depth + 1, ref yes, ref no, ref visited);
+        }
+    }
+
     static int Role(Accessibility.IAccessible a) { try { return Convert.ToInt32(a.get_accRole(0)); } catch { return 0; } }
     static int State(Accessibility.IAccessible a) { try { return Convert.ToInt32(a.get_accState(0)); } catch { return 0; } }
     static string NameOf(Accessibility.IAccessible a) { try { return (a.get_accName(0) ?? "").Trim(); } catch { return ""; } }
