@@ -277,6 +277,21 @@ internal static class UpdateLogic
         return age < FailureBlock && age > -FailureBlock;
     }
 
+    // guncellendi.txt (written by kur.ps1 -Update on success): line 1 the new version, line 2 the UTC time
+    // (ISO 8601 'o'). True when line 1 is a plain version and line 2 a parsable time; the caller checks the age.
+    public static bool ParseUpdatedMarker(string text, out string version)
+    {
+        version = null;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var lines = text.Replace("\r", "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 2) return false;
+        var v = NormalizeTag(lines[0].Trim());
+        DateTime when;
+        if (v == null || !DateTime.TryParse(lines[1].Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out when)) return false;
+        version = v;
+        return true;
+    }
+
     // First lines of the release notes for the notice (markdown markers removed).
     public static string NotesPreview(string notes, int maxChars)
     {
@@ -560,6 +575,30 @@ internal static class UpdateClient
     public static string ReadFailureMarker(string installDir)
     {
         try { var f = Path.Combine(installDir, UpdateLogic.FailureMarkerName); return File.Exists(f) ? File.ReadAllText(f) : null; }
+        catch { return null; }
+    }
+
+    // kur.ps1 -Update writes this file into the install dir after a successful update (see ParseUpdatedMarker).
+    public const string UpdatedMarkerName = "guncellendi.txt";
+
+    // Reads and deletes the success marker: the new version when it is valid, matches the running version
+    // and is less than 24 h old; otherwise null (a stale or foreign-version marker is deleted silently).
+    public static string TakeUpdatedMarker(string installDir)
+    {
+        try
+        {
+            var f = Path.Combine(installDir, UpdatedMarkerName);
+            if (!File.Exists(f)) return null;
+            var text = File.ReadAllText(f);
+            TryDeleteFile(f);
+            string version;
+            if (!UpdateLogic.ParseUpdatedMarker(text, out version)) return null;
+            var lines = text.Replace("\r", "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            var when = DateTime.Parse(lines[1].Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+            var age = DateTime.UtcNow - when;
+            if (age >= TimeSpan.FromHours(24) || age <= -TimeSpan.FromHours(24)) return null;
+            return UpdateLogic.CompareVersions(version, UpdateLogic.CurrentVersion) == 0 ? version : null;
+        }
         catch { return null; }
     }
 

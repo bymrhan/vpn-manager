@@ -82,6 +82,25 @@ exit CODE
     Check (($rec -join '|') -eq ("Update=True|InstallDir=$inst|WaitPid=0|Background=True|Version=2.1.0")) 'fake kur.ps1 got -Update -Background -InstallDir -Version, no -WaitPid'
     Check ([IO.File]::ReadAllText($exe) -eq 'dummy') 'dummy exe untouched'
 
+# real paket\kur.ps1 -Update success path: writes guncellendi.txt (version, UTC time), clears the failure marker
+$pkgReal = Join-Path $work 'paket gercek'; $instReal = Join-Path $work 'Kurulum [y]\OpenVPN Hizli Arama'
+New-Item -ItemType Directory -Force -Path (Join-Path $pkgReal 'uygulama'), $instReal | Out-Null
+Copy-Item -LiteralPath (Join-Path $root 'paket\kur.ps1') -Destination $pkgReal
+[IO.File]::WriteAllText((Join-Path $pkgReal 'uygulama\OpenVPN-Hizli-Arama.exe'), 'new')
+[IO.File]::WriteAllText((Join-Path $instReal 'OpenVPN-Hizli-Arama.exe'), 'old')   # the restart of this non-exe fails harmlessly
+[IO.File]::WriteAllText((Join-Path $instReal 'guncelleme-basarisiz.txt'), "2.1.7`r`n2026-01-01T00:00:00Z`r`n")
+$null = Invoke-VpnmKur @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $pkgReal 'kur.ps1'), '-Update', '-Background', '-InstallDir', $instReal, '-Version', '2.1.7')
+$done = Join-Path $instReal 'guncellendi.txt'
+Check ([IO.File]::Exists($done)) 'successful -Update writes guncellendi.txt'
+if ([IO.File]::Exists($done)) {
+    $dl = [IO.File]::ReadAllLines($done)
+    Check ($dl.Count -ge 2 -and $dl[0] -eq '2.1.7') 'guncellendi.txt line 1 is the version'
+    $when = [datetime]::MinValue
+    Check ($dl.Count -ge 2 -and [datetime]::TryParse($dl[1], [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$when) -and $when.Kind -eq 'Utc' -and ([datetime]::UtcNow - $when).TotalMinutes -lt 5) 'guncellendi.txt line 2 is a recent UTC ISO time'
+}
+Check (-not [IO.File]::Exists((Join-Path $instReal 'guncelleme-basarisiz.txt'))) 'success removes the failure marker'
+Check ([IO.File]::ReadAllText((Join-Path $instReal 'OpenVPN-Hizli-Arama.exe')) -eq 'new') 'real kur.ps1 -Update replaced the exe'
+
     # process selection: exact path only, never by name alone
     $procs = @(
         [pscustomobject]@{ ProcessId = 1; ExecutablePath = $exe },

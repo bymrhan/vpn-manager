@@ -583,6 +583,7 @@ internal sealed class SearchForm : Form
         CrashReporter.AutoConsent = () => settings.CrashAutoConsent;
         CrashReporter.NeverAsk = delegate { UiInvoke(delegate { settings.CrashPrompt = "never"; SaveSettings(); }); };
         Shown += delegate { BeginInvoke(new Action(OfferCrashWhenOnScreen)); };
+        Shown += delegate { BeginInvoke(new Action(ReportUpdated)); };
 
         ReloadProfiles();
         if (Demo.On) DemoConnect(Demo.ConnectedName); else monitor.Poll();
@@ -598,6 +599,8 @@ internal sealed class SearchForm : Form
         var startMinimized = PresenceMode.StartsMinimized(presence, backgroundMode, lastFound);
         allowVisible = !backgroundMode || lastFound || startMinimized;
         noActivate = backgroundMode;
+        // A hidden --background start (after an auto update) never raises Shown: report once the handle exists.
+        if (!allowVisible) HandleCreated += delegate { BeginInvoke(new Action(ReportUpdated)); };
         PlaceWindow();
 
         var handle = Handle; // create handle now so hotkey and activation work while hidden
@@ -1894,6 +1897,20 @@ internal sealed class SearchForm : Form
     bool updateUserAsked;               // "Şimdi güncelle": install once nothing is in flight, restart in the foreground
     string updateBadVersion;            // a version whose download / verification failed: not retried this run
     UpdateNotice updateNotice;
+
+    bool updatedReported;
+    // After kur.ps1 -Update succeeded: guncellendi.txt names the new version. Read once (the file is deleted),
+    // installed copy only; the toast is only a status text, harmless while the window is hidden in the tray.
+    void ReportUpdated()
+    {
+        if (updatedReported || exiting) return;
+        updatedReported = true;
+        if (!IsInstalledCopy) return;
+        var v = UpdateClient.TakeUpdatedMarker(UpdateLogic.InstallDir);
+        if (v == null) return;
+        AppLog.Info("update", "updated to " + v);
+        SetStatus("Sürüm " + v + "'e güncellendi");
+    }
 
     bool IsInstalledCopy { get { return UpdateLogic.IsInstalledCopy(Application.ExecutablePath, UpdateLogic.InstallDir); } }
 

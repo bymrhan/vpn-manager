@@ -83,6 +83,7 @@ static class Tests
         Run("Tema: Derin Mavi paleti", OceanPalette);
         Run("Ayarlar: tema kaydı ve eski dosyalar", ThemeSettings);
         Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
+        Run("Güncelleme: başarı işareti", UpdateUpdatedMarker);
         Run("Güncelleme: zip slip", UpdateZipSlip);
         Run("Güncelleme aşama metni", UpdateStageText);
         Run("Güncelleme bekleme nedeni", UpdateWaitReason);
@@ -1062,6 +1063,38 @@ static class Tests
             Check(UpdateClient.ReadFailureMarker(dir) == null, "kurulum klasöründe işaret yok");
             File.WriteAllText(Path.Combine(dir, UpdateLogic.FailureMarkerName), marker("2.1.0", now));
             Check(UpdateLogic.FailureMarkerBlocks(UpdateClient.ReadFailureMarker(dir), "2.1.0", now.AddHours(1)), "kur.ps1'in yazdığı işaret okunur");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void UpdateUpdatedMarker()
+    {
+        string v;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        Check(UpdateLogic.ParseUpdatedMarker("2.1.7\n2026-11-26T10:00:00Z", out v) && v == "2.1.7", "işaret: sürüm okunur");
+        Check(UpdateLogic.ParseUpdatedMarker("v2.1.7\r\n2026-11-26T10:00:00.1234567Z\r\n", out v) && v == "2.1.7", "işaret: v öneki, 'o' biçimi");
+        Check(!UpdateLogic.ParseUpdatedMarker("abc", out v) && v == null, "işaret: bozuk metin");
+        Check(!UpdateLogic.ParseUpdatedMarker("", out v) && !UpdateLogic.ParseUpdatedMarker(null, out v), "işaret: boş");
+        Check(!UpdateLogic.ParseUpdatedMarker("2.1.7", out v), "işaret: zaman yok");
+        Check(!UpdateLogic.ParseUpdatedMarker("2.1.7\r\nbozuk", out v), "işaret: bozuk zaman");
+        Check(UpdateClient.UpdatedMarkerName == "guncellendi.txt", "işaret dosya adı");
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-updated-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var f = Path.Combine(dir, UpdateClient.UpdatedMarkerName);
+            var now = DateTime.UtcNow;
+            var cur = UpdateLogic.CurrentVersion;
+            Check(UpdateClient.TakeUpdatedMarker(dir) == null, "işaret yok: null");
+            File.WriteAllText(f, cur + "\r\n" + now.ToString("o", inv) + "\r\n");
+            Check(UpdateClient.TakeUpdatedMarker(dir) == cur, "işaret bir kez okunur");
+            Check(!File.Exists(f) && UpdateClient.TakeUpdatedMarker(dir) == null, "işaret silindi, ikinci okuma null");
+            File.WriteAllText(f, cur + "\r\n" + now.AddHours(-30).ToString("o", inv) + "\r\n");
+            Check(UpdateClient.TakeUpdatedMarker(dir) == null && !File.Exists(f), "24 saatten eski işaret: null ve silinir");
+            File.WriteAllText(f, "99.0.0\r\n" + now.ToString("o", inv) + "\r\n");
+            Check(UpdateClient.TakeUpdatedMarker(dir) == null && !File.Exists(f), "başka sürümün işareti sessizce silinir");
+            File.WriteAllText(f, "çöp");
+            Check(UpdateClient.TakeUpdatedMarker(dir) == null && !File.Exists(f), "bozuk işaret silinir");
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
