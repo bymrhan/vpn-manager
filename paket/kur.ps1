@@ -22,7 +22,8 @@ if ($Update) {
     # back and files new in this version are removed, so the old exe stays.
     # Once the app has exited, the finally block always restarts it, whatever failed.
     # A failed update leaves guncelleme-basarisiz.txt (version + UTC time): the app then does not
-    # install that version automatically again for 24 h (no update / restart loop). Success deletes it.
+    # install that version automatically again for 24 h (no update / restart loop). Success deletes it
+    # and writes guncellendi.txt (version + UTC time) for the app's "updated to X" message.
     # Paths go through -LiteralPath / .NET APIs: a user profile path may contain [ ].
     $dst = if ($InstallDir) { $InstallDir.TrimEnd('\') } else { [IO.Path]::Combine($env:LOCALAPPDATA, 'Programs\OpenVPN Hizli Arama') }
     $exe = [IO.Path]::Combine($dst, 'OpenVPN-Hizli-Arama.exe')
@@ -86,7 +87,11 @@ if ($Update) {
     catch { Log ('guncelleme basarisiz: ' + $_.Exception.Message) }
     finally {
         try {
-            if ($ok) { if ([IO.File]::Exists($marker)) { [IO.File]::Delete($marker) } }
+            if ($ok) {
+                if ([IO.File]::Exists($marker)) { [IO.File]::Delete($marker) }
+                # success marker for the app's "updated" message (best effort: never fails the update)
+                try { [IO.File]::WriteAllText([IO.Path]::Combine($dst, 'guncellendi.txt'), $Version + "`r`n" + (Get-Date).ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture) + "`r`n") } catch { Log ('guncellendi.txt yazilamadi: ' + $_.Exception.Message) }
+            }
             else { [IO.File]::WriteAllText($marker, $Version + "`r`n" + (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) + "`r`n") }
         } catch { Log ('isaret dosyasi yazilamadi: ' + $_.Exception.Message) }
         try {

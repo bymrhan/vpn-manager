@@ -83,7 +83,11 @@ static class Tests
         Run("Tema: Derin Mavi paleti", OceanPalette);
         Run("Ayarlar: tema kaydı ve eski dosyalar", ThemeSettings);
         Run("Güncelleme: başarısızlık işareti", UpdateFailureMarker);
+        Run("Güncelleme: başarı işareti", UpdateUpdatedMarker);
         Run("Güncelleme: zip slip", UpdateZipSlip);
+        Run("Güncelleme aşama metni", UpdateStageText);
+        Run("Güncelleme bekleme nedeni", UpdateWaitReason);
+        Run("Güncelleme: akışlı kopyalama", UpdateCopyWithProgress);
         Run("OpenVPN penceresi geri getirme", OpenVpnWindowRestore);
         Run("Tanılama: temizleyici sahte sırları siler", SanitizerRemovesSeeds);
         Run("Tanılama: temizleyici idempotent ve kararlı", SanitizerIdempotentAndStable);
@@ -926,7 +930,7 @@ static class Tests
             Check(pkg == null && err != null && !Directory.Exists(Path.Combine(dir, "paket")), "özet yok: güncelleme durur");
 
             string dl;
-            Check(UpdateClient.Download(new ReleaseInfo { Tag = "v9.9.9", Version = "9.9.9", ZipUrl = "https://mirror.example/a.zip", ShaUrl = "https://mirror.example/a.zip.sha256" }, out dl) == null && dl != null, "yabancı adresten indirme yapılmaz");
+            Check(UpdateClient.Download(new ReleaseInfo { Tag = "v9.9.9", Version = "9.9.9", ZipUrl = "https://mirror.example/a.zip", ShaUrl = "https://mirror.example/a.zip.sha256" }, null, () => false, out dl) == null && dl != null, "yabancı adresten indirme yapılmaz");
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
@@ -1063,6 +1067,82 @@ static class Tests
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
+    static void UpdateUpdatedMarker()
+    {
+        string v;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        Check(UpdateLogic.ParseUpdatedMarker("2.1.7\n2026-11-26T10:00:00Z", out v) && v == "2.1.7", "işaret: sürüm okunur");
+        Check(UpdateLogic.ParseUpdatedMarker("v2.1.7\r\n2026-11-26T10:00:00.1234567Z\r\n", out v) && v == "2.1.7", "işaret: v öneki, 'o' biçimi");
+        Check(!UpdateLogic.ParseUpdatedMarker("abc", out v) && v == null, "işaret: bozuk metin");
+        Check(!UpdateLogic.ParseUpdatedMarker("", out v) && !UpdateLogic.ParseUpdatedMarker(null, out v), "işaret: boş");
+        Check(!UpdateLogic.ParseUpdatedMarker("2.1.7", out v), "işaret: zaman yok");
+        Check(!UpdateLogic.ParseUpdatedMarker("2.1.7\r\nbozuk", out v), "işaret: bozuk zaman");
+        Check(UpdateClient.UpdatedMarkerName == "guncellendi.txt", "işaret dosya adı");
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-updated-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var f = Path.Combine(dir, UpdateClient.UpdatedMarkerName);
+            var now = DateTime.UtcNow;
+            var cur = UpdateLogic.CurrentVersion;
+            Check(UpdateClient.TakeUpdatedMarker(dir) == null, "işaret yok: null");
+            File.WriteAllText(f, cur + "\r\n" + now.ToString("o", inv) + "\r\n");
+            Check(UpdateClient.TakeUpdatedMarker(dir) == cur, "işaret bir kez okunur");
+            Check(!File.Exists(f) && UpdateClient.TakeUpdatedMarker(dir) == null, "işaret silindi, ikinci okuma null");
+            File.WriteAllText(f, cur + "\r\n" + now.AddHours(-30).ToString("o", inv) + "\r\n");
+            Check(UpdateClient.TakeUpdatedMarker(dir) == null && !File.Exists(f), "24 saatten eski işaret: null ve silinir");
+            File.WriteAllText(f, "99.0.0\r\n" + now.ToString("o", inv) + "\r\n");
+            Check(UpdateClient.TakeUpdatedMarker(dir) == null && !File.Exists(f), "başka sürümün işareti sessizce silinir");
+            File.WriteAllText(f, "çöp");
+            Check(UpdateClient.TakeUpdatedMarker(dir) == null && !File.Exists(f), "bozuk işaret silinir");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void UpdateStageText()
+    {
+        Check(UpdateLogic.FormatBytes(512) == "512 B", "512 B");
+        Check(UpdateLogic.FormatBytes(4404019) == "4,2 MB", "4,2 MB");
+        Check(UpdateLogic.FormatBytes(0) == "0 B", "0 B");
+        Check(UpdateLogic.Percent(50, 200) == 25, "yüzde 25");
+        Check(UpdateLogic.Percent(5, 0) == -1, "toplam yok: -1");
+        Check(UpdateLogic.Percent(300, 200) == 100, "yüzde 100 ile sınırlı");
+        Check(UpdateLogic.StageText(UpdateStage.Downloading, 4404019, 9437184, "2.1.7") == "Sürüm 2.1.7 indiriliyor · 4,2 / 9,0 MB · %47", "indirme metni");
+        Check(UpdateLogic.StageText(UpdateStage.Downloading, 1000, 0, "2.1.7") == "Sürüm 2.1.7 indiriliyor · 1000 B", "toplam yok: yüzde yok");
+        Check(UpdateLogic.StageText(UpdateStage.Verifying, 0, 0, "2.1.7") == "Doğrulanıyor…", "doğrulama metni");
+        Check(UpdateLogic.StageText(UpdateStage.Preparing, 0, 0, "2.1.7") == "Paket hazırlanıyor…", "hazırlama metni");
+        Check(UpdateLogic.StageText(UpdateStage.Restarting, 0, 0, "2.1.7") == "Yeniden başlatılıyor…", "yeniden başlatma metni");
+    }
+
+    static void UpdateWaitReason()
+    {
+        Check(UpdateLogic.WaitReason(false, false) == null, "ikisi de yok: null");
+        Check(UpdateLogic.WaitReason(true, false) == "Bağlantı işlemi bitince kurulacak", "meşgul");
+        Check(UpdateLogic.WaitReason(false, true) == "Açık pencereler kapanınca kurulacak", "pencere açık");
+        Check(UpdateLogic.WaitReason(true, true) == "Bağlantı işlemi bitince kurulacak", "meşgul önceliklidir");
+    }
+
+    static void UpdateCopyWithProgress()
+    {
+        var data = new byte[200000];
+        for (int i = 0; i < data.Length; i++) data[i] = (byte)i;
+        var seen = new List<long>();
+        var dst = new MemoryStream();
+        bool ok = UpdateClient.CopyWithProgress(new MemoryStream(data), dst, 1000000, delegate(long n) { seen.Add(n); }, () => false);
+        Check(ok && dst.Length == 200000, "tamamı kopyalanır");
+        Check(seen.Count > 1 && seen[seen.Count - 1] == 200000, "son ilerleme toplam bayt");
+        bool mono = true; for (int i = 1; i < seen.Count; i++) if (seen[i] < seen[i - 1]) mono = false;
+        Check(mono, "ilerleme azalmaz");
+
+        var dst2 = new MemoryStream(); int calls = 0;
+        ok = UpdateClient.CopyWithProgress(new MemoryStream(data), dst2, 1000000, null, () => ++calls > 1);
+        Check(!ok && dst2.Length < 200000, "iptal: false döner, eksik yazılır");
+
+        bool threw = false;
+        try { UpdateClient.CopyWithProgress(new MemoryStream(data), new MemoryStream(), 100000, null, null); }
+        catch (InvalidOperationException) { threw = true; }
+        Check(threw, "sınır aşılınca InvalidOperationException");
+    }
     static void UpdateZipSlip()
     {
         var root = Path.Combine(Path.GetTempPath(), "ovpnqs-zipslip-" + Guid.NewGuid().ToString("N"));

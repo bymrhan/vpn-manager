@@ -34,8 +34,59 @@ internal sealed class ReleaseInfo
     public bool CanInstall { get { return ZipUrl != null && ShaUrl != null; } }
 }
 
+internal enum UpdateStage { Offer, Downloading, Verifying, Preparing, Waiting, Restarting, Failed }
+
 internal static class UpdateLogic
 {
+    // "512 B" below 1 MB, else "4,2 MB" (tr-TR decimal comma, 1 decimal, MB = 1048576).
+    public static string FormatBytes(long bytes)
+    {
+        if (bytes < 0) bytes = 0;
+        var tr = CultureInfo.GetCultureInfo("tr-TR");
+        if (bytes < 1048576) return bytes.ToString(tr) + " B";
+        return (bytes / 1048576.0).ToString("0.0", tr) + " MB";
+    }
+
+    // 0..100, or -1 when the total is unknown.
+    public static int Percent(long done, long total)
+    {
+        if (total <= 0) return -1;
+        if (done < 0) done = 0;
+        if (done >= total) return 100;
+        return (int)Math.Round(done * 100.0 / total, MidpointRounding.AwayFromZero);
+    }
+
+    // One-line status text for the update progress UI.
+    public static string StageText(UpdateStage stage, long done, long total, string version)
+    {
+        switch (stage)
+        {
+            case UpdateStage.Offer: return "Sürüm " + version + " hazır";
+            case UpdateStage.Downloading:
+                var head = "Sürüm " + version + " indiriliyor · ";
+                if (total <= 0) return head + FormatBytes(done);
+                string size;
+                if (total >= 1048576)
+                    size = FormatBytes(done).Replace(" MB", "") + " / " + FormatBytes(total);
+                else
+                    size = FormatBytes(done) + " / " + FormatBytes(total);
+                return head + size + " · %" + Percent(done, total).ToString(CultureInfo.InvariantCulture);
+            case UpdateStage.Verifying: return "Doğrulanıyor…";
+            case UpdateStage.Preparing: return "Paket hazırlanıyor…";
+            case UpdateStage.Waiting: return "Uygulamanın kapanması bekleniyor…";
+            case UpdateStage.Restarting: return "Yeniden başlatılıyor…";
+            default: return "Güncelleme başarısız";
+        }
+    }
+
+    // Why a requested install has to wait (busy wins over an open window); null when it can go ahead.
+    public static string WaitReason(bool busy, bool dialogOpen)
+    {
+        if (busy) return "Bağlantı işlemi bitince kurulacak";
+        if (dialogOpen) return "Açık pencereler kapanınca kurulacak";
+        return null;
+    }
+
     public const string Repo = "bymrhan/vpn-manager";
     public const string ApiUrl = "https://api.github.com/repos/" + Repo + "/releases/latest";
     public const string ReleasesPage = "https://github.com/" + Repo + "/releases";
@@ -226,6 +277,21 @@ internal static class UpdateLogic
         return age < FailureBlock && age > -FailureBlock;
     }
 
+    // guncellendi.txt (written by kur.ps1 -Update on success): line 1 the new version, line 2 the UTC time
+    // (ISO 8601 'o'). True when line 1 is a plain version and line 2 a parsable time; the caller checks the age.
+    public static bool ParseUpdatedMarker(string text, out string version)
+    {
+        version = null;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var lines = text.Replace("\r", "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 2) return false;
+        var v = NormalizeTag(lines[0].Trim());
+        DateTime when;
+        if (v == null || !DateTime.TryParse(lines[1].Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out when)) return false;
+        version = v;
+        return true;
+    }
+
     // First lines of the release notes for the notice (markdown markers removed).
     public static string NotesPreview(string notes, int maxChars)
     {
@@ -291,20 +357,33 @@ internal static class UpdateClient
         catch (Exception ex) { error = Describe(ex); return null; }
     }
 
+    // Pause between zip download attempts (3 attempts in total). Kept as a field so the schedule is easy to read.
+    static readonly int[] RetryWaitsMs = { 1000, 3000 };
+    public const string CancelledText = "iptal edildi";
+
     // Downloads the package and its .sha256, verifies and extracts it. Never call on the UI thread.
-    // Returns the extracted package folder (contains kur.ps1), or null + error. Nothing runs here.
-    public static string Download(ReleaseInfo r, out string error)
+    // report(stage, done, total) and cancelled() may be null; report runs on the calling (worker) thread.
+    // Returns the extracted package folder (contains kur.ps1), or null + error (CancelledText when cancelled).
+    // Nothing runs here.
+    public static string Download(ReleaseInfo r, Action<UpdateStage, long, long> report, Func<bool> cancelled, out string error)
     {
         error = null;
         if (r == null || !r.CanInstall) { error = "sürümde paket veya SHA-256 dosyası yok"; return null; }
         if (!UpdateLogic.IsAllowedAssetUrl(r.ZipUrl, r.Tag, UpdateLogic.ZipAsset) || !UpdateLogic.IsAllowedAssetUrl(r.ShaUrl, r.Tag, UpdateLogic.ShaAsset)) { error = "beklenmeyen indirme adresi"; return null; }
+        if (report == null) report = delegate { };
+        if (cancelled == null) cancelled = () => false;
         var work = Path.Combine(WorkRoot, r.Version + "-" + Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(work);
+            report(UpdateStage.Downloading, 0, 0);
             var shaText = Encoding.ASCII.GetString(Get(r.ShaUrl, MaxShaBytes, null));
+            if (cancelled()) { TryDelete(work); error = CancelledText; return null; }
             var zip = Path.Combine(work, UpdateLogic.ZipAsset);
-            File.WriteAllBytes(zip, Get(r.ZipUrl, MaxZipBytes, null));
+            if (!DownloadZip(r.ZipUrl, zip, report, cancelled)) { TryDelete(work); error = CancelledText; return null; }
+            report(UpdateStage.Verifying, 0, 0);
+            if (cancelled()) { TryDelete(work); error = CancelledText; return null; }
+            report(UpdateStage.Preparing, 0, 0);
             var pkg = VerifyAndExtract(zip, shaText, work, out error);
             if (pkg == null) TryDelete(work);
             return pkg;
@@ -312,6 +391,63 @@ internal static class UpdateClient
         catch (Exception ex) { TryDelete(work); error = Describe(ex); return null; }
     }
 
+    // Streams the zip to disk. WebException / IOException are retried (each attempt restarts the file),
+    // except an HTTP 4xx answer. Returns false when cancelled; throws when all attempts failed.
+    static bool DownloadZip(string url, string zipPath, Action<UpdateStage, long, long> report, Func<bool> cancelled)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            if (cancelled()) return false;
+            try
+            {
+                using (var resp = Open(url, null))
+                {
+                    if (resp.ContentLength > MaxZipBytes) throw new InvalidOperationException("dosya beklenenden büyük");
+                    long total = resp.ContentLength > 0 ? resp.ContentLength : 0;
+                    report(UpdateStage.Downloading, 0, total);
+                    using (var s = resp.GetResponseStream()) using (var fs = File.Create(zipPath))
+                        return CopyWithProgress(s, fs, MaxZipBytes, delegate(long done) { report(UpdateStage.Downloading, done, total); }, cancelled);
+                }
+            }
+            catch (Exception ex)
+            {
+                var web = ex as WebException;
+                if (web == null && !(ex is IOException)) throw;
+                var http = web != null ? web.Response as HttpWebResponse : null;
+                if (http != null && (int)http.StatusCode >= 400 && (int)http.StatusCode < 500) throw;
+                if (attempt >= RetryWaitsMs.Length) throw;
+                if (!WaitCancellable(RetryWaitsMs[attempt], cancelled)) return false;
+            }
+        }
+    }
+
+    // Sleeps in short slices so a cancel is noticed quickly. False when cancelled.
+    static bool WaitCancellable(int ms, Func<bool> cancelled)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < ms)
+        {
+            if (cancelled()) return false;
+            System.Threading.Thread.Sleep(50);
+        }
+        return !cancelled();
+    }
+
+    // Copies source to target in 64 KB chunks. progress gets the cumulative byte count after each chunk
+    // (may be null). Returns false when cancelled (checked between chunks); throws past maxBytes.
+    public static bool CopyWithProgress(Stream source, Stream target, long maxBytes, Action<long> progress, Func<bool> cancelled)
+    {
+        var buf = new byte[64 * 1024]; long done = 0; int n;
+        while ((n = source.Read(buf, 0, buf.Length)) > 0)
+        {
+            done += n;
+            if (done > maxBytes) throw new InvalidOperationException("paket çok büyük");
+            target.Write(buf, 0, n);
+            if (progress != null) progress(done);
+            if (cancelled != null && cancelled()) return false;
+        }
+        return true;
+    }
     // SHA-256 of the zip must equal the hash in shaText (mandatory). Only then is the zip extracted
     // to <workDir>\paket. A mismatch or a missing hash deletes the zip and extracts nothing.
     public static string VerifyAndExtract(string zipPath, string shaText, string workDir, out string error)
@@ -386,7 +522,8 @@ internal static class UpdateClient
         return Encoding.UTF8.GetString(Get(url, MaxJsonBytes, "application/vnd.github+json"));
     }
 
-    static byte[] Get(string url, long maxBytes, string accept)
+    // Opens the GET response (caller disposes). HTTPS only, including the final redirect hop.
+    static HttpWebResponse Open(string url, string accept)
     {
         if (!url.StartsWith("https://", StringComparison.Ordinal)) throw new InvalidOperationException("yalnızca HTTPS");
         ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
@@ -395,10 +532,16 @@ internal static class UpdateClient
         req.UserAgent = UpdateLogic.UserAgent; req.AllowAutoRedirect = true; req.MaximumAutomaticRedirections = 5;
         req.UseDefaultCredentials = false; req.CookieContainer = null;
         if (accept != null) req.Accept = accept;
-        using (var resp = (HttpWebResponse)req.GetResponse())
+        var resp = (HttpWebResponse)req.GetResponse();
+        // GitHub serves assets from its download host; the final hop must still be HTTPS.
+        if (resp.ResponseUri == null || resp.ResponseUri.Scheme != Uri.UriSchemeHttps) { resp.Close(); throw new InvalidOperationException("yalnızca HTTPS"); }
+        return resp;
+    }
+
+    static byte[] Get(string url, long maxBytes, string accept)
+    {
+        using (var resp = Open(url, accept))
         {
-            // GitHub serves assets from its download host; the final hop must still be HTTPS.
-            if (resp.ResponseUri == null || resp.ResponseUri.Scheme != Uri.UriSchemeHttps) throw new InvalidOperationException("yalnızca HTTPS");
             if (resp.ContentLength > maxBytes) throw new InvalidOperationException("dosya beklenenden büyük");
             using (var s = resp.GetResponseStream()) using (var ms = new MemoryStream())
             {
@@ -412,7 +555,6 @@ internal static class UpdateClient
             }
         }
     }
-
     static string Describe(Exception ex)
     {
         var w = ex as WebException;
@@ -436,6 +578,30 @@ internal static class UpdateClient
         catch { return null; }
     }
 
+    // kur.ps1 -Update writes this file into the install dir after a successful update (see ParseUpdatedMarker).
+    public const string UpdatedMarkerName = "guncellendi.txt";
+
+    // Reads and deletes the success marker: the new version when it is valid, matches the running version
+    // and is less than 24 h old; otherwise null (a stale or foreign-version marker is deleted silently).
+    public static string TakeUpdatedMarker(string installDir)
+    {
+        try
+        {
+            var f = Path.Combine(installDir, UpdatedMarkerName);
+            if (!File.Exists(f)) return null;
+            var text = File.ReadAllText(f);
+            TryDeleteFile(f);
+            string version;
+            if (!UpdateLogic.ParseUpdatedMarker(text, out version)) return null;
+            var lines = text.Replace("\r", "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            var when = DateTime.Parse(lines[1].Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+            var age = DateTime.UtcNow - when;
+            if (age >= TimeSpan.FromHours(24) || age <= -TimeSpan.FromHours(24)) return null;
+            return UpdateLogic.CompareVersions(version, UpdateLogic.CurrentVersion) == 0 ? version : null;
+        }
+        catch { return null; }
+    }
+
     // Opens a page of this repository's releases in the browser (other addresses are ignored).
     public static void OpenReleasePage(string url)
     {
@@ -445,55 +611,199 @@ internal static class UpdateClient
 }
 
 // "ask" mode notice: a small glass card in the corner of the screen, above other windows, that does
-// not take focus. Same material as GlassDialog. Buttons: update now / later / skip this version,
-// plus the release notes.
+// not take focus. Same material as GlassDialog. Offer state: update now / later / skip this version,
+// plus the release notes. After "update now" the card stays open and shows progress (download,
+// verify, prepare, restart), a waiting reason, or a failure with Retry / open release page.
 internal sealed class UpdateNotice : Form
 {
     static int S(float v) { return Ui.S(v); }
     const int WS_EX_TOOLWINDOW = 0x80;
-    readonly string caption, body;
-    readonly Rectangle textRect;
-    public event Action UpdateNow, Later, Skip, Notes;
+    string caption, body, stageLine;
+    Rectangle textRect, barRect;
+    UpdateStage stage = UpdateStage.Offer;
+    long done, total;
+    readonly string version, offerCaption, offerBody;
+    readonly bool canInstall;
+    readonly SButton primary, later, skip, notesBtn, cancelBtn, retryBtn, openBtn, closeBtn, waitLaterBtn;
+    Timer anim;
+    public event Action UpdateNow, Later, Skip, Notes, Cancel, Retry;
 
     // installedCopy: running from the install dir. Otherwise, or without the package / .sha256 asset,
     // the primary button opens the release page instead of installing.
     public UpdateNotice(ReleaseInfo r, string current, bool installedCopy)
     {
-        var canInstall = installedCopy && r.CanInstall;
+        canInstall = installedCopy && r.CanInstall;
+        version = r.Version;
         AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.Manual; DoubleBuffered = true;
         BackColor = Ui.GlassPrimary; // the buttons paint their parent's color behind them: same as the glass card
         ForeColor = Ui.Text; Font = SFonts.Nav;
         Text = "Güncelleme";
-        caption = "Sürüm " + r.Version + " hazır";
+        offerCaption = "Sürüm " + r.Version + " hazır";
         var notes = UpdateLogic.NotesPreview(r.Notes, 160);
-        body = (canInstall
+        offerBody = (canInstall
             ? "Yüklü sürüm " + current + ". Şimdi güncelleyebilir ya da sonraya bırakabilirsiniz."
             : installedCopy ? "Yüklü sürüm " + current + ". Bu sürüm uygulama içinden kurulamıyor; sürüm sayfasından indirin."
             : "Yüklü sürüm " + current + ". Bu kopya kurulum klasöründe değil; yeni sürümü sürüm sayfasından indirin.")
             + (notes.Length > 0 ? "\n" + notes : "");
-        var width = S(440); var textW = width - S(96);
-        var textH = Math.Min(S(120), Math.Max(S(20), TextRenderer.MeasureText(body, SFonts.RowDesc, new Size(textW, 1000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height));
-        textRect = new Rectangle(S(76), S(56), textW, textH);
-        Size = new Size(width, textRect.Bottom + S(104));
 
-        var primary = new SButton(canInstall ? "Şimdi güncelle" : "Sürüm sayfasını aç", SButtonKind.Primary);
-        var later = new SButton("Sonra", SButtonKind.Secondary);
-        var skip = new SButton("Bu sürümü atla", SButtonKind.Ghost);
-        var notesBtn = new SButton("Sürüm notları", SButtonKind.Ghost, Glyph.Open);
+        primary = new SButton(canInstall ? "Şimdi güncelle" : "Sürüm sayfasını aç", SButtonKind.Primary);
+        later = new SButton("Sonra", SButtonKind.Secondary);
+        skip = new SButton("Bu sürümü atla", SButtonKind.Ghost);
+        notesBtn = new SButton("Sürüm notları", SButtonKind.Ghost, Glyph.Open);
+        cancelBtn = new SButton("İptal", SButtonKind.Secondary);
+        retryBtn = new SButton("Yeniden dene", SButtonKind.Primary);
+        openBtn = new SButton("Sürüm sayfasını aç", SButtonKind.Secondary);
+        closeBtn = new SButton("Kapat", SButtonKind.Secondary);          // Failed: dismiss the card
+        waitLaterBtn = new SButton("Sonra", SButtonKind.Secondary);      // Waiting: hide the card; the pending install still proceeds
+        primary.Click += delegate
+        {
+            if (canInstall)
+            {
+                SetStage(UpdateStage.Downloading, 0, 0, version); // working look right away; the caller drives the rest
+                if (UpdateNow != null) UpdateNow();
+            }
+            else { Close(); if (Notes != null) Notes(); }
+        };
+        later.Click += delegate { Close(); if (Later != null) Later(); };
+        skip.Click += delegate { Close(); if (Skip != null) Skip(); };
+        notesBtn.Click += delegate { if (Notes != null) Notes(); };
+        cancelBtn.Click += delegate { if (Cancel != null) Cancel(); };
+        retryBtn.Click += delegate
+        {
+            SetStage(UpdateStage.Downloading, 0, 0, version);
+            if (Retry != null) Retry();
+        };
+        openBtn.Click += delegate { if (Notes != null) Notes(); };
+        closeBtn.Click += delegate { Close(); };
+        waitLaterBtn.Click += delegate { Close(); };
+        Controls.AddRange(new Control[] { primary, later, skip, notesBtn, cancelBtn, retryBtn, openBtn, closeBtn, waitLaterBtn });
+
+        caption = offerCaption; body = offerBody;
+        ApplyLayout();
+        var area = Screen.PrimaryScreen.WorkingArea;
+        Location = new Point(area.Right - Width - S(16), area.Bottom - Height - S(16));
+    }
+
+    public void SetStage(UpdateStage newStage, long doneBytes, long totalBytes, string ver)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(ver)) ver = version;
+            if (newStage == UpdateStage.Waiting) { SetWaiting(UpdateLogic.StageText(newStage, doneBytes, totalBytes, ver)); return; }
+            if (newStage == UpdateStage.Failed) { SetFailed(UpdateLogic.StageText(newStage, doneBytes, totalBytes, ver)); return; }
+            stage = newStage; done = doneBytes; total = totalBytes;
+            if (newStage == UpdateStage.Offer) { caption = offerCaption; body = offerBody; stageLine = null; }
+            else
+            {
+                caption = "Sürüm " + ver + " güncelleniyor"; body = null;
+                stageLine = UpdateLogic.StageText(newStage, doneBytes, totalBytes, ver);
+            }
+            ApplyLayout();
+        }
+        catch { }
+    }
+
+    public void SetWaiting(string reason)
+    {
+        try
+        {
+            stage = UpdateStage.Waiting; done = 0; total = 0;
+            caption = "Güncelleme bekliyor"; body = reason ?? ""; stageLine = null;
+            ApplyLayout();
+        }
+        catch { }
+    }
+
+    public void SetFailed(string reason)
+    {
+        try
+        {
+            stage = UpdateStage.Failed; done = 0; total = 0;
+            caption = "Güncelleme başarısız"; body = reason ?? ""; stageLine = null;
+            ApplyLayout();
+        }
+        catch { }
+    }
+
+    bool HasBar { get { return stage != UpdateStage.Offer && stage != UpdateStage.Failed; } }
+    bool Determinate { get { return stage == UpdateStage.Downloading && UpdateLogic.Percent(done, total) >= 0; } }
+
+    // Resizes the card for the current state (same width, bottom edge stays put) and places the controls.
+    void ApplyLayout()
+    {
+        var width = S(440); var textW = width - S(96);
+        var bottom = Bottom;
+        var showText = body != null;
+        var textH = 0;
+        if (showText)
+            textH = Math.Min(S(120), Math.Max(S(20), TextRenderer.MeasureText(body, SFonts.RowDesc, new Size(textW, 1000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height));
+        var y = S(56);
+        if (stageLine != null) y += S(24);
+        textRect = showText ? new Rectangle(S(76), S(56), textW, textH) : Rectangle.Empty;
+        if (showText) y = textRect.Bottom;
+        var offer = stage == UpdateStage.Offer;
+        var failed = stage == UpdateStage.Failed;
+        barRect = Rectangle.Empty;
+        int h;
+        if (HasBar)
+        {
+            y += showText ? S(14) : S(8);
+            barRect = new Rectangle(S(76), y, textW, S(8));
+            y = barRect.Bottom;
+            h = (stage == UpdateStage.Downloading || stage == UpdateStage.Waiting) ? y + S(16) + cancelBtn.Height + S(22) : y + S(34);
+        }
+        else h = offer ? textRect.Bottom + S(104) : textRect.Bottom + S(24) + retryBtn.Height + S(22);
+        Size = new Size(width, h);
+        Top = bottom - Height;
+
         var by = Height - S(22) - primary.Height;
+        primary.Visible = later.Visible = skip.Visible = notesBtn.Visible = offer;
+        cancelBtn.Visible = stage == UpdateStage.Downloading;
+        waitLaterBtn.Visible = stage == UpdateStage.Waiting;
+        retryBtn.Visible = openBtn.Visible = closeBtn.Visible = failed;
         primary.Location = new Point(Width - S(22) - primary.Width, by);
         later.Location = new Point(primary.Left - S(8) - later.Width, by);
         skip.Location = new Point(S(22), by);
         notesBtn.Location = new Point(S(68), textRect.Bottom + S(6));
-        primary.Click += delegate { Close(); if (canInstall) { if (UpdateNow != null) UpdateNow(); } else if (Notes != null) Notes(); };
-        later.Click += delegate { Close(); if (Later != null) Later(); };
-        skip.Click += delegate { Close(); if (Skip != null) Skip(); };
-        notesBtn.Click += delegate { if (Notes != null) Notes(); };
-        Controls.AddRange(new Control[] { primary, later, skip, notesBtn });
+        cancelBtn.Location = new Point(Width - S(22) - cancelBtn.Width, Height - S(22) - cancelBtn.Height);
+        retryBtn.Location = new Point(Width - S(22) - retryBtn.Width, Height - S(22) - retryBtn.Height);
+        openBtn.Location = new Point(retryBtn.Left - S(8) - openBtn.Width, retryBtn.Top);
+        closeBtn.Location = new Point(openBtn.Left - S(8) - closeBtn.Width, retryBtn.Top);
+        waitLaterBtn.Location = new Point(Width - S(22) - waitLaterBtn.Width, Height - S(22) - waitLaterBtn.Height);
+        UpdateTimer();
+        Invalidate();
+    }
 
-        var area = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(area.Right - Width - S(16), area.Bottom - Height - S(16));
+    // The sliding segment needs a timer, but only while a bar without a known percent is on screen.
+    void UpdateTimer()
+    {
+        var need = HasBar && !Determinate && Visible && !IsDisposed;
+        if (need && anim == null)
+        {
+            anim = new Timer(); anim.Interval = 30;
+            anim.Tick += delegate { if (!barRect.IsEmpty) Invalidate(Rectangle.Inflate(barRect, S(2), S(2))); };
+            anim.Start();
+        }
+        else if (!need && anim != null) StopTimer();
+    }
+
+    void StopTimer()
+    {
+        if (anim == null) return;
+        try { anim.Stop(); anim.Dispose(); } catch { }
+        anim = null;
+    }
+
+    protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); UpdateTimer(); }
+    protected override void OnFormClosed(FormClosedEventArgs e) { StopTimer(); base.OnFormClosed(e); }
+    protected override void Dispose(bool disposing) { if (disposing) StopTimer(); base.Dispose(disposing); }
+
+    // Esc closes the card where closing is safe (Failed, Waiting); a running download keeps its Cancel button.
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Escape && (stage == UpdateStage.Failed || stage == UpdateStage.Waiting)) { Close(); return true; }
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
@@ -505,6 +815,29 @@ internal sealed class UpdateNotice : Form
         try { Backdrop.SetCorner(Handle, 2); var d = Themes.IsLight ? 0 : 1; NativeMethods.DwmSetWindowAttribute(Handle, 20, ref d, 4); } catch { }
     }
 
+    void PaintBar(Graphics g)
+    {
+        var track = new RectangleF(barRect.X, barRect.Y, barRect.Width, barRect.Height);
+        var r = track.Height / 2F;
+        Ui.FillRound(g, Color.FromArgb(48, Ui.Text), track, r);
+        Glass.Paint(g, track, r, GlassKind.Secondary, 1F);
+        RectangleF fill;
+        var pct = UpdateLogic.Percent(done, total);
+        if (Determinate)
+            fill = new RectangleF(track.X, track.Y, Math.Max(track.Height, track.Width * pct / 100F), track.Height);
+        else
+        {
+            var segW = track.Width * 0.3F;
+            var period = 1600;
+            var t = (Environment.TickCount & 0x7FFFFFFF) % period / (float)period;
+            fill = new RectangleF(track.X - segW + t * (track.Width + segW), track.Y, segW, track.Height);
+        }
+        var state = g.Save();
+        using (var clip = Ui.Round(track, r)) g.SetClip(clip, CombineMode.Intersect);
+        Ui.FillRound(g, Ui.Highlight, fill, r);
+        g.Restore(state);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
@@ -514,9 +847,13 @@ internal sealed class UpdateNotice : Form
         Glass.Paint(g, panel, S(14), GlassKind.Primary, 1F);
         var chip = new RectangleF(S(26), S(26), S(36), S(36));
         Glass.Paint(g, chip, S(11), GlassKind.Secondary, 1.8F);
-        Glyphs.Draw(g, Glyph.Refresh, RectangleF.Inflate(chip, -S(9), -S(9)), Ui.Highlight);
+        Assets.Draw(g, "action-update", RectangleF.Inflate(chip, -S(8), -S(8)), stage == UpdateStage.Failed ? Ui.Muted : Ui.Highlight, 1.1F); // download arrow (vector asset, sharp at any size)
         TextRenderer.DrawText(g, caption, SFonts.Big, new Point(S(76), S(26)), Ui.Text, Ui.Flags);
-        TextRenderer.DrawText(g, body, SFonts.RowDesc, textRect, Ui.Muted, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        if (stageLine != null)
+            TextRenderer.DrawText(g, stageLine, SFonts.RowDesc, new Rectangle(S(76), S(56), Width - S(96), S(22)), Ui.Muted, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        if (body != null)
+            TextRenderer.DrawText(g, body, SFonts.RowDesc, textRect, Ui.Muted, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        if (!barRect.IsEmpty) PaintBar(g);
         Glass.WindowFrame(g, ClientRectangle, S(8));
     }
 }

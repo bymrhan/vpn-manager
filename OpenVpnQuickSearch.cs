@@ -583,11 +583,13 @@ internal sealed class SearchForm : Form
         CrashReporter.AutoConsent = () => settings.CrashAutoConsent;
         CrashReporter.NeverAsk = delegate { UiInvoke(delegate { settings.CrashPrompt = "never"; SaveSettings(); }); };
         Shown += delegate { BeginInvoke(new Action(OfferCrashWhenOnScreen)); };
+        Shown += delegate { BeginInvoke(new Action(ReportUpdated)); };
 
         ReloadProfiles();
         if (Demo.On) DemoConnect(Demo.ConnectedName); else monitor.Poll();
         if (Demo.On && Demo.Query != null) Input.Text = Demo.Query;
         if (Demo.On && Demo.SettingsPage >= 0) Shown += delegate { BeginInvoke(new Action(ShowSettings)); };
+        if (Demo.On && Demo.UpdateSim) UpdateSim.Start(Demo.UpdateSimFail);   // dev only: fake update flow, never touches the real one
 
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += delegate { if (settings.Theme == "system" && IsHandleCreated && !IsDisposed) BeginInvoke(new Action(ApplyTheme)); };
         hookProc = OnWinEvent;
@@ -598,6 +600,8 @@ internal sealed class SearchForm : Form
         var startMinimized = PresenceMode.StartsMinimized(presence, backgroundMode, lastFound);
         allowVisible = !backgroundMode || lastFound || startMinimized;
         noActivate = backgroundMode;
+        // A hidden --background start (after an auto update) never raises Shown: report once the handle exists.
+        if (!allowVisible) HandleCreated += delegate { BeginInvoke(new Action(ReportUpdated)); };
         PlaceWindow();
 
         var handle = Handle; // create handle now so hotkey and activation work while hidden
@@ -1928,6 +1932,20 @@ internal sealed class SearchForm : Form
     string updateBadVersion;            // a version whose download / verification failed: not retried this run
     UpdateNotice updateNotice;
 
+    bool updatedReported;
+    // After kur.ps1 -Update succeeded: guncellendi.txt names the new version. Read once (the file is deleted),
+    // installed copy only; the toast is only a status text, harmless while the window is hidden in the tray.
+    void ReportUpdated()
+    {
+        if (updatedReported || exiting) return;
+        updatedReported = true;
+        if (!IsInstalledCopy) return;
+        var v = UpdateClient.TakeUpdatedMarker(UpdateLogic.InstallDir);
+        if (v == null) return;
+        AppLog.Info("update", "updated to " + v);
+        SetStatus("Güncelleme tamam: sürüm " + v);
+    }
+
     bool IsInstalledCopy { get { return UpdateLogic.IsInstalledCopy(Application.ExecutablePath, UpdateLogic.InstallDir); } }
 
     void UpdateTick()
@@ -1999,6 +2017,13 @@ internal sealed class SearchForm : Form
         if (updateNotice != null && !updateNotice.IsDisposed) updateNotice.Close();
         var n = new UpdateNotice(r, UpdateLogic.CurrentVersion, IsInstalledCopy);
         n.UpdateNow += delegate { StartUpdateDownload(r, true); };
+        // Idempotent: the button can be clicked repeatedly; the flag is read by the download worker.
+        n.Cancel += delegate { if (updateCancel) return; updateCancel = true; AppLog.Info("update", "download cancel requested"); };
+        n.Retry += delegate
+        {
+            if (updateBadVersion == r.Version) updateBadVersion = null;   // do not skip the version we are retrying
+            StartUpdateDownload(r, true);
+        };
         n.Skip += delegate { settings.SkippedVersion = r.Version; SaveSettings(); SetStatus("Sürüm " + r.Version + " atlandı"); };
         n.Notes += delegate { UpdateClient.OpenReleasePage(r.HtmlUrl); };
         n.FormClosed += delegate { if (updateNotice == n) updateNotice = null; n.Dispose(); };
@@ -2006,30 +2031,94 @@ internal sealed class SearchForm : Form
         n.Show();
     }
 
+    volatile bool updateCancel;     // set by the notice's Cancel button, read by the download worker
+    bool updateShowProgress;        // the notice follows this download (user asked, or joined an auto download)
+
+    void NoticeDo(Action<UpdateNotice> a)
+    {
+        try
+        {
+            var n = updateNotice;
+            if (n != null && !n.IsDisposed) a(n);
+        }
+        catch { }
+    }
+
     // userAsked: "Şimdi güncelle" (install right after verification, restart in the foreground).
-    // Otherwise (auto mode) the package waits for an idle moment and the app restarts with --background.
+    // Otherwise (auto mode) the package waits for an idle moment and the app restarts with --background,
+    // and nothing is shown: only logging.
     void StartUpdateDownload(ReleaseInfo r, bool userAsked)
     {
-        if (updateDownloading || Demo.On) return;
-        if (updatePackage != null) { if (userAsked) { updateUserAsked = true; InstallPending(); } return; }
-        updateDownloading = true;
+        if (Demo.On) return;
+        if (updateDownloading)
+        {
+            // Never a second download. An ask notice joins the running one and is fed by its reports.
+            if (userAsked)
+            {
+                updateShowProgress = true; updateUserAsked = true;
+                NoticeDo(n => n.SetStage(UpdateStage.Downloading, 0, 0, r.Version));
+            }
+            return;
+        }
+        if (updatePackage != null)
+        {
+            if (userAsked)
+            {
+                updateUserAsked = true;
+                if (updateInstalling) NoticeDo(n => n.SetStage(UpdateStage.Restarting, 0, 0, r.Version));   // an install is already starting: show the truth
+                else InstallPending();
+            }
+            return;
+        }
+        updateDownloading = true; updateCancel = false; updateShowProgress = userAsked;
         if (userAsked) SetStatus("Sürüm " + r.Version + " indiriliyor…");
+        var version = r.Version;
+        // Runs on the worker thread: marshal to the UI thread, never throw.
+        Action<UpdateStage, long, long> report = delegate(UpdateStage st, long done, long total)
+        {
+            try
+            {
+                UiInvoke(delegate
+                {
+                    try
+                    {
+                        if (!updateShowProgress) return;
+                        NoticeDo(n => n.SetStage(st, done, total, version));
+                    }
+                    catch { }
+                });
+            }
+            catch { }
+        };
         ThreadPool.QueueUserWorkItem(delegate
         {
-            string err; var pkg = UpdateClient.Download(r, out err);
+            string err = null; string pkg = null;
+            try { pkg = UpdateClient.Download(r, report, () => updateCancel, out err); }
+            catch (Exception ex) { pkg = null; err = ex.Message; CrashReporter.HandledError("update", "download", ex); }
             UiInvoke(delegate
             {
                 updateDownloading = false;
-                if (pkg == null) AppLog.Warn("update", "download / verification failed: " + LogSanitizer.StripQuoted(err));
-                else AppLog.Info("update", "package " + r.Version + " downloaded and verified");
-                if (pkg == null)
+                var show = updateShowProgress; updateShowProgress = false;
+                if (pkg != null && updateCancel) { pkg = null; err = UpdateClient.CancelledText; }   // cancelled while the last step finished
+                if (pkg == null && (updateCancel || err == UpdateClient.CancelledText))
                 {
-                    updateBadVersion = r.Version;
-                    SetStatus("Güncelleme başarısız: " + err);
-                    ReportUpdate("Güncelleme başarısız: " + err);
+                    AppLog.Info("update", "download cancelled");
+                    updateUserAsked = false;
+                    NoticeDo(n => n.SetStage(UpdateStage.Offer, 0, 0, version));   // back to the offer; no toast, version not marked bad
                     return;
                 }
-                updatePackage = pkg; updateUserAsked = userAsked;
+                if (pkg == null)
+                {
+                    AppLog.Warn("update", "download / verification failed: " + LogSanitizer.StripQuoted(err));
+                    updateBadVersion = version;
+                    updateUserAsked = false;
+                    var text = string.IsNullOrEmpty(err) ? "bilinmeyen hata" : err;
+                    if (show) { NoticeDo(n => n.SetFailed(text)); SetStatus("Güncelleme başarısız: " + text); }
+                    ReportUpdate("Güncelleme başarısız: " + text);
+                    return;
+                }
+                AppLog.Info("update", "package " + version + " downloaded and verified");
+                updatePackage = pkg; updateUserAsked = show;
                 InstallPending();
             });
         });
@@ -2061,7 +2150,14 @@ internal sealed class SearchForm : Form
         if (updatePackage == null || exiting || updateInstalling) return;
         if (updateUserAsked)
         {
-            if (UpdateBusy || UpdateDialogOpen) { ReportUpdate("Güncelleme, pencereler kapanınca kurulacak"); return; }
+            var reason = UpdateLogic.WaitReason(UpdateBusy, UpdateDialogOpen);
+            if (reason != null)
+            {
+                // The 5 s tick calls this again; once the reason clears the install proceeds to Restarting.
+                ReportUpdate("Güncelleme, pencereler kapanınca kurulacak");
+                NoticeDo(n => n.SetWaiting(reason));
+                return;
+            }
             InstallUpdate(false);
             return;
         }
@@ -2075,11 +2171,17 @@ internal sealed class SearchForm : Form
     void InstallUpdate(bool background)
     {
         if (updatePackage == null || exiting || updateInstalling) return;
-        if (!IsInstalledCopy) { updatePackage = null; return; }   // guarded before download; never replace a portable copy
+        if (!IsInstalledCopy)   // guarded before download; never replace a portable copy
+        {
+            updatePackage = null;
+            if (!background) NoticeDo(n => n.SetFailed("Bu kopya kurulum klasöründe değil"));
+            return;
+        }
         // StartInstall waits up to 10 s for kur.ps1 to report ready: off the UI thread.
         updateInstalling = true;
         var pkg = updatePackage; var version = updateRelease != null ? updateRelease.Version : null;
         var pid = Process.GetCurrentProcess().Id;
+        if (!background) NoticeDo(n => n.SetStage(UpdateStage.Restarting, 0, 0, version));
         ThreadPool.QueueUserWorkItem(delegate
         {
             string err = null; var ok = false;
@@ -2087,17 +2189,25 @@ internal sealed class SearchForm : Form
             catch (Exception ex) { ok = false; err = ex.Message; CrashReporter.HandledError("update", "start install", ex); }
             UiInvoke(delegate
             {
-                updateInstalling = false;
                 if (ok) { AppLog.Info("update", "installer started for " + (version ?? "?") + ", exiting"); AppLog.Flush(); }
                 else AppLog.Warn("update", "install start failed: " + LogSanitizer.StripQuoted(err));
                 if (!ok)
                 {
+                    updateInstalling = false;
                     updatePackage = null; updateBadVersion = version;
-                    SetStatus("Güncelleme başlatılamadı: " + err);
+                    var text = string.IsNullOrEmpty(err) ? "bilinmeyen hata" : err;
+                    if (!background || updateUserAsked) NoticeDo(n => n.SetFailed("Kurulum başlatılamadı: " + text));
+                    updateUserAsked = false;
+                    SetStatus("Güncelleme başlatılamadı: " + text);
                     return;
                 }
+                // updateInstalling stays true: nothing may start a second install while the window lingers.
+                // Keep "Yeniden başlatılıyor…" visible for a moment, then exit.
                 // kur.ps1 -Update waits for this process to end, copies the new files and starts the app again.
-                ExitApp();
+                if (background) { ExitApp(); return; }
+                var t = new System.Windows.Forms.Timer(); t.Interval = 1200;
+                t.Tick += delegate { t.Stop(); t.Dispose(); ExitApp(); };
+                t.Start();
             });
         });
     }
@@ -2931,6 +3041,8 @@ internal static class Program
             else if (a.StartsWith("--demo-search=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.Query = a.Substring(14); }
             else if (a.StartsWith("--demo-settings=", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; int.TryParse(a.Substring(16), out Demo.SettingsPage); }
             else if (a.Equals("--demo-empty", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.Empty = true; }
+            else if (a.Equals("--demo-update", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.UpdateSim = true; }
+            else if (a.Equals("--demo-update=fail", StringComparison.OrdinalIgnoreCase)) { Demo.On = true; Demo.UpdateSim = true; Demo.UpdateSimFail = true; }
             else if (a.StartsWith("--scale=", StringComparison.OrdinalIgnoreCase)) float.TryParse(a.Substring(8), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out devScale);
         }
         try
