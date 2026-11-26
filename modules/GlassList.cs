@@ -490,7 +490,7 @@ internal sealed class ProfileList : Control
         // right cluster: action button, pin star, status
         var plug = PlugRect(rr);
         var plugVisible = active || live != null || connecting || disconnecting;
-        if (plugVisible) PaintPlug(g, plug, hover && hoverPlug, selected, connecting, disconnecting, live != null, now, appear);
+        if (plugVisible) PaintPlug(g, plug, hover && hoverPlug, selected, connecting, disconnecting, live != null, now, appear, BraveStore.IsBrave(p));
 
         var star = StarRect(rr);
         var starVisible = pinned || active || pinPop.ContainsKey(id);
@@ -536,6 +536,18 @@ internal sealed class ProfileList : Control
     // Provider logos: the vendors' marks supplied by the user (assets\provider-*.png, embedded), clipped to a
     // rounded tile with a thin glass rim so they sit on the dark surface. Falls back to a drawn glyph tile.
     static readonly Dictionary<VpnKind, Image> logoCache = new Dictionary<VpnKind, Image>();
+    static readonly Dictionary<string, Image> appLogoCache = new Dictionary<string, Image>();
+    // appIcon: the browser's own icon (assetsrave-app.png) instead of the provider tile logo.
+    static Image LogoImage(VpnKind kind, bool appIcon)
+    {
+        if (!appIcon) return LogoImage(kind);
+        Image a;
+        if (appLogoCache.TryGetValue("brave", out a)) return a;
+        try { using (var s = typeof(ProfileList).Assembly.GetManifestResourceStream("brave-app.png")) if (s != null) a = Image.FromStream(s); } catch { a = null; }
+        appLogoCache["brave"] = a;
+        return a;
+    }
+
     static Image LogoImage(VpnKind kind)
     {
         Image img;
@@ -575,11 +587,27 @@ internal sealed class ProfileList : Control
     }
 
     // Sapphire glass action button: calm blue glass instead of a bright accent.
-    void PaintPlug(Graphics g, Rectangle plug, bool hot, bool selected, bool connecting, bool disconnecting, bool live, float now, float appear)
+    void PaintPlug(Graphics g, Rectangle plug, bool hot, bool selected, bool connecting, bool disconnecting, bool live, float now, float appear, bool brave = false)
     {
         var sc = 1F - 0.12F * (hot ? Ease.Clamp01(plugPress.Value) : 0F);
         var rect = new RectangleF(plug.X + plug.Width * (1 - sc) / 2F, plug.Y + plug.Height * (1 - sc) / 2F, plug.Width * sc, plug.Height * sc);
         var icon = RectangleF.Inflate(rect, -S(8F), -S(8F));
+        if (brave)
+        {
+            // Brave profile: not a VPN connection, so the button shows the Brave app icon instead of the plug.
+            Glass.Paint(g, rect, rect.Width / 2F, GlassKind.Secondary, hot ? 2.2F : 1.4F);
+            var bi = LogoImage(VpnKind.Brave, true);
+            if (bi != null)
+            {
+                var r = RectangleF.Inflate(rect, -S(hot ? 3F : 4F), -S(hot ? 3F : 4F));
+                var st = g.Save();
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.SmoothingMode = SmoothingMode.AntiAlias; g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.SetClip(Ui.Round(r, r.Width * 0.23F), CombineMode.Intersect);
+                g.DrawImage(bi, r);
+                g.Restore(st);
+            }
+            return;
+        }
         if (live && !disconnecting)
         {
             // connected: disconnect (power) button, muted error tone
