@@ -3,6 +3,13 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.7
+
+- **Güncelleme akışı yenilendi:** "Şimdi güncelle" sonrası bildirim kartı açık kalır; indirme (bayt ve yüzde), doğrulama, hazırlık ve yeniden başlatma aşamaları sırayla görünür. İndirme sırasında *İptal*, hata olunca *Yeniden dene*, *Sürüm sayfasını aç* ve *Kapat* düğmeleri vardır. Ağ hatalarında 3 kez otomatik denenir. Güncelleme bekliyorsa (bağlantı işlemi sürüyor, pencere açık) kart nedenini yazar ve *Sonra* düğmesi sunar. Yeniden başlatınca "Güncelleme tamam: sürüm X" bildirimi gelir. Güvenlik aynı: yalnızca HTTPS, yalnızca bu deponun dosyaları, çalıştırmadan önce SHA-256 doğrulaması.
+- **Güncelleme simgesi:** bildirim kartındaki bozuk simge düzeltildi.
+- **Yeni simgeler:** yeni uygulama simgesi (mavi kalkan-kilit) ve yeni sağlayıcı logoları (kenarlar saydam); satır logoları büyütüldü ve okunaklı.
+- **FortiClient otomatik Yes:** bağlanırken FortiClient Yes / No sorarsa (ör. ilk bağlantıdaki sertifika uyarısı) uygulama Yes'e basar. Ayarlar > Genel > *FortiClient sorularına otomatik Yes* ile kapatılabilir; kapalıyken soru penceresi size gösterilir.
+
 ## 2.1.6
 
 - **Brave profili açılınca:** Ayarlar > Genel > *Brave profili açılınca*: *365 yönetim* (varsayılan, `https://admin.cloud.microsoft/` açılır) ya da *Son kalınan* (adres verilmez, Brave profilin kendi son sekmelerini açar; Microsoft 365 / Copilot ana sayfası kendiliğinden açılmaz).
