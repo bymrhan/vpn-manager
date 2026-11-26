@@ -564,6 +564,7 @@ internal sealed class SearchForm : Form
         // modules: server reachability, live connection status, drag & drop import
         Reachability.Init(SynchronizationContext.Current);
         Reachability.Changed += delegate { list.Invalidate(); };
+        list.ShowLogos = settings.ShowProviderLogos;
         list.ReachOf = p => Demo.On ? Demo.Reach(p.Id) : settings.ReachabilityCheck ? Reachability.Get(p.Id) : ReachState.Unknown;
         list.LiveText = LiveTextFor;
         list.AllowAmbient = () => Watched;
@@ -2122,6 +2123,7 @@ internal sealed class SearchForm : Form
             if (r.DockSide != old.DockSide) { autoSide = 0; lastRect = new NativeMethods.RECT(); docked = false; Sync(true); }
             if (r.ReachabilityCheck && !old.ReachabilityCheck) Reachability.CheckAll(profiles, false);
             if (r.ShowForti != old.ShowForti) { if (!r.ShowForti) fortiConnectedId = null; ReloadProfiles(true); }
+            list.ShowLogos = r.ShowProviderLogos;
             if (r.ShowBrave != old.ShowBrave) ReloadProfiles(true);
             if (r.ShowSophos != old.ShowSophos || r.ShowWatchGuard != old.ShowWatchGuard)
             {
@@ -2617,7 +2619,7 @@ internal sealed class SearchForm : Form
     // Brave profile: open its Microsoft 365 page in that profile's window. No connection state.
     void OpenBrave(VpnProfile p)
     {
-        var err = BraveStore.Open(p);
+        var err = BraveStore.Open(p, settings.BraveOpen);
         if (err != null) { list.ConnectFailed(p.Id); SetStatus(err); return; }
         p.LastConnected = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
         list.ConnectSucceeded(p.Id);

@@ -721,6 +721,8 @@ internal sealed class SettingsForm : Form
         side.Changed += delegate { work.DockSide = new[] { "auto", "left", "right" }[side.SelectedIndex]; Dirty(); };
         var reach = new SToggle(); reach.SetInstant(work.ReachabilityCheck);
         reach.CheckedChanged += delegate { work.ReachabilityCheck = reach.Checked; Dirty(); };
+        var logos = new SToggle(); logos.SetInstant(work.ShowProviderLogos);
+        logos.CheckedChanged += delegate { work.ShowProviderLogos = logos.Checked; Dirty(); };
         var often = new SToggle(); often.SetInstant(work.ShowFrequent);
         often.CheckedChanged += delegate { work.ShowFrequent = often.Checked; Dirty(); };
         var forti = new SToggle(); forti.SetInstant(work.ShowForti);
@@ -730,6 +732,7 @@ internal sealed class SettingsForm : Form
             .Add(presenceRow)
             .Add(new SRow("Panel tarafı", "Yapışılacak taraf", side, Glyph.Panel))
             .Add(new SRow("Sunucu erişim testi", "Profil avatarında yeşil / kırmızı durum noktası.", reach, Glyph.Server))
+            .Add(new SRow("Sağlayıcı simgeleri", "Satırlarda sağlayıcı logosunu göster.", logos, Glyph.ShieldLock))
             .Add(new SRow("Sık kullanılanları göster", "Son 60 günde en az 3 kez bağlanılan profiller.", often, Glyph.Refresh))
             .Add(new SRow("FortiClient profilleri", "FortiClient VPN tünellerini de listele.", forti, Glyph.ShieldLock));
         // Sophos / WatchGuard toggles only for clients found on this PC (demo: always, nothing is read).
@@ -749,7 +752,10 @@ internal sealed class SettingsForm : Form
         {
             var brave = new SToggle(); brave.SetInstant(work.ShowBrave);
             brave.CheckedChanged += delegate { work.ShowBrave = brave.Checked; Dirty(); };
-            card.Add(new SRow("Brave profilleri (Microsoft 365)", "Brave profillerini listele; seçince o profilin Microsoft 365 sayfası açılır. Kapalıyken taranmaz.", brave, Glyph.Panel));
+            card.Add(new SRow("Brave profilleri (Microsoft 365)", "Brave profillerini listele. Kapalıyken Brave taranmaz.", brave, Glyph.Panel));
+            var open = new SSegmented("365 yönetim", "Son kalınan") { SelectedIndex = work.BraveOpen == "last" ? 1 : 0 };
+            open.Changed += delegate { work.BraveOpen = open.SelectedIndex == 1 ? "last" : "admin"; Dirty(); };
+            card.Add(new SRow("Brave profili açılınca", "Yönetim merkezi ya da profilin son sekmeleri.", open, Glyph.Panel));
         }
         BuildProfileSource(page);
         pages.Add(page);
@@ -1086,7 +1092,7 @@ internal sealed class SettingsForm : Form
             return work.Hotkey != original.Hotkey || work.AutoStart != original.AutoStart || work.Presence != original.Presence || work.BackupFolder != original.BackupFolder ||
                    work.BackupFrequency != original.BackupFrequency || work.BackupKeep != original.BackupKeep || work.DockSide != original.DockSide ||
                    work.Theme != original.Theme || work.ReachabilityCheck != original.ReachabilityCheck || work.ShowForti != original.ShowForti ||
-                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard || work.ShowBrave != original.ShowBrave || work.ShowFrequent != original.ShowFrequent ||
+                   work.ShowSophos != original.ShowSophos || work.ShowWatchGuard != original.ShowWatchGuard || work.ShowBrave != original.ShowBrave || work.ShowProviderLogos != original.ShowProviderLogos || work.BraveOpen != original.BraveOpen || work.ShowFrequent != original.ShowFrequent ||
                    work.UpdateMode != original.UpdateMode || work.UpdateInterval != original.UpdateInterval ||
                    work.LogEnabled != original.LogEnabled || work.CrashPrompt != original.CrashPrompt || work.CrashAutoConsent != original.CrashAutoConsent;
         }

@@ -3,6 +3,11 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.6
+
+- **Brave profili açılınca:** Ayarlar > Genel > *Brave profili açılınca*: *365 yönetim* (varsayılan, `https://admin.cloud.microsoft/` açılır) ya da *Son kalınan* (adres verilmez, Brave profilin kendi son sekmelerini açar; Microsoft 365 / Copilot ana sayfası kendiliğinden açılmaz).
+- **Sağlayıcı simgeleri varsayılan kapalı:** satırlardaki sağlayıcı logoları artık varsayılan olarak gizlidir (alt satırda yalnızca ad · sunucu · kullanıcı). Ayarlar > Genel > *Sağlayıcı simgeleri* ile açılır / kapanır.
+
 ## 2.1.5
 
 - **Brave 365 sekmesi varsayılan olarak açık:** Brave kuruluysa *Brave 365* sekmesi (Ctrl+6) kendiliğinden görünür; Ayarlar > Genel > *Brave profilleri (Microsoft 365)* ile kapatılabilir, kapalıyken Brave taranmaz. Brave kurulu değilse sekme ve ayar görünmez.

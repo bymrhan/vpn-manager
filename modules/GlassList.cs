@@ -44,6 +44,7 @@ internal sealed class ProfileList : Control
     public Func<bool> AllowAmbient = delegate { return true; };
     public void Wake() { anim.Kick(); }
     public Func<VpnProfile, bool> IsPinned = delegate { return false; };
+    public bool ShowLogos;   // provider logo before the provider name (Settings.ShowProviderLogos)
     public Func<VpnProfile, ReachState> ReachOf = delegate { return ReachState.Unknown; };
     public Func<VpnProfile, string> LiveText = delegate { return null; };
     public event Action<VpnProfile> Activated, PinToggled, DisconnectRequested;
@@ -528,8 +529,11 @@ internal sealed class ProfileList : Control
         var sub = VpnProviders.RowSubLine(p);
         var sx = x;
         // provider logo before the provider name: [logo] Provider · server · user
-        ProviderLogo(g, VpnProviders.KindOf(p), new RectangleF(sx, rr.Y + S(29.5F), S(20), S(20)), appear);
-        sx += S(26);
+        if (ShowLogos)
+        {
+            ProviderLogo(g, VpnProviders.KindOf(p), new RectangleF(sx, rr.Y + S(29.5F), S(20), S(20)), appear);
+            sx += S(26);
+        }
         DrawHighlighted(g, sub, Ui.SubFont, Fade(Ui.Muted, appear), new Rectangle(sx, rr.Y + S(31), Math.Max(10, right - sw - iconW - S(10) - sx), S(18)));
     }
 

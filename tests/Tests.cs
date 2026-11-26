@@ -28,6 +28,8 @@ static class Tests
         Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(true, true, true, true))).EndsWith("WatchGuard,Brave 365"), "Brave bölümü sonda");
         Check(string.Join(",", VpnProviders.SegmentNames(VpnProviders.Segments(true, true, true))).IndexOf("Brave") < 0, "Brave kapalıyken bölüm yok");
         Check(AppSettings.Defaults().ShowBrave, "Brave varsayılan açık (yalnız Brave kuruluysa görünür)");
+        Check(!AppSettings.Defaults().ShowProviderLogos && AppSettings.Defaults().BraveOpen == "admin", "varsayılan: simgeler kapalı, Brave 365 yönetim");
+        Check(BraveStore.AdminUrl == "https://admin.cloud.microsoft/", "yönetim adresi");
     }
 
     static void Check(bool ok, string what)

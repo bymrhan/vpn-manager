@@ -16,7 +16,7 @@ using System.Web.Script.Serialization;
 internal static class BraveStore
 {
     public const string IdPrefix = "brave:";
-    public const string OpenUrl = "https://www.microsoft365.com";
+    public const string AdminUrl = "https://admin.cloud.microsoft/";
 
     public static bool IsBrave(VpnProfile p) { return p != null && p.Id != null && p.Id.StartsWith(IdPrefix, StringComparison.Ordinal); }
     public static string DirOf(VpnProfile p) { return IsBrave(p) ? p.Id.Substring(IdPrefix.Length) : ""; }
@@ -87,8 +87,9 @@ internal static class BraveStore
         return list;
     }
 
-    // Opens the profile's Brave window on the Microsoft 365 portal. Returns an error text or null.
-    public static string Open(VpnProfile p)
+    // Opens the profile's Brave window. Returns an error text or null.
+    // mode "admin": the Microsoft 365 admin center; "last": no address, so Brave shows the profile's own startup tabs.
+    public static string Open(VpnProfile p, string mode)
     {
         var exe = ExePath;
         if (exe == null) return "Brave bulunamadı";
@@ -96,7 +97,7 @@ internal static class BraveStore
         if (dir.Length == 0 || dir.IndexOfAny(new[] { '"', '\\', '/' }) >= 0) return "Geçersiz Brave profili";
         try
         {
-            Process.Start(new ProcessStartInfo(exe, "--profile-directory=\"" + dir + "\" " + OpenUrl) { UseShellExecute = false });
+            Process.Start(new ProcessStartInfo(exe, "--profile-directory=\"" + dir + "\"" + (mode == "last" ? "" : " " + AdminUrl)) { UseShellExecute = false });
             RecordLaunch(dir);
             return null;
         }
