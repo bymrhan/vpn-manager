@@ -542,8 +542,7 @@ internal sealed class ProfileList : Control
         if (logoCache.TryGetValue(kind, out img)) return img;
         try
         {
-            if (kind == VpnKind.Brave) img = BraveStore.Logo(); // Brave's own icon, from the installed brave.exe
-            else using (var s = typeof(ProfileList).Assembly.GetManifestResourceStream(VpnProviders.Asset(kind) + ".png")) if (s != null) img = Image.FromStream(s);
+            using (var s = typeof(ProfileList).Assembly.GetManifestResourceStream(VpnProviders.Asset(kind) + ".png")) if (s != null) img = Image.FromStream(s);
         }
         catch { img = null; }
         logoCache[kind] = img;

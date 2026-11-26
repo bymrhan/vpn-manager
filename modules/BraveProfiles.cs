@@ -63,7 +63,7 @@ internal static class BraveStore
             var name = (Get(info, "name") as string ?? "").Trim();
             if (name.Length == 0) name = kv.Key;
             var user = (Get(info, "user_name") as string ?? "").Trim();
-            var p = new VpnProfile { Id = IdPrefix + kv.Key, Name = name, Host = kv.Key, Username = user, Source = "Brave" };
+            var p = new VpnProfile { Id = IdPrefix + kv.Key, Name = name, Host = kv.Key, Username = user, Source = "Microsoft 365" };
             ProfileStore.Finish(p);
             p.Keys = p.Keys.Concat(new[] { ProfileStore.SearchKey("BRAVE MICROSOFT 365 O365") }).ToArray();
             list.Add(p);
