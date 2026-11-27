@@ -584,6 +584,7 @@ internal sealed class SearchForm : Form
         CrashReporter.NeverAsk = delegate { UiInvoke(delegate { settings.CrashPrompt = "never"; SaveSettings(); }); };
         Shown += delegate { BeginInvoke(new Action(OfferCrashWhenOnScreen)); };
         Shown += delegate { BeginInvoke(new Action(ReportUpdated)); };
+        Shown += delegate { BeginInvoke(new Action(ApplyPendingOpenVpnRenames)); };
 
         ReloadProfiles();
         if (Demo.On) DemoConnect(Demo.ConnectedName); else monitor.Poll();
@@ -696,6 +697,7 @@ internal sealed class SearchForm : Form
         list.Location = new Point(0, ListTop); list.Size = new Size(ClientSize.Width, ClientSize.Height - ListTop - FooterHeight);
         list.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         list.IsPinned = p => pins.Contains(p.Id);
+        list.IsPendingName = p => !Demo.On && VpnProviders.IsOpenVpn(p) && pendingNames.Contains(p.Id);
         list.Activated += Connect;
         list.PinToggled += TogglePin;
         list.MenuRequested += ShowRowMenu;
@@ -986,6 +988,7 @@ internal sealed class SearchForm : Form
         else if (ExtFor(p) != null && p.Id == ExtFor(p).ConnectedId) rowMenu.Items.Add(Danger("Bağlantıyı kes", Glyph.Disconnect, delegate { DisconnectExt(ExtFor(p), p); }));
         else rowMenu.Items.Add(Item(BraveStore.IsBrave(p) ? "Brave'de aç" : "Bağlan", Glyph.Connect, delegate { Connect(p); }, "Enter"));
         rowMenu.Items.Add(Item(pins.Contains(p.Id) ? "Sabitlemeyi kaldır" : "Sabitle", Glyph.Star, delegate { TogglePin(p); }, "Ctrl+P"));
+        if (RenameText.Offered(p, Demo.On)) rowMenu.Items.Add(Item("Yeniden adlandır…", Glyph.Settings, delegate { RenameProfile(p); }, "F2"));
         rowMenu.Items.Add(Caption("KOPYALA"));
         var copyHost = Item("Sunucu adresi", Glyph.Copy, delegate { Copy(p.Host, "Sunucu adresi kopyalandı"); }); copyHost.Enabled = p.Host.Length > 0; rowMenu.Items.Add(copyHost);
         var copyUser = Item("Kullanıcı adı", Glyph.Copy, delegate { Copy(p.Username, "Kullanıcı adı kopyalandı"); }); copyUser.Enabled = p.Username.Length > 0; rowMenu.Items.Add(copyUser);
@@ -1642,6 +1645,7 @@ internal sealed class SearchForm : Form
         var selected = list.SelectedProfile;
         ApplyFilter(selected != null ? selected.Id : null);
         if (id == null) list.EndDisconnect();
+        if (id == null) ApplyPendingOpenVpnRenames();   // names that waited for the tunnel to go down
         if (id == null && disconnectStarted != DateTime.MinValue) QuietWindow.ForgetMinimized(); // disconnected: OpenVPN stays minimized
         if (id != null && id == connectingProfileId)
         {
@@ -1798,13 +1802,15 @@ internal sealed class SearchForm : Form
         List<string> files, pinnedNames;
         try { files = ImportService.ExtractBackup(zip, tmp, out pinnedNames); }
         catch (Exception ex) { ImportService.CleanupTemp(tmp); GlassDialog.Show(this, "Yedek okunamadı:\n" + ex.Message, "OpenVPN Hızlı Arama", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-        ImportOvpns(files, tmp, pinnedNames, ImportService.ReadUsernames(zip));
+        try { if (NameStore.Merge(ImportService.ReadNames(zip)) > 0) ReloadProfiles(true); } catch { }   // names the panel kept (WatchGuard)
+        ImportOvpns(files, tmp, pinnedNames, ImportService.ReadUsernames(zip), zip);
     }
 
     // Imports .ovpn files (from a backup when tempDir is set) on a worker thread; existing names are skipped.
-    void ImportOvpns(IList<string> files, string tempDir, List<string> pinnedNames) { ImportOvpns(files, tempDir, pinnedNames, null); }
+    void ImportOvpns(IList<string> files, string tempDir, List<string> pinnedNames) { ImportOvpns(files, tempDir, pinnedNames, null, null); }
 
-    void ImportOvpns(IList<string> files, string tempDir, List<string> pinnedNames, IDictionary<string, string> usernames)
+    // backupZip: the backup the files came from; after the import, passwords carried to this PC are offered for linking.
+    void ImportOvpns(IList<string> files, string tempDir, List<string> pinnedNames, IDictionary<string, string> usernames, string backupZip)
     {
         if (busy) { if (tempDir != null) ImportService.CleanupTemp(tempDir); return; }
         // Files picked by hand ("elle eklenen") are listed by this app only, not known to be in OpenVPN Connect.
@@ -1843,6 +1849,7 @@ internal sealed class SearchForm : Form
                 var msg = r.Imported + " profil eklendi, " + r.Skipped + " atlandı, " + r.Failed + " başarısız.";
                 var details = r.Messages != null && r.Messages.Count > 0 ? "\n\n" + string.Join("\n", r.Messages.Take(15).ToArray()) : "";
                 GlassDialog.Show(this, msg + details, "İçe aktarma tamamlandı", MessageBoxButtons.OK, r.Failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                if (backupZip != null && r.Imported > 0) LinkPasswords(backupZip, true);
             });
         });
     }
@@ -2222,6 +2229,7 @@ internal sealed class SearchForm : Form
             f.ProfileCount = profiles.Count;
             f.BackupNow = delegate { BackupNow(false); };
             f.OpenBackupFolder = OpenBackupFolder;
+            f.LinkPasswords = PickAndLinkPasswords;
             f.CheckUpdates = delegate { CheckForUpdates(true); };
             f.OpenLogFolder = CrashReporter.OpenLogFolder;
             f.ReportLastError = CrashReporter.ReportLatest;
@@ -2576,6 +2584,7 @@ internal sealed class SearchForm : Form
             if (profiles.Count == 0) ApplyFilter(null);
             return;
         }
+        try { NameStore.Apply(loaded); pendingNames = new HashSet<string>(PendingRenames.Load().Keys); } catch { }   // names kept by the panel (WatchGuard) and renames waiting for OpenVPN
         configStamp = stamp; loadError = null;
         var frequentChanged = RefreshFrequent();
         NoteProfileSource(report, loaded.Count);
@@ -2736,6 +2745,259 @@ internal sealed class SearchForm : Form
         SetStatus(pinned ? "\"" + p.Name + "\" sabitlendi" : "\"" + p.Name + "\" sabitlemesi kaldırıldı");
     }
 
+    // ---------- Rename (modules\Rename.cs) ----------
+
+    // Asks for the new name and hands it to the profile's VPN client. WatchGuard has no name of its
+    // own: the panel keeps it (names.json).
+    void RenameProfile(VpnProfile p)
+    {
+        if (!RenameText.Offered(p, Demo.On)) return;
+        var kind = VpnProviders.KindOf(p);
+        var others = profiles.Where(x => x.Id != p.Id && VpnProviders.KindOf(x) == kind).Select(x => x.Name).ToList();
+        var openVpnBusy = kind == VpnKind.OpenVpn && OpenVpnBusy();
+        string name;
+        using (var f = new RenameDialog(p.Name, RenameText.Hint(kind, openVpnBusy), s => NameRules.Check(s, kind, others, kind == VpnKind.WatchGuard)))
+        {
+            if (f.ShowDialog(this) != DialogResult.OK) return;
+            name = f.Result ?? "";
+        }
+        if (name == p.Name) return;
+        var old = p.Name;
+        if (kind == VpnKind.WatchGuard)
+        {
+            try { NameStore.Set(p.Id, name); }
+            catch (Exception ex) { AppLog.Warn("rename", "watchguard failed: " + ex.GetType().Name); GlassDialog.Show(this, "Ad kaydedilemedi.", "Yeniden adlandır", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            AppLog.Info("rename", "watchguard ok");
+            ReloadProfiles(true);
+            SetStatus(name.Length == 0 ? "Otomatik ad geri getirildi" : RenamedText(old, name));
+            return;
+        }
+        if (kind == VpnKind.Sophos)
+        {
+            SetStatus("Ad Sophos Connect'e yazılıyor…");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                var err = SophosStore.Rename(p, name);
+                UiInvoke(delegate
+                {
+                    if (err != null) { AppLog.Warn("rename", "sophos failed"); GlassDialog.Show(this, err, "Yeniden adlandır", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                    // the panel's id is Sophos' internal name, which does not change: the display name is kept here too
+                    try { NameStore.Set(p.Id, name); } catch { }
+                    AppLog.Info("rename", "sophos ok");
+                    ReloadProfiles(true); SetStatus(RenamedText(old, name));
+                });
+            });
+            return;
+        }
+        if (kind == VpnKind.Forti)
+        {
+            if (p.Id == fortiConnectedId || p.Id == fortiConnectingId || p.Id == fortiDisconnectingId)
+            { GlassDialog.Show(this, "Önce bağlantıyı kesin.", "Yeniden adlandır", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            RenameForti(p, old, name);
+            return;
+        }
+        // OpenVPN Connect: its config.json can only be changed while it is closed, and closing it drops the tunnel
+        if (OpenVpnBusy())
+        {
+            try { PendingRenames.Set(p.Id, name); }
+            catch { GlassDialog.Show(this, "Ad kaydedilemedi.", "Yeniden adlandır", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            AppLog.Info("rename", "openvpn deferred");
+            ReloadProfiles(true); SetStatus("Ad OpenVPN bağlantısı kesilince yazılacak");
+            return;
+        }
+        ApplyOpenVpnRenames(new Dictionary<string, string> { { p.Id, name } }, RenamedText(old, name));
+    }
+
+    bool openVpnRenaming;
+    HashSet<string> pendingNames = new HashSet<string>();   // OpenVPN profile ids whose new name is not in OpenVPN Connect yet
+
+    // True while closing OpenVPN Connect would cost a connection: a tunnel is up, the panel has a
+    // connect / disconnect in flight, or OpenVPN Connect itself is in the middle of connecting.
+    // Asks the monitor again first: right after start-up connectedId is not known yet.
+    bool OpenVpnBusy()
+    {
+        if (connectedId != null || connectingProfileId != null || disconnectStarted != DateTime.MinValue) return true;
+        if (monitor == null) return true;
+        monitor.Poll();
+        return OpenVpnRename.Busy(monitor.Current.Connected, monitor.LastEvent, (DateTime.UtcNow - monitor.LastLogChangeUtc).TotalSeconds);
+    }
+
+    // Closes OpenVPN Connect, writes the names into config.json and opens it again (worker thread).
+    void ApplyOpenVpnRenames(Dictionary<string, string> renames, string doneText)
+    {
+        if (openVpnRenaming || renames.Count == 0) return;
+        openVpnRenaming = true;
+        SetStatus("Ad OpenVPN Connect'e yazılıyor…");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            string err;
+            try { err = OpenVpnRename.ApplyWithRestart(renames); } catch { err = "Ad OpenVPN Connect'e yazılamadı."; }
+            UiInvoke(delegate
+            {
+                openVpnRenaming = false;
+                if (err == null) { foreach (var id in renames.Keys) { try { PendingRenames.Remove(id); } catch { } } }
+                if (err == null) AppLog.Info("rename", "openvpn ok (" + renames.Count + ")"); else AppLog.Warn("rename", "openvpn failed");
+                ReloadProfiles(true);
+                if (err != null) GlassDialog.Show(this, err, "Yeniden adlandır", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                else SetStatus(doneText);
+            });
+        });
+    }
+
+    // Renames that waited for the OpenVPN tunnel to go down: written once nothing is connected or in flight.
+    void ApplyPendingOpenVpnRenames()
+    {
+        if (Demo.On || openVpnRenaming || OpenVpnBusy()) return;
+        Dictionary<string, string> pending;
+        try { pending = PendingRenames.Load(); } catch { return; }
+        if (pending.Count == 0) return;
+        string config = "";
+        try { using (var fs = new FileStream(ProfileStore.ConfigPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) using (var sr = new StreamReader(fs, Encoding.UTF8)) config = sr.ReadToEnd(); } catch { return; }
+        if (OpenVpnRename.ProfileCount(config) < 0) return;   // unreadable right now: try again at the next change
+        var apply = new Dictionary<string, string>();
+        foreach (var kv in pending)
+        {
+            var clientName = OpenVpnRename.NameOf(config, kv.Key);
+            if (OpenVpnRename.Decide(kv.Value, clientName.Length > 0, clientName) == PendingAction.Drop) { try { PendingRenames.Remove(kv.Key); } catch { } }
+            else apply[kv.Key] = kv.Value;
+        }
+        if (apply.Count == 0) { ReloadProfiles(true); return; }
+        ApplyOpenVpnRenames(apply, apply.Count == 1 ? "Bekleyen ad OpenVPN Connect'e yazıldı" : apply.Count + " bekleyen ad OpenVPN Connect'e yazıldı");
+    }
+
+    // ---- Saved OpenVPN passwords carried from another PC (PasswordLink) ----
+
+    void PickAndLinkPasswords()
+    {
+        var owner = openSettings != null ? (IWin32Window)openSettings : this;
+        using (var dlg = new OpenFileDialog { Filter = "OpenVPN Hızlı Arama yedeği (*.zip)|*.zip", Title = "Profillerin geri yüklendiği yedeği seçin", InitialDirectory = Directory.Exists(BackupFolder) ? BackupFolder : "" })
+            if (dlg.ShowDialog(owner) == DialogResult.OK) LinkPasswords(dlg.FileName, false);
+    }
+
+    // Links the passwords in Windows Credential Manager (old profile ids) to the profiles of this PC.
+    // quiet: after a restore; nothing is shown when there is nothing to link.
+    void LinkPasswords(string zip, bool quiet)
+    {
+        const string title = "Parolaları eşleştir";
+        var owner = openSettings != null ? (IWin32Window)openSettings : this;
+        if (Demo.On) { if (!quiet) GlassDialog.Show(owner, "Demo kipinde kullanılamaz.", title, MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+        if (openVpnRenaming || busy) return;
+
+        PasswordLinkPlan plan;
+        try
+        {
+            // only profiles OpenVPN Connect itself lists: a guessed id (.ovpn file) is not a credential name
+            var known = OpenVpnProfiles.Where(p => p.Origin != "manual" && !p.EstimatedId).Select(p => new KeyValuePair<string, string>(p.Id, p.Name)).ToList();
+            plan = PasswordLink.Plan(PasswordLink.ReadManifest(zip), known, id => OpenVpnCredentials.Has(id));
+        }
+        catch { plan = new PasswordLinkPlan(); }
+        AppLog.Info("passwords", "plan: " + plan.Pairs.Count + " to link, " + plan.Skipped + " skipped");
+        if (plan.Pairs.Count == 0)
+        {
+            if (!quiet) GlassDialog.Show(owner, "Eşleştirilecek taşınmış parola bulunamadı.\n\n" + PasswordLink.Summary(plan) +
+                "\n\nÖnce parolaların Windows Kimlik Bilgileri ile bu cihaza taşınmış, profillerin de bu yedekten geri yüklenmiş olması gerekir.", title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        if (OpenVpnBusy())
+        {
+            GlassDialog.Show(owner, "Önce OpenVPN bağlantısını kesin: işlem OpenVPN Connect'i kapatıp yeniden açar.\n\nSonra Ayarlar › Yedekleme › \"Parolaları eşleştir\" ile yeniden deneyin.", title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        IList<KeyValuePair<string, string>> pairs = plan.Pairs;
+        var what = PasswordLink.Summary(plan) + "\n\nParolalar yeni profillere bağlanır; OpenVPN Connect kapatılıp yeniden açılır. Parolalar gösterilmez, eski kayıtlar silinmez.\n\n";
+        var trial = false;
+        if (pairs.Count == 1)
+        {
+            if (GlassDialog.Show(owner, what + "Devam edilsin mi?", title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        }
+        else
+        {
+            var firstId = pairs[0].Value;
+            var firstName = profiles.Where(p => p.Id == firstId).Select(p => p.Name).FirstOrDefault() ?? "";
+            var answer = GlassDialog.Show(owner, what + "Evet: önce yalnız \"" + firstName + "\" profilinde dene\nHayır: " + pairs.Count + " profilin hepsini eşleştir", title, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (answer == DialogResult.Cancel) return;
+            if (answer == DialogResult.Yes) { trial = true; pairs = new List<KeyValuePair<string, string>> { pairs[0] }; }
+        }
+
+        openVpnRenaming = true;
+        SetStatus("Parolalar eşleştiriliyor…");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            var linked = 0; var reopen = false; string err;
+            try
+            {
+                err = PasswordLink.Apply(pairs, (o, n) => OpenVpnCredentials.Copy(o, n), id => OpenVpnCredentials.Delete(id), ids =>
+                {
+                    var e = OpenVpnRename.ApplyWithRestart(null, ids);
+                    if (e == OpenVpnRename.RestartFailed) { reopen = true; return null; }   // written; only the restart failed
+                    return e;
+                }, out linked);
+            }
+            catch { err = "Parolalar eşleştirilemedi."; }
+            UiInvoke(delegate
+            {
+                openVpnRenaming = false;
+                if (err == null) AppLog.Info("passwords", "linked " + linked + " of " + pairs.Count); else AppLog.Warn("passwords", "link failed");
+                ReloadProfiles(true);
+                if (err != null)
+                {
+                    SetStatus("Parolalar eşleştirilemedi");
+                    GlassDialog.Show(owner, err.Replace("ad değişmedi", "parolalar eşleştirilmedi"), title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                SetStatus(linked + " profilin parolası eşleştirildi");
+                var done = linked + " profilin parolası eşleştirildi" + (linked < pairs.Count ? " (" + (pairs.Count - linked) + " kopyalanamadı)" : "") + "." +
+                           (reopen ? "\n\nOpenVPN Connect yeniden başlatılamadı; elle açın." : "") +
+                           (trial ? "\n\nŞimdi o profile bağlanın. Parola sorulmazsa işlemi yeniden başlatıp \"Hayır\" ile hepsini eşleştirin."
+                                  : "\n\nBir profile bağlanıp parolanın sorulmadığını doğrulayın.");
+                GlassDialog.Show(owner, done, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            });
+        });
+    }
+
+    // FortiClient: the tunnel name is its registry key (one UAC prompt for HKLM). The panel's id,
+    // the saved password, the pin and the history rows carry that name and move with it.
+    void RenameForti(VpnProfile p, string old, string name)
+    {
+        var oldTunnel = FortiStore.TunnelName(p); var oldId = p.Id; var newId = FortiStore.IdPrefixSsl + name;
+        SetStatus("Windows yönetici onayı bekleniyor…");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            int code;
+            try { code = FortiRename.Run(oldTunnel, name); } catch { code = FortiRename.CopyFailed; }
+            string credError = null;
+            if (code == FortiRename.Ok)
+            {
+                try
+                {
+                    var cred = FortiCredentialStore.Load(oldTunnel);
+                    if (cred != null) { credError = FortiCredentialStore.Save(name, cred); if (credError == null) FortiCredentialStore.Delete(oldTunnel); cred.Password = ""; }
+                }
+                catch { credError = "Kayıtlı parola yeni ada taşınamadı."; }
+                try { ConnectionHistory.Rewrite(oldId, newId, name); } catch { }
+            }
+            UiInvoke(delegate
+            {
+                if (code != FortiRename.Ok)
+                {
+                    AppLog.Warn("rename", "forti failed: code " + code);
+                    GlassDialog.Show(this, FortiRename.Message(code), "Yeniden adlandır", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                pins = IdMigration.Pins(pins, oldId, newId); PinStore.Save(pins);
+                list.IsPinned = x => pins.Contains(x.Id);
+                long seen; if (fortiSeen.TryGetValue(oldId, out seen)) { fortiSeen.Remove(oldId); fortiSeen[newId] = seen; }
+                AppLog.Info("rename", "forti ok");
+                ReloadProfiles(true); ApplyFilter(newId);
+                if (credError != null) GlassDialog.Show(this, "Ad değişti, ancak kayıtlı parola yeni ada taşınamadı. Parolayı yeniden kaydedin.", "Yeniden adlandır", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                else SetStatus(RenamedText(old, name));
+            });
+        });
+    }
+
+    static string RenamedText(string oldName, string newName) { return "\"" + oldName + "\" → \"" + newName + "\" olarak değiştirildi"; }
+
     void ResetSearch() { Input.Text = ""; Input.Focus(); }
 
     // ---------- Keyboard ----------
@@ -2748,6 +3010,7 @@ internal sealed class SearchForm : Form
         else if (e.Control && e.KeyCode == Keys.P) TogglePin(list.SelectedProfile);
         else if (e.Control && e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D6) { segmented.Selected = e.KeyCode - Keys.D1; }
         else if (e.Control && e.KeyCode == Keys.Oemcomma) BeginInvoke(new Action(ShowSettings));
+        else if (e.KeyCode == Keys.F2) { var sel = list.SelectedProfile; BeginInvoke(new Action(delegate { RenameProfile(sel); })); }
         else if (e.KeyCode == Keys.Down) list.MoveSelection(1);
         else if (e.KeyCode == Keys.Up) list.MoveSelection(-1);
         else if (e.KeyCode == Keys.PageDown) list.MoveSelection(5);
@@ -2804,8 +3067,10 @@ internal sealed class SearchForm : Form
         if (!ovpnWindowBack)
         {
             var now = DateTime.UtcNow;
-            var due = connectingProfileId != null ? QuietWindow.ShouldRestoreOpenVpnWindow((now - connectStarted).TotalSeconds, false)
-                    : disconnectStarted != DateTime.MinValue && QuietWindow.ShouldRestoreOpenVpnWindow((now - disconnectStarted).TotalSeconds, connectedId == null);
+            // quiet = no line in OpenVPN's log for that long; while it logs it is working, not waiting
+            var quiet = monitor != null ? (now - monitor.LastLogChangeUtc).TotalSeconds : double.MaxValue;
+            var due = connectingProfileId != null ? QuietWindow.ShouldRestoreOpenVpnWindow((now - connectStarted).TotalSeconds, quiet, false)
+                    : disconnectStarted != DateTime.MinValue && QuietWindow.ShouldRestoreOpenVpnWindow((now - disconnectStarted).TotalSeconds, quiet, connectedId == null);
             if (due)
             {
                 ovpnWindowBack = true;
@@ -2818,10 +3083,12 @@ internal sealed class SearchForm : Form
             var estimated = cp != null && cp.EstimatedId;   // id guessed from a .ovpn file name (ProfileSources)
             AppLog.Warn("openvpn", "connect outcome: not confirmed in " + ConnectTimeoutSeconds + " s" + (estimated ? " (estimated profile id)" : ""));
             list.ConnectFailed(connectingProfileId); connectingProfileId = null;
+            // OpenVPN kept logging (retries) so its window never came back: the user has to look at it now
+            if (!ovpnWindowBack) { ovpnWindowBack = true; QuietWindow.RestoreMinimized(); }
             SetStatus(estimated ? "Bağlantı doğrulanamadı — profil kimliği tahmini: OpenVPN Connect'ten bağlanın ya da dosyayı içe aktarın"
                                 : "Bağlantı doğrulanamadı — OpenVPN Connect penceresini kontrol edin");
         }
-        if (disconnectStarted != DateTime.MinValue && (DateTime.UtcNow - disconnectStarted).TotalSeconds > 20) { disconnectStarted = DateTime.MinValue; list.EndDisconnect(); }
+        if (disconnectStarted != DateTime.MinValue && (DateTime.UtcNow - disconnectStarted).TotalSeconds > 20) { disconnectStarted = DateTime.MinValue; list.EndDisconnect(); ApplyPendingOpenVpnRenames(); }
     }
 
     // ---------- OpenVPN window tracking ----------
@@ -2886,6 +3153,7 @@ internal sealed class SearchForm : Form
         if (busyConnecting) CheckConnectTimeout();
         UpdateIsland();
         if (tick % 4 == 0) CheckConfigChanged();
+        if (pendingNames.Count > 0 && tick % 20 == 5) ApplyPendingOpenVpnRenames();   // names waiting for "no OpenVPN tunnel" (also after a hidden start)
         if (!Demo.On && tick % 120 == 20) CheckAutoBackup();
         if (settings.ReachabilityCheck && tick % 1200 == 0) Reachability.CheckAll(profiles, true);
         if (!OnScreen && tick % 600 == 300) NativeMethods.TrimMemory(); // every 5 min while hidden / minimized
@@ -3030,6 +3298,8 @@ internal static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // Elevated helper for a FortiClient tunnel rename (FortiRename.Run starts it through UAC): no window, no instance check.
+        if (Array.IndexOf(args, FortiRename.Flag) >= 0) return FortiRename.ElevatedMain(args);
         var background = args.Any(a => a.Equals("--background", StringComparison.OrdinalIgnoreCase));
         // Development switches: a separate instance name and settings file let a test build run next to the installed one.
         foreach (var a in args)

@@ -50,6 +50,18 @@ static class Tests
     {
         Console.OutputEncoding = Encoding.UTF8;
         Run("ConnectionMonitor: açık tutulan log", OpenLogIsReRead);
+        Run("ConnectionMonitor: bağlı kararı", ConnectedDecision);
+        Run("Ad kuralları", RenameNameRules);
+        Run("Ad deposu", RenameNameStore);
+        Run("Ad değiştirme metinleri", RenameTexts);
+        Run("OpenVPN config.json ad yazma", OpenVpnRewrite);
+        Run("OpenVPN ad uygulama", OpenVpnApply);
+        Run("Sophos ad değiştirme", SophosRename);
+        Run("FortiClient ad değiştirme", FortiRenameKeys);
+        Run("Yedekte adlar", NamesInBackup);
+        Run("Parola eşleştirme: plan", PasswordLinkPlanning);
+        Run("Parola eşleştirme: kayıt kopyalama", PasswordLinkCredentials);
+        Run("Parola eşleştirme: uygulama", PasswordLinkApply);
         Run("FortiGui.ShowsTunnel", ShowsTunnel);
         Run("FortiCredentialStore", CredentialStore);
         Run("Forti son bağlanma zamanı", FortiLastConnected);
@@ -152,16 +164,443 @@ static class Tests
                 last.Invoke(m, null);                   // first read: entry stale, then synced by the read
                 Thread.Sleep(300);
                 var before = (string)last.Invoke(m, null); // steady state: cache equals the synced entry
+                var quietSince = m.LastLogChangeUtc;
                 Thread.Sleep(1200);
+                last.Invoke(m, null);
+                Check(m.LastLogChangeUtc == quietSince, "günlük değişmedikçe son etkinlik zamanı ilerlemez");
                 write("[x] EVENT: CONNECTED user@host⏎\n");
                 var after = (string)last.Invoke(m, null);
                 Check(before == "DISCONNECTED", "ilk olay DISCONNECTED (" + before + ")");
                 Check(after == "CONNECTED", "yazılan yeni olay görülür (" + after + ")");
+                Check(m.LastLogChangeUtc > quietSince && (DateTime.UtcNow - m.LastLogChangeUtc).TotalSeconds < 1, "günlük büyüyünce son etkinlik zamanı şimdi olur");
             }
         }
         finally
         {
             field.SetValue(null, null);
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    // 27.11.2026 10:01: OpenVPN reported CONNECTED (log event + config.json connectedAt) at 10:01:03,
+    // the panel showed it at 10:01:13. A fresh CONNECTED is enough; the adapter check must not hold it back.
+    static void ConnectedDecision()
+    {
+        var now = new DateTime(2026, 11, 27, 7, 1, 4, DateTimeKind.Utc);
+        Func<int, long> ago = s => (long)(now.AddSeconds(-s) - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+        Check(ConnectionMonitor.IsConnected(false, true, "p1", "ASSIGN_IP", 0, now), "adaptör açık + profil: bağlı (eski davranış)");
+        Check(ConnectionMonitor.IsConnected(false, false, "p1", "CONNECTED", ago(1), now), "adaptör henüz görünmüyor ama OpenVPN az önce CONNECTED dedi: bağlı");
+        Check(!ConnectionMonitor.IsConnected(false, false, "p1", "CONNECTED", ago(600), now), "eski CONNECTED (çökme / yeniden başlatma kalıntısı) adaptörsüz sayılmaz");
+        Check(!ConnectionMonitor.IsConnected(false, false, "p1", "CONNECTED", 0, now), "connectedAt yoksa adaptörsüz sayılmaz");
+        Check(!ConnectionMonitor.IsConnected(false, false, "p1", "ASSIGN_IP", ago(1), now), "henüz CONNECTED değil, adaptör kapalı: bağlı değil");
+        Check(!ConnectionMonitor.IsConnected(true, true, "p1", "DISCONNECTED", ago(1), now), "DISCONNECTED olayı her şeyi geçersiz kılar");
+        Check(!ConnectionMonitor.IsConnected(false, true, "", "CONNECTED", ago(1), now), "config profil adı vermiyorsa bağlı değil");
+        Check(!ConnectionMonitor.IsConnected(false, false, "p1", "CONNECTED", ago(-600), now), "gelecekteki connectedAt sayılmaz");
+    }
+
+    // ---------- profile rename (docs\superpowers\specs\2026-11-27-profile-rename-design.md) ----------
+
+    static void RenameNameRules()
+    {
+        var others = new[] { "Acme", "IŞIK Tekstil" };
+        Check(NameRules.Check("Yeni Ad", VpnKind.OpenVpn, others, false) == null, "geçerli ad");
+        Check(NameRules.Check("   ", VpnKind.OpenVpn, others, false) != null, "boş ad reddedilir");
+        Check(NameRules.Check("", VpnKind.WatchGuard, others, true) == null, "WatchGuard: boş ad = adı kaldır");
+        Check(NameRules.Check(new string('a', 64), VpnKind.OpenVpn, others, false) == null, "64 karakter geçerli");
+        Check(NameRules.Check(new string('a', 65), VpnKind.OpenVpn, others, false) != null, "65 karakter reddedilir");
+        Check(NameRules.Check("a\tb", VpnKind.OpenVpn, others, false) != null, "denetim karakteri reddedilir");
+        Check(NameRules.Check("acme", VpnKind.OpenVpn, others, false) != null, "aynı ad (büyük/küçük harf) reddedilir");
+        Check(NameRules.Check("ışık tekstil", VpnKind.OpenVpn, others, false) != null, "Türkçe harf eşlemesi: ışık = IŞIK");
+        Check(NameRules.Check("a/b", VpnKind.Forti, others, false) != null, "FortiClient: / yasak");
+        Check(NameRules.Check("a/b", VpnKind.OpenVpn, others, false) == null, "diğerlerinde / serbest");
+        Check(NameRules.Clean("  Ad  ") == "Ad", "kırpılır");
+    }
+
+    static void RenameNameStore()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        NameStore.FolderOverride = dir;
+        try
+        {
+            Check(NameStore.Load().Count == 0, "dosya yokken boş");
+            NameStore.Set("watchguard-ssl:1.2.3.4:443", "Acme Merkez");
+            Check(NameStore.Load()["watchguard-ssl:1.2.3.4:443"] == "Acme Merkez", "kaydedilir ve okunur");
+            var p = new VpnProfile { Id = "watchguard-ssl:1.2.3.4:443", Name = "WatchGuard SSL VPN · 1.2.3.4", Host = "1.2.3.4:443", Username = "", Source = "" };
+            var q = new VpnProfile { Id = "watchguard-ssl:5.6.7.8:443", Name = "WatchGuard SSL VPN · 5.6.7.8", Host = "5.6.7.8:443", Username = "", Source = "" };
+            ProfileStore.Finish(p); ProfileStore.Finish(q);
+            p.Keys = p.Keys.Concat(new[] { "EXTRA" }).ToArray();   // loaders may add keys (provider label): they must survive
+            NameStore.Apply(new[] { p, q });
+            Check(p.Name == "Acme Merkez" && p.Initials == ProfileStore.MakeInitials("Acme Merkez"), "ad ve baş harfler uygulanır");
+            Check(q.Name == "WatchGuard SSL VPN · 5.6.7.8", "kaydı olmayan profil değişmez");
+            Check(p.Keys[0] == ProfileStore.SearchKey("Acme Merkez") && p.Keys[1] == ProfileStore.SearchKey("1.2.3.4:443"), "yeni adla aranabilir, sunucu anahtarı kalır");
+            Check(p.Keys[p.Keys.Length - 1] == "EXTRA", "ek arama anahtarları korunur");
+            NameStore.Set("watchguard-ssl:1.2.3.4:443", "");
+            Check(!NameStore.Load().ContainsKey("watchguard-ssl:1.2.3.4:443"), "boş ad kaydı siler");
+            File.WriteAllText(Path.Combine(dir, "names.json"), "{ bozuk");
+            Check(NameStore.Load().Count == 0, "bozuk dosya: boş sayılır, hata vermez");
+            File.WriteAllText(Path.Combine(dir, "names.json"), "");
+            Check(NameStore.Load().Count == 0, "boş dosya: boş sayılır");
+            File.WriteAllText(Path.Combine(dir, "names.json"), "[1,2]");
+            Check(NameStore.Load().Count == 0, "nesne olmayan JSON: boş sayılır");
+            NameStore.Set("a", "Bozuk dosyanın üzerine");
+            Check(NameStore.Load()["a"] == "Bozuk dosyanın üzerine", "bozuk dosyanın üzerine yazılabilir");
+            PendingRenames.Set("123", "Bekleyen");
+            Check(PendingRenames.IsPending("123") && PendingRenames.Load()["123"] == "Bekleyen", "bekleyen ad kaydedilir");
+            var o = new VpnProfile { Id = "123", Name = "Eski", Host = "", Username = "", Source = "" };
+            ProfileStore.Finish(o);
+            NameStore.Apply(new[] { o });
+            Check(o.Name == "Bekleyen", "bekleyen ad listede hemen görünür");
+            PendingRenames.Remove("123");
+            Check(!PendingRenames.IsPending("123"), "bekleyen ad silinir");
+        }
+        finally
+        {
+            NameStore.FolderOverride = null;
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    static void RenameTexts()
+    {
+        Check(RenameText.Hint(VpnKind.WatchGuard, false) == "Ad yalnız VPN Manager'da saklanır. Boş bırakırsanız otomatik ad geri gelir.", "WatchGuard açıklaması");
+        Check(RenameText.Hint(VpnKind.OpenVpn, false) == "OpenVPN Connect kapatılıp yeniden açılacak.", "OpenVPN, boşta");
+        Check(RenameText.Hint(VpnKind.OpenVpn, true) == "OpenVPN bağlantısı kesilince uygulanacak.", "OpenVPN, bağlıyken");
+        Check(RenameText.Hint(VpnKind.Forti, false) == "Windows yönetici onayı isteyecek.", "FortiClient açıklaması");
+        Check(RenameText.Hint(VpnKind.Sophos, false) == "Sophos Connect'te görünen ad değişir.", "Sophos açıklaması");
+        Check(RenameText.Offered(new VpnProfile { Id = "watchguard-ssl:1.2.3.4:443" }, false), "WatchGuard: sunulur");
+        Check(RenameText.Offered(new VpnProfile { Id = "forti-ssl:x" }, false), "Forti SSL: sunulur");
+        Check(!RenameText.Offered(new VpnProfile { Id = "forti-ipsec:x" }, false), "Forti IPsec: sunulmaz");
+        Check(!RenameText.Offered(new VpnProfile { Id = BraveStore.IdPrefix + "Profile 1" }, false), "Brave: sunulmaz");
+        Check(!RenameText.Offered(new VpnProfile { Id = "123" }, true), "demo: sunulmaz");
+        Check(!RenameText.Offered(new VpnProfile { Id = "dosya", EstimatedId = true }, false), "kimliği tahmini (.ovpn dosyasından) profil: sunulmaz");
+        Check(!RenameText.Offered(null, false), "profil yok: sunulmaz");
+    }
+
+    // config.json as OpenVPN Connect 3.9 writes it: persist:root is a JSON string, its values are JSON strings again.
+    static string RenameFixture()
+    {
+        var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+        var status = new Dictionary<string, object>
+        {
+            { "profiles", new Dictionary<string, object>
+                {
+                    { "111", new Dictionary<string, object> { { "id", "111" }, { "profileDisplayName", "Eski Ad" }, { "profileName", "Eski Ad" }, { "name", "vpn.ornek.example [Eski Ad]" }, { "hostname", "vpn.ornek.example" }, { "savedPassword", true } } },
+                    { "222", new Dictionary<string, object> { { "id", "222" }, { "profileDisplayName", "Diğer" }, { "profileName", "Diğer" }, { "name", "gw.ornek.example [Diğer]" } } }
+                } },
+            { "connectedProfile", new Dictionary<string, object> { { "id", "111" }, { "profileName", "Eski Ad" }, { "profileDisplayName", "Eski Ad" }, { "profileType", "pc" } } },
+            { "previouslyConnectedProfile", new Dictionary<string, object> { { "id", "222" }, { "profileName", "Diğer" }, { "profileDisplayName", "Diğer" } } },
+            { "connectedAt", 5 }
+        };
+        var persist = new Dictionary<string, object> { { "status", js.Serialize(status) }, { "lastAction", "{\"type\":\"X\"}" }, { "_persist", "{\"version\":-1}" } };
+        var root = new Dictionary<string, object> { { "appliedPatches", "[\"x\"]" }, { "persist:root", js.Serialize(persist) }, { "persist:systemService", "{}" } };
+        return js.Serialize(root);
+    }
+
+    static IDictionary<string, object> RenameRoot(string json) { return (IDictionary<string, object>)new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject(json); }
+    static IDictionary<string, object> RenamePersist(string json) { return (IDictionary<string, object>)new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject((string)RenameRoot(json)["persist:root"]); }
+    static IDictionary<string, object> RenameStatus(string json) { return (IDictionary<string, object>)new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject((string)RenamePersist(json)["status"]); }
+    static object RenameField(string json, string id, string field) { return ((IDictionary<string, object>)((IDictionary<string, object>)RenameStatus(json)["profiles"])[id])[field]; }
+    static string RenameConnected(string json, string which, string field) { return (string)((IDictionary<string, object>)RenameStatus(json)[which])[field]; }
+
+    static void OpenVpnRewrite()
+    {
+        var fixture = RenameFixture();
+        const string odd = "Yeni \"Ad\" \\ İş \U0001F680";
+        string err;
+        var outJson = OpenVpnRename.Rewrite(fixture, "111", odd, out err);
+        Check(outJson != null && err == null, "yazma başarılı");
+        if (outJson == null) return;
+        Check(OpenVpnRename.NameOf(outJson, "111") == odd, "özel karakterli ad geri okunur");
+        Check((string)RenameField(outJson, "111", "profileDisplayName") == odd && (string)RenameField(outJson, "111", "profileName") == odd, "profileDisplayName ve profileName değişir");
+        Check((string)RenameField(outJson, "111", "name") == "vpn.ornek.example [" + odd + "]", "name içindeki eski ad değişir");
+        Check((string)RenameField(outJson, "111", "hostname") == "vpn.ornek.example" && (bool)RenameField(outJson, "111", "savedPassword"), "diğer alanlar korunur");
+        Check((string)RenameField(outJson, "222", "profileDisplayName") == "Diğer" && (string)RenameField(outJson, "222", "name") == "gw.ornek.example [Diğer]", "diğer profil değişmez");
+        Check(RenameConnected(outJson, "connectedProfile", "profileDisplayName") == odd && RenameConnected(outJson, "connectedProfile", "profileName") == odd, "connectedProfile güncellenir");
+        Check(RenameConnected(outJson, "connectedProfile", "profileType") == "pc", "connectedProfile'ın diğer alanı korunur");
+        Check(RenameConnected(outJson, "previouslyConnectedProfile", "profileDisplayName") == "Diğer", "başka kimlikli previouslyConnectedProfile değişmez");
+        Check((string)RenameRoot(outJson)["appliedPatches"] == "[\"x\"]" && (string)RenameRoot(outJson)["persist:systemService"] == "{}", "kökteki diğer anahtarlar aynı");
+        Check(RenameRoot(outJson)["persist:root"] is string && RenamePersist(outJson)["status"] is string, "çift kodlama korunur");
+        Check((string)RenamePersist(outJson)["lastAction"] == "{\"type\":\"X\"}" && (string)RenamePersist(outJson)["_persist"] == "{\"version\":-1}", "persist:root içindeki diğer metinler bayt bayt aynı");
+        Check(Convert.ToInt32(RenameStatus(outJson)["connectedAt"]) == 5, "status içindeki diğer değer korunur");
+        Check(OpenVpnRename.NameOf(fixture, "111") == "Eski Ad" && OpenVpnRename.NameOf(fixture, "999") == "", "NameOf: var olan ve olmayan profil");
+        Check(OpenVpnRename.Rewrite(fixture, "999", "X", out err) == null && err == "Profil OpenVPN Connect'te bulunamadı.", "bilinmeyen kimlik");
+        Check(OpenVpnRename.Rewrite("{\"persist:root\":{\"other\":{}}}", "111", "X", out err) == null && err == "config.json beklenen düzende değil.", "beklenmeyen düzen");
+        Check(OpenVpnRename.Rewrite("{ bozuk", "111", "X", out err) == null && err == "config.json beklenen düzende değil.", "bozuk JSON");
+        Check(OpenVpnRename.Rewrite("", "111", "X", out err) == null && err != null, "boş dosya");
+        var noBracket = fixture.Replace("vpn.ornek.example [Eski Ad]", "vpn.ornek.example");
+        var kept = OpenVpnRename.Rewrite(noBracket, "111", "Yeni", out err);
+        Check(kept != null && (string)RenameField(kept, "111", "name") == "vpn.ornek.example", "name eski adı içermiyorsa dokunulmaz");
+    }
+
+    static void OpenVpnApply()
+    {
+        Check(OpenVpnRename.Decide("Yeni", true, "Eski") == PendingAction.Apply, "bekleyen ad uygulanır");
+        Check(OpenVpnRename.Decide("Yeni", false, "") == PendingAction.Drop, "profil silinmiş: bırakılır");
+        Check(OpenVpnRename.Decide("Yeni", true, "Yeni") == PendingAction.Drop, "istemcide zaten o ad: bırakılır");
+        // closing OpenVPN Connect must never cost a connection
+        Check(OpenVpnRename.Busy(true, "CONNECTED", 600), "tünel açık: meşgul");
+        Check(OpenVpnRename.Busy(false, "CONNECTING", 2) && OpenVpnRename.Busy(false, "ASSIGN_IP", 2) && OpenVpnRename.Busy(false, "WAIT", 30), "OpenVPN kendi başına bağlanıyor: meşgul");
+        Check(OpenVpnRename.Busy(false, "CONNECTED", 1), "CONNECTED yeni yazıldı, adaptör henüz görünmüyor: meşgul");
+        Check(!OpenVpnRename.Busy(false, "DISCONNECTED", 1) && !OpenVpnRename.Busy(false, "", 1) && !OpenVpnRename.Busy(false, "EXITING", 1), "kesik: meşgul değil");
+        Check(!OpenVpnRename.Busy(false, "CONNECTING", 600) && !OpenVpnRename.Busy(false, "CONNECTED", 600), "eski olay (çökme kalıntısı), tünel yok: meşgul değil");
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "config.json");
+            File.WriteAllText(path, RenameFixture(), new UTF8Encoding(false));
+            var err = OpenVpnRename.ApplyToFile(path, new Dictionary<string, string> { { "111", "Yeni Ad" }, { "222", "İkinci" } });
+            Check(err == null, "dosyaya yazılır (" + err + ")");
+            var text = File.ReadAllText(path);
+            Check(OpenVpnRename.NameOf(text, "111") == "Yeni Ad" && OpenVpnRename.NameOf(text, "222") == "İkinci", "iki ad da dosyada");
+            Check(File.Exists(path + ".vpnm-yedek") && OpenVpnRename.NameOf(File.ReadAllText(path + ".vpnm-yedek"), "111") == "Eski Ad", "yedek eski içeriği tutar");
+            Check(!File.Exists(path + ".vpnm-tmp"), "geçici dosya kalmaz");
+            Check(new UTF8Encoding(false).GetPreamble().Length == 0 && File.ReadAllBytes(path)[0] == (byte)'{', "dosya BOM'suz UTF-8 yazılır");
+            var before = File.ReadAllText(path);
+            Check(OpenVpnRename.ApplyToFile(path, new Dictionary<string, string> { { "111", "Üçüncü" }, { "999", "X" } }) != null, "bilinmeyen kimlik hata verir");
+            Check(File.ReadAllText(path) == before, "hata olunca dosya değişmez (ilk ad da yazılmaz)");
+            Check(OpenVpnRename.ApplyToFile(Path.Combine(dir, "yok.json"), new Dictionary<string, string> { { "111", "X" } }) != null, "dosya yoksa hata verir");
+            Check(OpenVpnRename.ApplyToFile(path, new Dictionary<string, string>()) == null && File.ReadAllText(path) == before, "boş istek: dosyaya dokunulmaz");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void SophosRename()
+    {
+        var a = SophosStore.RenameArgs("conn-1", "Acme \"Merkez\"");
+        Check(a.Length == 5 && a[0] == "update" && a[1] == "-n" && a[2] == "conn-1" && a[3] == "-y" && a[4] == "Acme \"Merkez\"", "sccli update -n AD -y GÖRÜNEN");
+        Check(SophosStore.JoinArgs(a).Contains("\\\"Merkez\\\""), "tırnaklar kaçırılır");
+    }
+
+    static void FortiRenameKeys()
+    {
+        var basePath = @"Software\OpenVpnQuickSearch.Tests\" + Guid.NewGuid().ToString("N");
+        var root = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(basePath);
+        try
+        {
+            var a = root.CreateSubKey("A"); var b = root.CreateSubKey("B");
+            foreach (var hive in new[] { a, b })
+                using (var k = hive.CreateSubKey("Eski"))
+                {
+                    k.SetValue("Server", "vpn.ornek.example:443", Microsoft.Win32.RegistryValueKind.String);
+                    k.SetValue("promptusername", 1, Microsoft.Win32.RegistryValueKind.DWord);
+                    k.SetValue("DATA1", new byte[] { 1, 2, 3 }, Microsoft.Win32.RegistryValueKind.Binary);
+                    k.SetValue("Description", "%TEMP%", Microsoft.Win32.RegistryValueKind.ExpandString);
+                    using (var sub = k.CreateSubKey("Alt")) sub.SetValue("x", "y");
+                }
+            Check(FortiRename.RenameAll(new[] { a, b }, "Eski", "Yeni") == FortiRename.Ok, "iki anahtar da yeniden adlandırılır");
+            Check(!FortiRename.Exists(a, "Eski") && FortiRename.Exists(a, "Yeni") && !FortiRename.Exists(b, "Eski") && FortiRename.Exists(b, "Yeni"), "eski yok, yeni var");
+            using (var k = a.OpenSubKey("Yeni"))
+            {
+                Check((string)k.GetValue("Server") == "vpn.ornek.example:443" && k.GetValueKind("Server") == Microsoft.Win32.RegistryValueKind.String, "metin değeri korunur");
+                Check((int)k.GetValue("promptusername") == 1 && k.GetValueKind("promptusername") == Microsoft.Win32.RegistryValueKind.DWord, "DWORD korunur");
+                Check(((byte[])k.GetValue("DATA1")).SequenceEqual(new byte[] { 1, 2, 3 }) && k.GetValueKind("DATA1") == Microsoft.Win32.RegistryValueKind.Binary, "ikili değer korunur");
+                Check((string)k.GetValue("Description", null, Microsoft.Win32.RegistryValueOptions.DoNotExpandEnvironmentNames) == "%TEMP%" && k.GetValueKind("Description") == Microsoft.Win32.RegistryValueKind.ExpandString, "ExpandString genişletilmeden korunur");
+                using (var sub = k.OpenSubKey("Alt")) Check(sub != null && (string)sub.GetValue("x") == "y", "alt anahtar taşınır");
+            }
+            // the target exists in one hive only: nothing changes anywhere
+            a.CreateSubKey("Bir").SetValue("Server", "x"); b.CreateSubKey("Bir").SetValue("Server", "x"); b.CreateSubKey("Dolu").SetValue("Server", "y");
+            Check(FortiRename.RenameAll(new[] { a, b }, "Bir", "Dolu") == FortiRename.TargetExists, "hedef bir kovanda varsa reddedilir");
+            Check(FortiRename.Exists(a, "Bir") && FortiRename.Exists(b, "Bir") && !FortiRename.Exists(a, "Dolu"), "hiçbir kovan değişmez");
+            Check(FortiRename.RenameAll(new[] { a, b }, "bir", "BIR2") == FortiRename.Ok && FortiRename.Exists(a, "BIR2"), "kayıt defteri adları büyük/küçük harf ayırmaz");
+            Check(FortiRename.RenameAll(new[] { a, b }, "Yok", "Z") == FortiRename.NotFound, "olmayan tünel");
+            // the helper runs elevated: a name must never address another key ("Yeni\Alt" is the tunnel's own subkey)
+            Check(FortiRename.RenameKey(a, @"Yeni\Alt", "Kacak") != FortiRename.Ok && !FortiRename.Exists(a, "Kacak"), "eski adda \\ reddedilir");
+            Check(FortiRename.RenameKey(a, "Yeni", @"Bir\Kacak") != FortiRename.Ok && FortiRename.Exists(a, "Yeni"), "yeni adda \\ reddedilir");
+            using (var k = a.OpenSubKey(@"Yeni\Alt")) Check(k != null, "reddedilen istek hiçbir anahtarı silmez");
+            // a tunnel that exists in one hive only
+            b.CreateSubKey("Tek").SetValue("Server", "t");
+            Check(FortiRename.RenameAll(new[] { a, b }, "Tek", "Tek2") == FortiRename.Ok && FortiRename.Exists(b, "Tek2") && !FortiRename.Exists(a, "Tek2"), "yalnız bir kovandaki tünel");
+            // only the letter case changes: allowed, and the key is still there afterwards
+            Check(FortiRename.RenameAll(new[] { a, b }, "Tek2", "TEK2") == FortiRename.Ok && FortiRename.Exists(b, "TEK2") && b.GetSubKeyNames().Contains("TEK2"), "yalnız harf büyüklüğü değişen ad");
+            a.Dispose(); b.Dispose();
+        }
+        finally
+        {
+            root.Dispose();
+            try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(basePath, false); } catch { }
+            try { using (var t = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\OpenVpnQuickSearch.Tests", true)) if (t != null && t.SubKeyCount == 0) Microsoft.Win32.Registry.CurrentUser.DeleteSubKey(@"Software\OpenVpnQuickSearch.Tests", false); } catch { }
+        }
+
+        var pins = IdMigration.Pins(new HashSet<string> { "forti-ssl:Eski", "123" }, "forti-ssl:Eski", "forti-ssl:Yeni");
+        Check(pins.SetEquals(new[] { "forti-ssl:Yeni", "123" }), "sabitleme yeni kimliğe taşınır");
+        Check(IdMigration.Pins(new HashSet<string> { "123" }, "forti-ssl:Eski", "forti-ssl:Yeni").SetEquals(new[] { "123" }), "sabit değilse sabitlenmez");
+        var lines = IdMigration.HistoryLines(new[] { "ProfileId;ProfileName;StartUtc;EndUtc", "forti-ssl:Eski;Eski;2026-11-26T14:05:51Z;2026-11-26T14:06:25Z", "123;A;2026-11-27T05:41:13Z;2026-11-27T05:41:40Z", "\"forti-ssl:Eski\";\"Es;ki\";2026-11-26T15:00:00Z;2026-11-26T15:10:00Z" }, "forti-ssl:Eski", "forti-ssl:Yeni", "Ye;ni");
+        Check(lines[0] == "ProfileId;ProfileName;StartUtc;EndUtc" && lines[1] == "forti-ssl:Yeni;\"Ye;ni\";2026-11-26T14:05:51Z;2026-11-26T14:06:25Z", "geçmiş satırı yeni kimliğe taşınır, ad tırnaklanır");
+        Check(lines[2] == "123;A;2026-11-27T05:41:13Z;2026-11-27T05:41:40Z", "başka profilin satırı aynen kalır");
+        Check(lines[3] == "forti-ssl:Yeni;\"Ye;ni\";2026-11-26T15:00:00Z;2026-11-26T15:10:00Z", "tırnaklı satır da taşınır");
+        Check(FortiRename.Message(FortiRename.Declined) == "Yönetici onayı verilmedi; ad değişmedi.", "UAC reddi metni");
+        Check(FortiRename.Message(FortiRename.TargetExists) == "Bu adda bir FortiClient tüneli zaten var.", "hedef var metni");
+        string o, n;
+        var args = FortiRename.ElevatedArguments("Eski \"Ad\"", "Yeni İş");
+        Check(FortiRename.TryParseArguments(args.Split(' '), out o, out n) && o == "Eski \"Ad\"" && n == "Yeni İş", "yükseltilmiş işlem argümanları gidip gelir");
+        Check(!FortiRename.TryParseArguments(new[] { "--rename-forti", "bozuk!!", "x" }, out o, out n), "bozuk argüman reddedilir");
+        Check(!FortiRename.TryParseArguments(new[] { "--rename-forti" }, out o, out n), "eksik argüman reddedilir");
+    }
+
+    static BackupEntry Entry(string id, string name, string file) { return new BackupEntry { Id = id, Name = name, File = file }; }
+    static KeyValuePair<string, string> Pair(string a, string b) { return new KeyValuePair<string, string>(a, b); }
+
+    static void PasswordLinkPlanning()
+    {
+        var manifest = new List<BackupEntry>
+        {
+            Entry("100", "Acme: Merkez", "Acme Merkez.ovpn"),   // imported under the file name
+            Entry("101", "Beta", "Beta.ovpn"),
+            Entry("102", "Parolasız", "Parolasız.ovpn"),        // old device kept no password
+            Entry("103", "Silinmiş", "Silinmiş.ovpn"),          // not on this device
+            Entry("104", "Zaten", "Zaten.ovpn"),                // already has a password here
+            Entry("105", "İkiz", "İkiz.ovpn"),                  // two profiles carry this name here
+            Entry("106", "Aynı", "Aynı.ovpn"),                  // same device: id did not change
+            Entry("107", "Çift", "Çift.ovpn"), Entry("108", "ÇİFT", "Çift (2).ovpn"),   // two entries, one profile
+            Entry("109", "Dosyasız", null)
+        };
+        var profiles = new List<KeyValuePair<string, string>>
+        {
+            Pair("900", "Acme Merkez"), Pair("901", "beta"), Pair("902", "Parolasız"), Pair("904", "Zaten"),
+            Pair("905", "İkiz"), Pair("915", "ikiz"), Pair("106", "Aynı"), Pair("907", "Çift"), Pair("909", "Dosyasız"), Pair("999", "Yedekte Yok")
+        };
+        var have = new HashSet<string> { "100", "101", "103", "104", "904", "105", "106", "107", "108", "109" };
+        var plan = PasswordLink.Plan(manifest, profiles, have.Contains);
+        Check(plan.Pairs.Count == 3, "üç profil bağlanır (" + plan.Pairs.Count + ")");
+        Check(plan.Pairs.Contains(Pair("100", "900")), "dosya adıyla eşleşir (ad dosya adına uymasa da)");
+        Check(plan.Pairs.Contains(Pair("101", "901")), "büyük/küçük harf fark etmez");
+        Check(plan.Pairs.Contains(Pair("109", "909")), "dosya adı yoksa adla eşleşir");
+        Check(plan.NoOldPassword == 1, "eski kaydı olmayan atlanır");
+        Check(plan.NoProfile == 1, "bu cihazda olmayan profil atlanır");
+        Check(plan.AlreadySaved == 1, "yeni kimlikte kayıt varsa dokunulmaz");
+        Check(plan.SameId == 1, "kimlik aynıysa yapılacak iş yok");
+        Check(plan.Ambiguous == 3, "aynı adlı iki profil ve aynı profile düşen iki girdi belirsiz (" + plan.Ambiguous + ")");
+        Check(plan.Skipped == 7, "atlanan toplamı");
+        Check(PasswordLink.Plan(new List<BackupEntry>(), profiles, have.Contains).Pairs.Count == 0, "boş manifest: boş plan");
+        Check(PasswordLink.Plan(null, null, null).Pairs.Count == 0, "null girdiler hata vermez");
+        var text = PasswordLink.Summary(plan);
+        Check(text.Contains("3") && !text.Contains("Acme") && !text.Contains("900"), "özet yalnız sayı içerir");
+
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var zipPath = Path.Combine(dir, "yedek.zip");
+            using (var fs = new FileStream(zipPath, FileMode.Create))
+            using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+            using (var st = zip.CreateEntry("manifest.json").Open())
+            {
+                var m = Encoding.UTF8.GetBytes("[{\"id\":\"100\",\"name\":\"Acme: Merkez\",\"file\":\"Acme Merkez.ovpn\",\"username\":\"u\"},{\"id\":\"109\",\"name\":\"Dosyasız\",\"file\":null},{\"name\":\"kimliksiz\"},7]");
+                st.Write(m, 0, m.Length);
+            }
+            var read = PasswordLink.ReadManifest(zipPath);
+            Check(read.Count == 2 && read[0].Id == "100" && read[0].Name == "Acme: Merkez" && read[0].File == "Acme Merkez.ovpn", "manifest okunur; kimliksiz ve bozuk girdi atlanır");
+            Check(read.Count == 2 && read[1].File == null, "dosyası olmayan girdi");
+            File.WriteAllText(Path.Combine(dir, "bozuk.zip"), "zip değil");
+            Check(PasswordLink.ReadManifest(Path.Combine(dir, "bozuk.zip")).Count == 0 && PasswordLink.ReadManifest(Path.Combine(dir, "yok.zip")).Count == 0, "bozuk ya da olmayan zip: boş liste");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void PasswordLinkCredentials()
+    {
+        const string px = "OpenVpnQuickSearch:test-link:";
+        var oldId = "eski-" + Guid.NewGuid().ToString("N"); var newId = "yeni-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            Check(OpenVpnCredentials.Prefix == "org.openvpn.client./", "OpenVPN Connect'in hedef öneki");
+            Check(!OpenVpnCredentials.Copy(oldId, newId, px), "eski kayıt yoksa kopyalanmaz");
+            Check(FortiCredentialStore.Save(oldId, new FortiCredential { Username = oldId, Password = "deneme-Şİ1 \U0001F680" }, px) == null, "deneme kaydı");
+            Check(OpenVpnCredentials.Has(oldId, px) && !OpenVpnCredentials.Has(newId, px), "Has: eski var, yeni yok");
+            Check(OpenVpnCredentials.Copy(oldId, newId, px), "kopyalanır");
+            var back = FortiCredentialStore.Load(newId, px);
+            Check(back != null && back.Password == "deneme-Şİ1 \U0001F680", "bayt dizisi aynen taşınır");
+            Check(back != null && back.Username == newId, "kullanıcı alanı yeni kimlik olur");
+            Check(OpenVpnCredentials.Has(oldId, px), "eski kayıt silinmez");
+            Check(FortiCredentialStore.Save(oldId, new FortiCredential { Username = oldId, Password = "başka" }, px) == null && !OpenVpnCredentials.Copy(oldId, newId, px)
+                  && FortiCredentialStore.Load(newId, px).Password == "deneme-Şİ1 \U0001F680", "var olan kaydın üzerine yazılmaz");
+            Check(OpenVpnCredentials.Delete(newId, px) && !OpenVpnCredentials.Has(newId, px), "sil");
+        }
+        finally { FortiCredentialStore.Delete(oldId, px); FortiCredentialStore.Delete(newId, px); }
+    }
+
+    static void PasswordLinkApply()
+    {
+        string err;
+        var fixture = RenameFixture();
+        Check(OpenVpnRename.SavedOf(fixture, "111") && !OpenVpnRename.SavedOf(fixture, "222") && !OpenVpnRename.SavedOf(fixture, "999"), "SavedOf: açık, alan yok, profil yok");
+        var marked = OpenVpnRename.MarkSaved(fixture, new[] { "222" }, out err);
+        Check(marked != null && err == null && OpenVpnRename.SavedOf(marked, "222"), "bayrak açılır");
+        Check(marked != null && RenameField(marked, "222", "savedPassword") is bool, "bayrak JSON mantıksal değeridir");
+        Check(marked != null && OpenVpnRename.NameOf(marked, "222") == "Diğer" && OpenVpnRename.SavedOf(marked, "111") && (string)RenamePersist(marked)["lastAction"] == "{\"type\":\"X\"}", "diğer alanlar korunur");
+        Check(OpenVpnRename.MarkSaved(fixture, new[] { "999" }, out err) == null && err == "Profil OpenVPN Connect'te bulunamadı.", "bilinmeyen kimlik");
+        Check(OpenVpnRename.MarkSaved("{ bozuk", new[] { "111" }, out err) == null && err == "config.json beklenen düzende değil.", "bozuk JSON");
+
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "config.json");
+            File.WriteAllText(path, fixture, new UTF8Encoding(false));
+            Check(OpenVpnRename.ApplyToFile(path, null, new[] { "222" }) == null && OpenVpnRename.SavedOf(File.ReadAllText(path), "222"), "bayrak dosyaya yazılır");
+            Check(File.Exists(path + ".vpnm-yedek") && !OpenVpnRename.SavedOf(File.ReadAllText(path + ".vpnm-yedek"), "222"), "yedek eski içeriği tutar");
+            var before = File.ReadAllText(path);
+            Check(OpenVpnRename.ApplyToFile(path, null, new[] { "111", "999" }) != null && File.ReadAllText(path) == before, "bir kimlik yoksa dosya değişmez");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+
+        var pairs = new List<KeyValuePair<string, string>> { Pair("1", "11"), Pair("2", "22"), Pair("3", "33") };
+        var copied = new List<string>(); var deleted = new List<string>(); ICollection<string> flagged = null; int linked;
+        Func<string, string, bool> copy = delegate(string o, string n) { if (o == "2") return false; copied.Add(n); return true; };
+        var res = PasswordLink.Apply(pairs, copy, deleted.Add, delegate(ICollection<string> ids) { flagged = ids; return null; }, out linked);
+        Check(res == null && linked == 2, "kopyalanabilen iki profil bağlanır");
+        Check(flagged != null && flagged.Count == 2 && flagged.Contains("11") && flagged.Contains("33"), "bayrak yalnız kopyalananlara açılır");
+        Check(deleted.Count == 0, "başarıda hiçbir kayıt silinmez");
+        copied.Clear(); flagged = null;
+        res = PasswordLink.Apply(pairs, copy, deleted.Add, delegate(ICollection<string> ids) { return "yazılamadı"; }, out linked);
+        Check(res == "yazılamadı" && linked == 0, "config.json yazılamazsa hata döner");
+        Check(deleted.Count == 2 && deleted.Contains("11") && deleted.Contains("33"), "bu çalıştırmada kopyalanan kayıtlar geri alınır");
+        var called = false;
+        res = PasswordLink.Apply(pairs, delegate(string o, string n) { return false; }, deleted.Add, delegate(ICollection<string> ids) { called = true; return null; }, out linked);
+        Check(res != null && linked == 0 && !called, "hiçbiri kopyalanamazsa OpenVPN Connect'e dokunulmaz");
+    }
+
+    static void NamesInBackup()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ovpnqs-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        NameStore.FolderOverride = dir;
+        try
+        {
+            Check(BackupService.NamesEntry() == null, "ad yokken yedeğe names.json konmaz");
+            NameStore.Set("watchguard-ssl:1.2.3.4:443", "Acme");
+            NameStore.Set("watchguard-ssl:5.6.7.8:443", "Beta İş");
+            var bytes = BackupService.NamesEntry();
+            Check(bytes != null && bytes.Length > 0, "ad varken names.json içeriği üretilir");
+            if (bytes == null) return;
+            var zipPath = Path.Combine(dir, "yedek.zip");
+            using (var fs = new FileStream(zipPath, FileMode.Create))
+            using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                using (var st = zip.CreateEntry(BackupService.NamesFile).Open()) st.Write(bytes, 0, bytes.Length);
+                using (var st = zip.CreateEntry("manifest.json").Open()) { var m = Encoding.UTF8.GetBytes("[]"); st.Write(m, 0, m.Length); }
+            }
+            var read = ImportService.ReadNames(zipPath);
+            Check(read.Count == 2 && read["watchguard-ssl:5.6.7.8:443"] == "Beta İş", "yedekten adlar okunur");
+            // restore into a PC that already named one of them: the existing name stays
+            NameStore.Set("watchguard-ssl:1.2.3.4:443", "Benim Adım");
+            NameStore.Set("watchguard-ssl:5.6.7.8:443", "");
+            Check(NameStore.Merge(read) == 1, "yalnız eksik ad eklenir");
+            var now = NameStore.Load();
+            Check(now["watchguard-ssl:1.2.3.4:443"] == "Benim Adım" && now["watchguard-ssl:5.6.7.8:443"] == "Beta İş", "var olan ad korunur, eksik olan geri gelir");
+            var noNames = Path.Combine(dir, "eski.zip");
+            using (var fs = new FileStream(noNames, FileMode.Create))
+            using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+            using (var st = zip.CreateEntry("manifest.json").Open()) { var m = Encoding.UTF8.GetBytes("[]"); st.Write(m, 0, m.Length); }
+            Check(ImportService.ReadNames(noNames).Count == 0, "eski yedek (names.json yok): boş");
+            File.WriteAllText(Path.Combine(dir, "bozuk.zip"), "zip değil");
+            Check(ImportService.ReadNames(Path.Combine(dir, "bozuk.zip")).Count == 0, "bozuk zip: boş, hata vermez");
+        }
+        finally
+        {
+            NameStore.FolderOverride = null;
             try { Directory.Delete(dir, true); } catch { }
         }
     }
@@ -455,9 +894,15 @@ static class Tests
     {
         var t = QuietWindow.OpenVpnRestoreAfterSeconds;
         Check(t >= 8 && t <= 10, "bekleme süresi 8-10 sn");
-        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(t - 0.5, false), "kısa süre: pencere küçük kalır");
-        Check(QuietWindow.ShouldRestoreOpenVpnWindow(t, false) && QuietWindow.ShouldRestoreOpenVpnWindow(44, false), "süre doldu, bağlanmadı: pencere geri gelir (parola / MFA)");
-        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(t + 5, true), "bağlandı: pencere küçük kalır");
+        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(t - 0.5, t - 0.5, false), "kısa süre: pencere küçük kalır");
+        Check(QuietWindow.ShouldRestoreOpenVpnWindow(t, t, false) && QuietWindow.ShouldRestoreOpenVpnWindow(44, 44, false), "süre doldu, bağlanmadı: pencere geri gelir (parola / MFA)");
+        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(t + 5, t + 5, true), "bağlandı: pencere küçük kalır");
+        // Profile switch (27.11.2026 10:39): command at 0 s, old tunnel down at 2.5 s, new session events from
+        // 6.5 s to 15 s. OpenVPN was working the whole time, so its window must not come back at 9 s.
+        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(t + 0.1, 2.6, false), "profil geçişi: OpenVPN ilerliyor, pencere küçük kalır");
+        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(14, 0.4, false), "geçişin sonu: son olay az önce, pencere küçük kalır");
+        Check(QuietWindow.ShouldRestoreOpenVpnWindow(20, t, false), "ilerleme durdu (parola soruyor): pencere geri gelir");
+        Check(!QuietWindow.ShouldRestoreOpenVpnWindow(3, 600, false), "eski günlük etkinliği yeni komutu etkilemez");
         QuietWindow.ForgetMinimized();
         Check(!QuietWindow.HasMinimized && !QuietWindow.RestoreMinimized(), "küçültülen pencere yoksa hiçbir pencereye dokunulmaz");
     }

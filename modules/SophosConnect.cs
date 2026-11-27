@@ -245,6 +245,22 @@ internal static class SophosStore
         return false;
     }
 
+    // `sccli update -n NAME -y DISPLAYNAME`: sets the name Sophos Connect shows. The internal name
+    // (this app's id, used by enable / disable / get) does not change.
+    internal static string[] RenameArgs(string internalName, string displayName) { return new[] { "update", "-n", internalName, "-y", displayName }; }
+
+    // Returns an error message or null.
+    public static string Rename(VpnProfile p, string displayName)
+    {
+        if (!IsInstalled) return "Sophos Connect bulunamadı.";
+        try
+        {
+            string o, e; int code;
+            return Run(RenameArgs(ConnectionName(p), displayName), out o, out e, out code) ? null : FailureMessage("Ad değiştirilemedi", code);
+        }
+        catch { return "Ad değiştirilemedi."; }
+    }
+
     // Status text for a failed sccli command: a fixed message and the exit code only. sccli's own
     // output is never shown (a command that echoes its arguments could reveal the password).
     // exitCode TimedOut: sccli did not finish in time.

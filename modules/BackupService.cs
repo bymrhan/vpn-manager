@@ -41,7 +41,19 @@ internal static class BackupService
         get { return Path.Combine(Path.GetDirectoryName(ProfileStore.ConfigPath), "profiles"); }
     }
 
-    // Creates one zip with "<profile>.ovpn" files, manifest.json and BENIOKU.txt.
+    // names.json in the zip: the names the panel keeps itself (WatchGuard servers). null when there are none.
+    public const string NamesFile = "names.json";
+    internal static byte[] NamesEntry()
+    {
+        try
+        {
+            var names = NameStore.Load();
+            return names.Count == 0 ? null : new UTF8Encoding(false).GetBytes(new JavaScriptSerializer().Serialize(names));
+        }
+        catch { return null; }
+    }
+
+    // Creates one zip with "<profile>.ovpn" files, manifest.json, BENIOKU.txt and (when there are any) names.json.
     // count = number of .ovpn files written (profiles without readable config are listed in the manifest with file = null).
     public static string CreateBackup(string folder, ICollection<string> pinnedIds, out int count)
     {
@@ -89,6 +101,8 @@ internal static class BackupService
                 foreach (var f in files) WriteEntry(zip, f.Key, f.Value);
                 WriteEntry(zip, ManifestName, new UTF8Encoding(false).GetBytes(manifestJson));
                 WriteEntry(zip, ReadmeName, new UTF8Encoding(true).GetBytes(readme));
+                var names = NamesEntry();
+                if (names != null) WriteEntry(zip, NamesFile, names);
             }
             File.Move(partPath, finalPath);
         }

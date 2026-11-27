@@ -44,6 +44,7 @@ internal sealed class ProfileList : Control
     public Func<bool> AllowAmbient = delegate { return true; };
     public void Wake() { anim.Kick(); }
     public Func<VpnProfile, bool> IsPinned = delegate { return false; };
+    public Func<VpnProfile, bool> IsPendingName = delegate { return false; };   // renamed here, not yet written into OpenVPN Connect
     public bool ShowLogos;   // provider logo before the provider name (Settings.ShowProviderLogos)
     public Func<VpnProfile, ReachState> ReachOf = delegate { return ReachState.Unknown; };
     public Func<VpnProfile, string> LiveText = delegate { return null; };
@@ -217,10 +218,13 @@ internal sealed class ProfileList : Control
     {
         if (!Visible) return false;
         var now = anim.Time; var moving = false;
+        // The hover / selection plates and the action button only touch the rows they pass over:
+        // those frames repaint that band, not the whole list (a full repaint per frame made hovering stutter).
+        var hovBefore = HoverBand(); var selBefore = SelectionBand();
         if (scroll.Step(dt)) moving = true;
-        if (selA.Step(dt) | selY.Step(dt) | selH.Step(dt)) moving = true;
-        if (hovA.Step(dt) | hovY.Step(dt) | hovH.Step(dt)) moving = true;
-        if (plugPress.Step(dt)) moving = true;
+        var selMoves = selA.Step(dt) | selY.Step(dt) | selH.Step(dt);
+        var hovMoves = hovA.Step(dt) | hovY.Step(dt) | hovH.Step(dt);
+        var pressMoves = plugPress.Step(dt);
         foreach (var kv in flip.ToList()) { if (kv.Value.Step(dt)) moving = true; else flip.Remove(kv.Key); }
         foreach (var kv in pinPop.ToList()) { if (now - kv.Value > 0.5F) pinPop.Remove(kv.Key); moving = true; }
         if (ghosts.Count > 0) { ghosts.RemoveAll(gh => now - gh.T0 > LeaveDuration); moving = true; }
@@ -235,6 +239,13 @@ internal sealed class ProfileList : Control
         var live = false; var liveRect = Rectangle.Empty;
         if (AllowAmbient()) foreach (var r in rows) if (!r.IsHeader && LiveText(r.Profile) != null) { live = true; liveRect = Rectangle.Inflate(RowRect(r), S(10), S(10)); break; }
         if (moving) { Invalidate(); anim.Interval = 15; return true; }
+        if (selMoves || hovMoves || pressMoves)
+        {
+            if (selMoves) InvalidateBand(Join(selBefore, SelectionBand()));
+            if (hovMoves) InvalidateBand(Join(hovBefore, HoverBand()));
+            if (pressMoves) InvalidateRow(hoverIndex);
+            anim.Interval = 15; return true;
+        }
         // ambient only repaints the connected row itself, ~12 fps
         if (live) { anim.Interval = 80; if (now - lastAmbient > 0.07F) { lastAmbient = now; Invalidate(liveRect); } return true; }
         return false;
@@ -270,11 +281,40 @@ internal sealed class ProfileList : Control
 
     Rectangle ReachRect(Rectangle rr, Rectangle textArea) { return new Rectangle(textArea.X - S(1), rr.Y + S(31), S(14), S(18)); }
 
+    // ---------- Partial repaint ----------
+
+    // Vertical band (control coordinates) covered by the hover and selection plates right now.
+    Rectangle HoverBand()
+    {
+        if (hovA.Value <= 0.01F && hovA.Target <= 0) return Rectangle.Empty;
+        return new Rectangle(0, (int)Math.Floor(hovY.Value) - (int)Math.Round(Scroll), Width, (int)Math.Ceiling(hovH.Value) + 1);
+    }
+
+    Rectangle SelectionBand()
+    {
+        if (selectedIndex < 0) return Rectangle.Empty;
+        return new Rectangle(0, (int)Math.Floor(selY.Value) - (int)Math.Round(Scroll), Width, (int)Math.Ceiling(selH.Value) + 1);
+    }
+
+    static Rectangle Join(Rectangle a, Rectangle b) { return a.IsEmpty ? b : b.IsEmpty ? a : Rectangle.Union(a, b); }
+
+    void InvalidateBand(Rectangle band)
+    {
+        if (band.IsEmpty) return;
+        Invalidate(new Rectangle(0, band.Y - S(4), Width, band.Height + S(8)));
+    }
+
+    void InvalidateRow(int i)
+    {
+        if (i >= 0 && i < rows.Count) InvalidateBand(RowRect(rows[i]));
+    }
+
     // ---------- Mouse ----------
 
     void SetHover(int i)
     {
         if (i == hoverIndex) return;
+        InvalidateRow(hoverIndex); InvalidateRow(i);   // both rows change their idle card, star and button
         hoverIndex = i;
         if (i >= 0) { var r = rows[i]; if (hovA.Value < 0.05F) { hovY.Snap(r.Top); hovH.Snap(r.Height); } hovY.Target = r.Top; hovH.Target = r.Height; hovA.Target = 1; }
         else hovA.Target = 0;
@@ -308,7 +348,7 @@ internal sealed class ProfileList : Control
             var textX = rr.X + S(12) + S(36) + S(14);
             reach = ReachOf(rows[i].Profile) != ReachState.Unknown && ReachRect(rr, new Rectangle(textX, rr.Y, 10, rr.Height)).Contains(e.Location);
         }
-        if (star != hoverStar || plug != hoverPlug || reach != hoverReach) { hoverStar = star; hoverPlug = plug; hoverReach = reach; Invalidate(); }
+        if (star != hoverStar || plug != hoverPlug || reach != hoverReach) { hoverStar = star; hoverPlug = plug; hoverReach = reach; InvalidateRow(hoverIndex); InvalidateRow(i); }
         SetHover(i);
         if (reach && i >= 0)
         {
@@ -317,8 +357,9 @@ internal sealed class ProfileList : Control
             if (text != tipText) { tipText = text; tip.Show(text, this, e.X + S(12), e.Y + S(18), 1800); }
         }
         else if (tipText.Length > 0) { tipText = ""; tip.Hide(this); }
-        if (bar != hoverBar) { hoverBar = bar; barAlpha = bar ? 1 : barAlpha; anim.Kick(); }
-        if (!dragThumb && Math.Abs(hovA.Value) > 0.01F) Invalidate(); // sheen follows the pointer
+        if (bar != hoverBar) { hoverBar = bar; barAlpha = bar ? 1 : barAlpha; anim.Kick(); Invalidate(new Rectangle(Width - S(16), 0, S(16), Height)); }
+        // sheen follows the pointer: only the selected plate carries one, so only that row repaints
+        if (i >= 0 && i == selectedIndex) InvalidateRow(i);
         Cursor = i >= 0 ? Cursors.Hand : Cursors.Default;
     }
 
@@ -504,8 +545,10 @@ internal sealed class ProfileList : Control
         }
 
         var dots = new string('.', (int)(now * 3) % 4);
-        var status = connecting ? "Bağlanıyor" + dots : disconnecting ? "Kesiliyor" + dots : live ?? Ui.Relative(p.LastConnected);
-        var statusFont = Ui.SubFont; var statusColor = connecting ? Ui.Highlight : disconnecting ? Ui.Warning : live != null ? Ui.Success : Ui.Faint;
+        // a name that still has to be written into OpenVPN Connect says so where the "last connected" text is
+        var pendingName = !connecting && !disconnecting && live == null && IsPendingName(p);
+        var status = connecting ? "Bağlanıyor" + dots : disconnecting ? "Kesiliyor" + dots : live ?? (pendingName ? "ad yazılmayı bekliyor" : Ui.Relative(p.LastConnected));
+        var statusFont = Ui.SubFont; var statusColor = connecting ? Ui.Highlight : disconnecting ? Ui.Warning : live != null ? Ui.Success : pendingName ? Ui.Warning : Ui.Faint;
         var right = (starVisible ? star.X : plugVisible ? plug.X : plug.Right) - S(8);
         var iconW = live != null || connecting || disconnecting ? S(18) : 0;
         var sw = status.Length > 0 ? GText.Measure(connecting ? "Bağlanıyor..." : disconnecting ? "Kesiliyor..." : status, statusFont).Width : 0;
@@ -527,6 +570,12 @@ internal sealed class ProfileList : Control
         var textRight = right - sw - iconW - S(10);
         DrawHighlighted(g, p.Name, Ui.RowNameFont, Fade(Ui.Text, appear), new Rectangle(x, rr.Y + S(9), Math.Max(10, textRight - x), S(20)));
         var sub = VpnProviders.RowSubLine(p);
+        if (IsPendingName(p))
+        {
+            // the new name is shown already; a clock after it says it still has to reach OpenVPN Connect
+            var nw = Math.Min(GText.Measure(p.Name, Ui.RowNameFont).Width, Math.Max(10, textRight - x - S(20)));
+            Assets.Draw(g, "reach-checking", new RectangleF(x + nw + S(6), rr.Y + S(12), S(13), S(13)), Fade(Ui.Warning, appear), 1.3F);
+        }
         var sx = x;
         // provider logo before the provider name: [logo] Provider · server · user
         if (ShowLogos)

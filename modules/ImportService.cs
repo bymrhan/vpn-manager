@@ -84,6 +84,33 @@ internal static class ImportService
 
     // Reads the backup manifest and returns a display-name -> username map (usernames only; the
     // backup never contains passwords). Keys are file names without ".ovpn", matching ImportFiles.
+    // names.json of a backup: profile id -> the name the panel kept for it. Empty when the backup
+    // has none (older backups) or cannot be read.
+    public static Dictionary<string, string> ReadNames(string zipPath)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            if (string.IsNullOrEmpty(zipPath) || !File.Exists(zipPath)) return map;
+            using (var zip = ZipFile.OpenRead(zipPath))
+            {
+                var entry = zip.Entries.FirstOrDefault(e => string.Equals(e.FullName, BackupService.NamesFile, StringComparison.OrdinalIgnoreCase));
+                if (entry == null || entry.Length > MaxEntryBytes) return map;
+                string text;
+                using (var sr = new StreamReader(entry.Open(), Encoding.UTF8)) text = sr.ReadToEnd();
+                var raw = new JavaScriptSerializer().DeserializeObject(text) as IDictionary<string, object>;
+                if (raw == null) return map;
+                foreach (var kv in raw)
+                {
+                    var v = kv.Value as string;
+                    if (!string.IsNullOrEmpty(kv.Key) && !string.IsNullOrWhiteSpace(v) && NameRules.Check(v, VpnKind.WatchGuard, null, false) == null) map[kv.Key] = v.Trim();
+                }
+            }
+        }
+        catch { map.Clear(); }
+        return map;
+    }
+
     public static Dictionary<string, string> ReadUsernames(string zipPath)
     {
         var map = new Dictionary<string, string>(StringComparer.CurrentCultureIgnoreCase);

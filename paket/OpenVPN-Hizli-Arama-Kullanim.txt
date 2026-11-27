@@ -68,14 +68,32 @@ Yedekleme:
 - .ovpn dosyası içe aktar: Birden çok .ovpn seçilebilir. .ovpn veya yedek .zip dosyasını
   panele sürükleyip bırakmak da aynı işi yapar.
 - Yedek klasörünü aç.
+- Parolaları başka cihaza taşıma (OpenVPN): Parolalar yedekte yoktur. Windows'un Kimlik Bilgileri
+  Yöneticisi ile parolaları yeni cihaza taşıyın, profilleri yedekten geri yükleyin, sonra
+  Ayarlar > Yedekleme > "Parolaları eşleştir…" ile aynı yedek zip'ini seçin. Geri yüklenen profil
+  yeni bir kimlik aldığı için OpenVPN taşınan parolayı kendiliğinden bulamaz; bu işlem parolayı
+  yeni profile bağlar. Önce tek profilde deneyebilirsiniz. OpenVPN Connect kapatılıp yeniden
+  açılır; VPN bağlıyken yapılmaz. Parolalar gösterilmez, dosyaya yazılmaz, eski kayıtlar silinmez.
+  Aynı adı taşıyan profiller ve parolası zaten kayıtlı profiller atlanır.
 
 Profiller:
 - Yinelenen profiller: Aynı sunucu + kullanıcıya veya aynı ada ("(1)", "- Kopya" gibi ekler
   hariç) sahip profilleri gruplar. Her grupta en son kullanılan korunur; diğerleri işaretli
   gelir. Silmeden önce onay sorulur. Silme kalıcıdır.
 - Profile sağ tık: ".ovpn olarak dışa aktar" ve "Profili sil" (onaylı, kalıcı).
-  Not: OpenVPN Connect komut satırından yeniden adlandırmayı desteklemediği için
-  yeniden adlandırma yoktur.
+- Profil adını değiştirme: satıra sağ tık > "Yeniden adlandır…" ya da seçili satırda F2.
+  Ad, profilin ait olduğu VPN programına da yazılır; iki tarafta aynı ad görünür:
+    WatchGuard  : istemcide ad alanı yoktur; ad yalnız VPN Manager'da saklanır
+                  (%APPDATA%\OpenVpnQuickSearch\names.json, yedeğe dahildir). Adı boşaltırsanız
+                  otomatik ad geri gelir.
+    OpenVPN     : OpenVPN Connect kapatılır, adı kendi kaydına yazılır, yeniden açılır.
+                  Bir OpenVPN bağlantısı açıkken istek bekletilir: yeni ad listede saat
+                  işaretiyle görünür ve bağlantı kesilince yazılır. Bağlantı koparılmaz.
+    Sophos      : Sophos Connect'te görünen ad değişir.
+    FortiClient : yalnız SSL tünelleri. Windows yönetici onayı (UAC) ister. Kayıtlı parola,
+                  sabitleme ve bağlantı geçmişi yeni ada taşınır. Tünel bağlıyken yapılamaz.
+  Brave profilleri, FortiClient IPsec tünelleri ve bir .ovpn dosyasından okunan (OpenVPN
+  Connect'te kayıtlı olmayan) profiller buradan yeniden adlandırılamaz.
 - Bağlantı geçmişi: Hangi profile ne zaman, ne kadar süre bağlandığınız; en çok kullanılan
   5 profil; CSV olarak dışa aktarma. Kayıt: %APPDATA%\OpenVpnQuickSearch\history.csv
   (geçmiş, bu uygulama çalışırken yapılan bağlantıları kaydeder).

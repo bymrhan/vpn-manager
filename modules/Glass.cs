@@ -429,9 +429,45 @@ internal static class Glass
         g.CompositingMode = CompositingMode.SourceCopy;
         g.Clear(Color.Transparent);
         g.CompositingMode = CompositingMode.SourceOver;
-        g.TranslateTransform(-off.X, -off.Y);
-        Layers(g, size, false);
-        g.ResetTransform();
+        if (size.Width <= 0 || size.Height <= 0) return;
+        // exact 1:1 pixel copy (DrawImageUnscaled would rescale by the bitmap's DPI)
+        var oldI = g.InterpolationMode; g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.DrawImage(LayerSheet(size), new Rectangle(-off.X, -off.Y, size.Width, size.Height), 0, 0, size.Width, size.Height, GraphicsUnit.Pixel);
+        g.InterpolationMode = oldI;
+    }
+
+    // The window layers (full-window gradients and a path gradient) cost far more than everything a
+    // control draws on top of them, and they only depend on the window size and the theme. They are
+    // rendered once into a sheet per window size; every child frame then copies its part from it.
+    sealed class Sheet { public Size Size; public long Look; public Bitmap Image; }
+    static readonly List<Sheet> sheets = new List<Sheet>();
+    const int MaxSheets = 4;   // main window, settings, a dialog; a window being resized replaces the oldest
+
+    static long LookKey()
+    {
+        unchecked
+        {
+            long k = Backdrop.Active ? 1 : 0; k = k * 31 + (Light ? 1 : 0);
+            foreach (var c in new[] { WindowTint, Ui.WindowTop, Ui.WindowBottom }) k = k * 16777619 + c.ToArgb();
+            return k;
+        }
+    }
+
+    static Bitmap LayerSheet(Size size)
+    {
+        var look = LookKey();
+        for (var i = 0; i < sheets.Count; i++)
+        {
+            var s = sheets[i];
+            if (s.Size != size) continue;
+            if (s.Look == look) return s.Image;
+            s.Image.Dispose(); sheets.RemoveAt(i); break;   // theme changed: this size is rendered again
+        }
+        if (sheets.Count >= MaxSheets) { sheets[0].Image.Dispose(); sheets.RemoveAt(0); }
+        var bmp = new Bitmap(size.Width, size.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using (var bg = Graphics.FromImage(bmp)) { bg.Clear(Color.Transparent); Layers(bg, size, false); }
+        sheets.Add(new Sheet { Size = size, Look = look, Image = bmp });
+        return bmp;
     }
 
     // Outer window edge: 1 px specular rim, bright at the top-left, fading to the lower-right. The window

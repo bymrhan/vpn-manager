@@ -3,6 +3,14 @@
 GitHub sürüm notlarına bu listeden kopyalanır (bkz. `docs/RELEASING.md`). Uygulamanın güncelleme
 bildirimi notların ilk satırlarını gösterir; en önemli maddeler başta durur.
 
+## 2.1.8
+
+- **Profil adını değiştirme:** satıra sağ tık > *Yeniden adlandır…* ya da `F2`. Ad, profilin ait olduğu VPN programına da yazılır. *WatchGuard:* istemcide ad alanı olmadığı için ad VPN Manager'da saklanır (yedeğe dahildir); boş bırakılırsa otomatik ad geri gelir. *OpenVPN:* OpenVPN Connect kapatılıp adı kendi kaydına yazılır ve yeniden açılır; bağlantı açıkken istek bekletilir (satırda saat işareti) ve bağlantı kesilince yazılır. *Sophos:* Sophos Connect'te görünen ad değişir. *FortiClient (SSL):* Windows yönetici onayı ister; kayıtlı parola, sabitleme ve geçmiş yeni ada taşınır. Brave profilleri ve FortiClient IPsec tünelleri kapsam dışıdır.
+- **Taşınan parolaları eşleştir (OpenVPN):** Windows Kimlik Bilgileri ile başka cihaza taşınan parolalar, yedekten geri yüklenen profillere bağlanır (Ayarlar › Yedekleme › "Parolaları eşleştir…"; geri yükleme sonunda da önerilir). Geri yüklenen profil yeni kimlik aldığı için OpenVPN Connect taşınan parolayı bulamıyor ve yeniden soruyordu. Parola gösterilmez ve dosyaya yazılmaz. Önce tek profilde deneme seçeneği vardır; VPN bağlıyken yapılmaz.
+- **Liste akıcılığı:** kartların üzerinde gezinirken oluşan takılma giderildi (her fare hareketinde tüm liste yerine yalnız ilgili satır çizilir; pencere arka planı bir kez hazırlanıp saklanır).
+- **Profil geçişinde yanlış uyarı:** bir OpenVPN bağlantısı açıkken başka profile geçince çıkan "OpenVPN Connect sizden bilgi bekliyor olabilir" uyarısı artık yalnız OpenVPN gerçekten beklediğinde (günlüğüne 9 sn hiçbir şey yazmadığında) çıkar.
+- **Bağlantı daha erken algılanır:** OpenVPN Connect "bağlandı" dediği anda panel de bağlı gösterir; ağ bağdaştırıcısının görünmesi beklenmez.
+
 ## 2.1.7
 
 - **Güncelleme akışı yenilendi:** "Şimdi güncelle" sonrası bildirim kartı açık kalır; indirme (bayt ve yüzde), doğrulama, hazırlık ve yeniden başlatma aşamaları sırayla görünür. İndirme sırasında *İptal*, hata olunca *Yeniden dene*, *Sürüm sayfasını aç* ve *Kapat* düğmeleri vardır. Ağ hatalarında 3 kez otomatik denenir. Güncelleme bekliyorsa (bağlantı işlemi sürüyor, pencere açık) kart nedenini yazar ve *Sonra* düğmesi sunar. Yeniden başlatınca "Güncelleme tamam: sürüm X" bildirimi gelir. Güvenlik aynı: yalnızca HTTPS, yalnızca bu deponun dosyaları, çalıştırmadan önce SHA-256 doğrulaması.

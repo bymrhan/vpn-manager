@@ -60,6 +60,25 @@ internal sealed class ConnectionMonitor : IDisposable
     // Last OpenVPN Connect log event (CONNECTING, WAIT, AUTH, GET_CONFIG, CONNECTED ...), empty when unknown.
     public string LastEvent { get { return lastEvent ?? ""; } }
 
+    // When the log was last seen to change (first read included): OpenVPN Connect is doing something.
+    public DateTime LastLogChangeUtc { get; private set; }
+
+    // A CONNECTED this recent is taken from OpenVPN Connect itself, without waiting for the adapter.
+    const double FreshConnectedSeconds = 30;
+
+    // Pure decision. Normally: no stop event, a VPN adapter up, and config.json naming a profile.
+    // The adapter check is cached and can trail OpenVPN Connect by seconds (seen: 10 s after a
+    // profile switch), so a CONNECTED event with a connectedAt of the last 30 s is enough on its
+    // own. An old CONNECTED (OpenVPN Connect crashed, PC restarted) still needs the adapter.
+    internal static bool IsConnected(bool stopped, bool adapterUp, string cfgProfileId, string lastEvent, long connectedAtMs, DateTime nowUtc)
+    {
+        if (stopped || string.IsNullOrEmpty(cfgProfileId)) return false;
+        if (adapterUp) return true;
+        if (lastEvent != "CONNECTED" || connectedAtMs <= 0) return false;
+        var age = (nowUtc - Epoch).TotalMilliseconds - connectedAtMs;
+        return age >= -5000 && age <= FreshConnectedSeconds * 1000;
+    }
+
     public void Poll()
     {
         if (disposed) return;
@@ -84,7 +103,9 @@ internal sealed class ConnectionMonitor : IDisposable
             adapterUp = VpnAdapterUp();
             adapterCheckedUtc = now;
         }
-        var connected = !stopped && adapterUp && cfgProfileId != "";
+        var connected = IsConnected(stopped, adapterUp, cfgProfileId, ev, cfgConnectedAt, now);
+        // diagnostics: the session was accepted from OpenVPN's own CONNECTED, the adapter check trailed
+        if (connected && !adapterUp && !current.Connected) AppLog.Info("openvpn", "state: connected by CONNECTED event, adapter not seen up yet");
 
         var prev = current;
         var id = ""; var name = ""; long connectedAt = 0;
@@ -181,7 +202,7 @@ internal sealed class ConnectionMonitor : IDisposable
         }
         if (newest == null) return "";
         if (newest.FullName == logPath && newest.Length == logSize && newest.LastWriteTimeUtc == logTime) return lastEvent;
-        logChanged = true;
+        logChanged = true; LastLogChangeUtc = DateTime.UtcNow;
 
         string text;
         using (var fs = new FileStream(newest.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
@@ -347,6 +368,22 @@ internal static class ConnectionHistory
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             if (!File.Exists(path)) File.WriteAllText(path, StoreHeader + "\r\n", Utf8Bom);
             File.AppendAllText(path, line + "\r\n", Utf8);
+        }
+    }
+
+    // A profile got a new id / name (FortiClient tunnel renamed): its sessions follow it.
+    public static void Rewrite(string oldId, string newId, string newName)
+    {
+        lock (gate)
+        {
+            var path = FilePath;
+            if (!File.Exists(path)) return;
+            var lines = File.ReadAllLines(path, Encoding.UTF8);
+            var moved = IdMigration.HistoryLines(lines, oldId, newId, newName);
+            var sb = new StringBuilder();
+            foreach (var l in moved) sb.Append(l).Append("\r\n");
+            File.WriteAllText(path, sb.ToString(), Utf8Bom);
+            cached = null; cachedStamp = null;
         }
     }
 

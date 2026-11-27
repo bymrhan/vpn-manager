@@ -93,10 +93,12 @@ internal static class QuietWindow
     public const double OpenVpnRestoreAfterSeconds = 9;
 
     // Pure decision: bring back the OpenVPN window we minimized? goalReached: connected (connect)
-    // or disconnected (disconnect).
-    public static bool ShouldRestoreOpenVpnWindow(double elapsedSeconds, bool goalReached)
+    // or disconnected (disconnect). sinceProgressSeconds: time since OpenVPN Connect last wrote to
+    // its log. While it writes it is working (switching profiles alone takes 10-15 s: the old
+    // tunnel goes down, then the new session starts), so only a quiet OpenVPN counts as waiting.
+    public static bool ShouldRestoreOpenVpnWindow(double elapsedSeconds, double sinceProgressSeconds, bool goalReached)
     {
-        return !goalReached && elapsedSeconds >= OpenVpnRestoreAfterSeconds;
+        return !goalReached && Math.Min(elapsedSeconds, sinceProgressSeconds) >= OpenVpnRestoreAfterSeconds;
     }
 
     public static bool HasMinimized { get { lock (gate) return minimizedByUs.Count > 0; } }

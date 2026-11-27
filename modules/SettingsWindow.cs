@@ -620,7 +620,7 @@ internal sealed class SettingsForm : Form
     public AppSettings Result { get; private set; }
     int profileCount;
     public int ProfileCount { get { return profileCount; } set { profileCount = value; SetLastBackup(original.LastBackupUtc, -1); } }
-    public Action BackupNow, OpenBackupFolder;
+    public Action BackupNow, OpenBackupFolder, LinkPasswords;
 
     readonly string[] navTitles = { "Genel", "Yedekleme", "Görünüm", "Hakkında" };
     readonly Glyph[] navGlyphs = { Glyph.Settings, Glyph.Backup, Glyph.Palette, Glyph.Info };
@@ -842,6 +842,10 @@ internal sealed class SettingsForm : Form
             .Add(new SRow("Sıklık", null, freq, Glyph.History))
             .Add(new SRow("Saklanacak yedek sayısı", "Daha eski yedekler otomatik silinir.", keep, Glyph.Duplicates))
             .Add(folderRow);
+        var link = new SButton("Parolaları eşleştir…", SButtonKind.Secondary, Glyph.Lock);
+        link.Click += delegate { if (LinkPasswords != null) LinkPasswords(); };
+        page.Add(new SCard(), caption: "BAŞKA CİHAZDAN TAŞIMA")
+            .Add(new SRow("Taşınan OpenVPN parolaları", "Windows Kimlik Bilgileri ile taşıdığınız parolaları, yedekten geri yüklenen profillere bağlar.", link, Glyph.Lock));
         page.Add(new SNote("Yedekler .ovpn içindeki özel anahtarları içerir; güvenli bir yerde saklayın. Kayıtlı parolalar yedeğe dahil edilmez.", Glyph.Lock));
         pages.Add(page);
     }
